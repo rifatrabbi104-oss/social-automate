@@ -1,0 +1,21 @@
+{
+  "name": "social-automate-api",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker Backend & Fallback Gateway for Social Automation",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "keywords": [
+    "cloudflare",
+    "worker",
+    "d1",
+    "social-automation"
+  ],
+  "author": "Antigravity",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.50.0"
+  }
+}

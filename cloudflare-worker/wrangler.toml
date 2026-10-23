@@ -1,0 +1,31 @@
+name = "social-automate-api"
+main = "src/index.js"
+compatibility_date = "2024-04-01"
+
+# Cloudflare D1 Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "social_automate_db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+# Cloudflare KV Binding (Optional)
+# [[kv_namespaces]]
+# binding = "KV"
+# id = "YOUR_KV_NAMESPACE_ID"
+
+[vars]
+# Gemini Model (Gemini 2.0 / 3.8 Flash high throughput)
+GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
+
+# Telegram Bot (সবচেয়ে সহজ টেস্ট চ্যানেল)
+TELEGRAM_BOT_TOKEN = "YOUR_CUSTOMER_BOT_TOKEN"
+ADMIN_TG_BOT_TOKEN = "YOUR_ADMIN_BOT_TOKEN"
+ADMIN_TG_CHAT_ID = "YOUR_PERSONAL_TELEGRAM_CHAT_ID"
+
+# Facebook / Meta Page (অপশনাল ২য় চ্যানেল)
+META_PAGE_ACCESS_TOKEN = "YOUR_META_PAGE_ACCESS_TOKEN"
+META_VERIFY_TOKEN = "my_secure_meta_webhook_token_123"
+
+# ড্যাশবোর্ড URL
+DASHBOARD_URL = "https://your-dashboard.pages.dev"
