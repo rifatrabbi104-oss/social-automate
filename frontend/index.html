@@ -408,14 +408,15 @@
           </div>
 
           <div class="card">
-            <h3>🤖 Google Gemini AI Persona & Instructions</h3>
-            <p class="section-desc">AI যেভাবে কাস্টমারদের উত্তর দেবে তার মূল নির্দেশাবলী:</p>
-            <form id="settings-prompt-form">
+            <h3>🌐 Cloudflare Worker Connection (For GitHub Pages)</h3>
+            <p class="section-desc">GitHub Pages বা অন্য কোনো হোস্টিং থেকে ড্যাশবোর্ড চালালে আপনার লাইভ Worker URL টি এখানে সেভ করুন:</p>
+            <form id="settings-worker-form">
               <div class="form-group">
-                <label>System Prompt (Business Instructions)</label>
-                <textarea id="setting-system-prompt" rows="6">You are a polite, enthusiastic, and knowledgeable customer service agent for our business. Answer questions warmly in Bengali/English. Always help with product details and prices. If asked for the manager, notify that admin is alerted while continuing to assist politely.</textarea>
+                <label>Live Cloudflare Worker URL</label>
+                <input type="url" id="setting-worker-url" placeholder="https://social-automate-api.yoursubdomain.workers.dev">
+                <small class="help-text">ক্লাউডফ্লেয়ার ওয়ার্কার ডিপ্লয় করার পর যে URL পাবেন তা এখানে পেস্ট করুন।</small>
               </div>
-              <button type="submit" class="btn-primary">💾 Update AI Persona</button>
+              <button type="submit" class="btn-primary">💾 Connect Worker API</button>
             </form>
           </div>
         </div>

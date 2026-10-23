@@ -469,61 +469,116 @@ async function handleAdminReply(body, env) {
 }
 
 // ========================================================
-// 🗄️ D1 DATABASE HELPER FUNCTIONS
+// 🗄️ D1 DATABASE HELPER FUNCTIONS (FAULT-TOLERANT)
 // ========================================================
 async function upsertConversation(db, id, platform, senderId, senderName, lastMessage) {
-  await db.prepare(`
-    INSERT INTO conversations (id, platform, sender_id, sender_name, last_message, last_message_at)
-    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    ON CONFLICT(id) DO UPDATE SET 
-      last_message = excluded.last_message,
-      last_message_at = CURRENT_TIMESTAMP
-  `).bind(id, platform, senderId, senderName, lastMessage).run();
+  if (!db) return;
+  try {
+    await db.prepare(`
+      INSERT INTO conversations (id, platform, sender_id, sender_name, last_message, last_message_at)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET 
+        last_message = excluded.last_message,
+        last_message_at = CURRENT_TIMESTAMP
+    `).bind(id, platform, senderId, senderName, lastMessage).run();
+  } catch (e) {
+    console.warn("DB Upsert skipped:", e.message);
+  }
 }
 
 async function saveMessage(db, conversationId, senderType, text) {
-  await db.prepare(
-    "INSERT INTO messages (id, conversation_id, sender_type, message_text) VALUES (?, ?, ?, ?)"
-  ).bind(crypto.randomUUID(), conversationId, senderType, text).run();
+  if (!db) return;
+  try {
+    await db.prepare(
+      "INSERT INTO messages (id, conversation_id, sender_type, message_text) VALUES (?, ?, ?, ?)"
+    ).bind(crypto.randomUUID(), conversationId, senderType, text).run();
+  } catch (e) {
+    console.warn("DB Save message skipped:", e.message);
+  }
 }
 
 async function markNeedsAttention(db, conversationId) {
-  await db.prepare("UPDATE conversations SET needs_attention = 1 WHERE id = ?").bind(conversationId).run();
+  if (!db) return;
+  try {
+    await db.prepare("UPDATE conversations SET needs_attention = 1 WHERE id = ?").bind(conversationId).run();
+  } catch (e) {
+    console.warn("DB Mark attention skipped:", e.message);
+  }
 }
 
 async function getChatHistory(db, conversationId, limit = 6) {
-  const { results } = await db.prepare(
-    "SELECT sender_type, message_text FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?"
-  ).bind(conversationId, limit).all();
-  return (results || []).reverse();
+  if (!db) return [];
+  try {
+    const { results } = await db.prepare(
+      "SELECT sender_type, message_text FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?"
+    ).bind(conversationId, limit).all();
+    return (results || []).reverse();
+  } catch (e) {
+    return [];
+  }
 }
 
 async function checkGlobalAiMode(db) {
-  const row = await db.prepare("SELECT value FROM system_settings WHERE key = 'global_ai_mode'").first();
-  return row ? row.value === "1" : true;
+  if (!db) return true;
+  try {
+    const row = await db.prepare("SELECT value FROM system_settings WHERE key = 'global_ai_mode'").first();
+    return row ? row.value === "1" : true;
+  } catch (e) {
+    return true;
+  }
 }
 
 async function checkChatTakeover(db, conversationId) {
-  const row = await db.prepare("SELECT admin_takeover FROM conversations WHERE id = ?").bind(conversationId).first();
-  return row ? row.admin_takeover === 1 : false;
+  if (!db) return false;
+  try {
+    const row = await db.prepare("SELECT admin_takeover FROM conversations WHERE id = ?").bind(conversationId).first();
+    return row ? row.admin_takeover === 1 : false;
+  } catch (e) {
+    return false;
+  }
 }
 
 async function getDashboardStats(env) {
-  const totalConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations").first();
-  const activeAiConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE admin_takeover = 0").first();
-  const takeoverConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE admin_takeover = 1").first();
-  const attentionConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE needs_attention = 1").first();
-  const globalAiSetting = await env.DB.prepare("SELECT value FROM system_settings WHERE key = 'global_ai_mode'").first();
+  if (!env.DB) {
+    return jsonResponse({
+      total_conversations: 0,
+      ai_active_chats: 0,
+      admin_takeover_chats: 0,
+      needs_attention_chats: 0,
+      global_ai_mode: true,
+      engine: "Cloudflare Native Worker + Gemini 2.0/3.8 Flash Live",
+      db_status: "Standalone (D1 optional)",
+      status: "Operational"
+    });
+  }
 
-  return jsonResponse({
-    total_conversations: totalConvs?.count || 0,
-    ai_active_chats: activeAiConvs?.count || 0,
-    admin_takeover_chats: takeoverConvs?.count || 0,
-    needs_attention_chats: attentionConvs?.count || 0,
-    global_ai_mode: globalAiSetting?.value === "1",
-    engine: "Cloudflare Native Worker + Gemini 2.0/3.8 Flash Live",
-    status: "Operational"
-  });
+  try {
+    const totalConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations").first();
+    const activeAiConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE admin_takeover = 0").first();
+    const takeoverConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE admin_takeover = 1").first();
+    const attentionConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE needs_attention = 1").first();
+    const globalAiSetting = await env.DB.prepare("SELECT value FROM system_settings WHERE key = 'global_ai_mode'").first();
+
+    return jsonResponse({
+      total_conversations: totalConvs?.count || 0,
+      ai_active_chats: activeAiConvs?.count || 0,
+      admin_takeover_chats: takeoverConvs?.count || 0,
+      needs_attention_chats: attentionConvs?.count || 0,
+      global_ai_mode: globalAiSetting?.value === "1",
+      engine: "Cloudflare Native Worker + Gemini 2.0/3.8 Flash Live",
+      status: "Operational"
+    });
+  } catch (e) {
+    return jsonResponse({
+      total_conversations: 0,
+      ai_active_chats: 0,
+      admin_takeover_chats: 0,
+      needs_attention_chats: 0,
+      global_ai_mode: true,
+      engine: "Cloudflare Native Worker + Gemini 2.0/3.8 Flash Live",
+      status: "Operational"
+    });
+  }
 }
 
 function jsonResponse(data, status = 200) {

@@ -6,10 +6,16 @@
  * Works seamlessly with Cloudflare Worker API & local interactive preview.
  */
 
-// কনফিগারেশন: ক্লাউডফ্লেয়ার ওয়ার্কার এপিআই এন্ডপয়েন্ট
-const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? 'http://127.0.0.1:8787/api'
-  : '/api';
+// কনফিগারেশন: ক্লাউডফ্লেয়ার ওয়ার্কার এপিআই এন্ডপয়েন্ট (GitHub Pages বা Custom Domain সাপোর্ট)
+function getApiBase() {
+  const custom = localStorage.getItem('social_automate_worker_url');
+  if (custom) return custom.replace(/\/$/, '') + '/api';
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://127.0.0.1:8787/api';
+  }
+  return '/api';
+}
+const API_BASE = getApiBase();
 
 // অ্যাপ্লিকেশন স্টেট (State Management)
 let appState = {
@@ -600,6 +606,27 @@ function initSettingsForms() {
     promptForm.addEventListener('submit', (e) => {
       e.preventDefault();
       showToast('✅ Gemini AI System Prompt সফলভাবে আপডেট হয়েছে!');
+    });
+  }
+
+  // Worker URL Form (For GitHub Pages integration)
+  const workerForm = document.getElementById('settings-worker-form');
+  const workerInput = document.getElementById('setting-worker-url');
+  if (workerInput) {
+    workerInput.value = localStorage.getItem('social_automate_worker_url') || '';
+  }
+  if (workerForm && workerInput) {
+    workerForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const url = workerInput.value.trim();
+      if (url) {
+        localStorage.setItem('social_automate_worker_url', url);
+        showToast('🌐 Cloudflare Worker URL সংরক্ষিত হয়েছে! পেজ রিফ্রেশ হচ্ছে...');
+        setTimeout(() => window.location.reload(), 1200);
+      } else {
+        localStorage.removeItem('social_automate_worker_url');
+        showToast('Worker URL রিমুভ করা হয়েছে।');
+      }
     });
   }
 }
