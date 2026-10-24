@@ -122,6 +122,37 @@ function initManualSync() {
       btn.textContent = '🔄 Sync';
     });
   }
+
+  const testBtn = document.getElementById('btn-quick-test');
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      testBtn.disabled = true;
+      testBtn.textContent = '⏳ Sending...';
+      try {
+        const res = await fetch(`${API_BASE}/test-incoming`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sender_name: 'Mr. Rafiq (Test Customer)',
+            message: 'আসসালামু আলাইকুম, আপনাদের এই প্রোডাক্টের ডেলিভারি চার্জ কত?'
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('✅ টেস্ট মেসেজ ক্লাউড D1-এ তৈরি হয়েছে!');
+          await syncWithBackend();
+          if (data.chat_id) {
+            openConversation(data.chat_id);
+          }
+        }
+      } catch (e) {
+        showToast('❌ টেস্ট মেসেজ পাঠানো যায়নি: ' + e.message);
+      } finally {
+        testBtn.disabled = false;
+        testBtn.textContent = '🧪 Test Msg';
+      }
+    });
+  }
 }
 
 async function syncWithBackend(isSilent = false) {
