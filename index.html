@@ -97,35 +97,35 @@
           <div class="metric-icon indigo">💬</div>
           <div class="metric-info">
             <span class="metric-label">Total Conversations</span>
-            <h3 class="metric-value" id="stat-total-convs">1,428</h3>
+            <h3 class="metric-value" id="stat-total-convs">0</h3>
           </div>
         </div>
         <div class="metric-card">
           <div class="metric-icon emerald">🤖</div>
           <div class="metric-info">
             <span class="metric-label">AI Handled</span>
-            <h3 class="metric-value" id="stat-ai-chats">1,412 (98.8%)</h3>
+            <h3 class="metric-value" id="stat-ai-chats">0</h3>
           </div>
         </div>
         <div class="metric-card">
           <div class="metric-icon amber">👤</div>
           <div class="metric-info">
             <span class="metric-label">Admin Takeover</span>
-            <h3 class="metric-value" id="stat-takeover-chats">16</h3>
+            <h3 class="metric-value" id="stat-takeover-chats">0</h3>
           </div>
         </div>
         <div class="metric-card">
           <div class="metric-icon rose">🚨</div>
           <div class="metric-info">
             <span class="metric-label">Needs Attention</span>
-            <h3 class="metric-value" id="stat-attention-chats">2</h3>
+            <h3 class="metric-value" id="stat-attention-chats">0</h3>
           </div>
         </div>
         <div class="metric-card">
           <div class="metric-icon violet">🛡️</div>
           <div class="metric-info">
             <span class="metric-label">Worker Usage Today</span>
-            <h3 class="metric-value">4 / 100,000</h3>
+            <h3 class="metric-value" id="stat-worker-usage">0 / 100,000</h3>
           </div>
         </div>
       </section>
@@ -139,7 +139,7 @@
               <h3>Active Conversations</h3>
               <div class="conv-filters">
                 <button class="filter-pill active" data-filter="all">All</button>
-                <button class="filter-pill" data-filter="attention">Needs Attention (2)</button>
+                <button class="filter-pill" data-filter="attention">Needs Attention (0)</button>
                 <button class="filter-pill" data-filter="takeover">Takeover</button>
               </div>
             </div>
@@ -153,23 +153,23 @@
             <!-- Chat Header -->
             <div class="chat-header">
               <div class="chat-user-meta">
-                <div class="chat-avatar" id="active-chat-avatar">R</div>
+                <div class="chat-avatar" id="active-chat-avatar">-</div>
                 <div>
-                  <h3 id="active-chat-name">Rahim Ahmed</h3>
+                  <h3 id="active-chat-name">কোনো চ্যাট সিলেক্ট করা নেই</h3>
                   <div class="platform-indicator">
-                    <span class="platform-tag fb" id="active-chat-platform">Facebook Messenger</span>
-                    <span class="chat-id-tag" id="active-chat-id">#fb_10203040</span>
+                    <span class="platform-tag" id="active-chat-platform">Waiting for chat</span>
+                    <span class="chat-id-tag" id="active-chat-id"></span>
                   </div>
                 </div>
               </div>
 
               <!-- Handover Action Controls -->
               <div class="chat-actions">
-                <div class="handover-status-badge ai" id="handover-badge">
+                <div class="handover-status-badge ai" id="handover-badge" style="display: none;">
                   <span class="dot"></span>
                   <span class="text">AI Active</span>
                 </div>
-                <button class="btn-handover" id="btn-toggle-handover">
+                <button class="btn-handover" id="btn-toggle-handover" style="display: none;">
                   <span class="icon">👤</span>
                   <span class="btn-text">Takeover This Chat</span>
                 </button>
@@ -353,34 +353,35 @@
       <section class="tab-pane" id="tab-analytics">
         <div class="analytics-grid">
           <div class="card">
-            <h3>⚡ Cloudflare Worker Protection Efficiency</h3>
-            <p class="section-desc">Alwaysdata প্রক্সি কীভাবে ১০০,০০০ ফ্রি লিমিট অপচয় হওয়া থেকে সুরক্ষিত রাখছে:</p>
+            <h3>⚡ Cloudflare Worker Free Quota Monitor</h3>
+            <p class="section-desc">Cloudflare Worker প্রতিদিনের ১০০,০০০ ফ্রি রিকোয়েস্ট রিয়েল-টাইম ট্র্যাকিং:</p>
             <div class="progress-bar-container">
-              <div class="progress-bar-fill" style="width: 0.04%;"></div>
+              <div class="progress-bar-fill" id="quota-progress-bar" style="width: 0%;"></div>
             </div>
             <div class="quota-stats">
-              <span>Used Today: <strong>4 requests (0.04%)</strong></span>
+              <span>Used Today: <strong id="quota-used-text">0 requests (0%)</strong></span>
               <span>Daily Free Quota: <strong>100,000 requests</strong></span>
             </div>
             <div class="savings-banner">
-              🎉 <strong>99.96% Worker Requests Saved!</strong> Alwaysdata Proxy ও GitHub Actions সফলভাবে বাল্ক ট্রাফিক হ্যান্ডেল করেছে।
+              🛡️ <strong>Worker Limit Protection Active:</strong> GitHub Actions ক্রন ও ইন-মেমোরি ডিবাইন্সিং দিয়ে অযথা রিকোয়েস্ট অপচয় সম্পূর্ণ রোধ করা হয়েছে।
             </div>
           </div>
 
           <div class="card">
-            <h3>🎯 AI Intent & Auto-Escalation Breakdown</h3>
+            <h3>🎯 AI Conversations & Intent Breakdown</h3>
+            <p class="section-desc">কাস্টমারদের মেসেজের ক্যাটাগরি ও অ্যাডমিন অ্যালার্ট স্ট্যাটাস:</p>
             <ul class="stats-list">
               <li>
-                <span>General Product Inquiry (Price, Features)</span>
-                <strong>78%</strong>
+                <span>General Customer Inquiries (AI Resolved)</span>
+                <strong id="analytics-general-pct">0%</strong>
               </li>
               <li>
-                <span>Delivery & Location Queries</span>
-                <strong>14%</strong>
+                <span>Human Admin Requested (Telegram Alerted)</span>
+                <strong id="analytics-alert-pct">0%</strong>
               </li>
               <li>
-                <span>Direct Admin Request / High Attention</span>
-                <strong>8% (Alerted on Telegram)</strong>
+                <span>Admin Manually Handled (Takeover)</span>
+                <strong id="analytics-admin-pct">0%</strong>
               </li>
             </ul>
           </div>

@@ -159,6 +159,9 @@ export default {
   }
 };
 
+// In-Memory Debounce & Spam Shield (Worker Limit Protection)
+const userLastMessageTime = new Map();
+
 // ========================================================
 // ✈️ TELEGRAM UPDATE HANDLER (EASIEST LIVE TEST)
 // ========================================================
@@ -172,6 +175,23 @@ async function handleTelegramUpdate(update, env) {
   const senderName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || "Telegram User";
   const incomingText = msg.text.trim();
   const conversationId = `tg_${senderId}`;
+
+  // 🛡️ LIMIT OPTIMIZATION: স্প্যাম ফিল্টার ও রেট-লিমিট চেক
+  // একই ইউজার যদি ৩ সেকেন্ডের মধ্যে একাধিক মেসেজ দেয়, অতিরিক্ত সাব-রিকোয়েস্ট বাঁচিয়ে ফাস্ট রিটার্ন
+  const now = Date.now();
+  const lastTime = userLastMessageTime.get(senderId) || 0;
+  if (now - lastTime < 2500) {
+    // দ্রুত মেসেজ আসলে ব্যাকগ্রাউন্ডে সেভ করে রাখব কিন্তু অতিরিক্ত এআই কল করব না
+    await saveMessage(env.DB, conversationId, "customer", incomingText);
+    return jsonResponse({ status: "debounced_fast_return", message: "Processed to save worker limits" });
+  }
+  userLastMessageTime.set(senderId, now);
+
+  // মেমরি পরিষ্কার রাখা (সর্বোচ্চ ৫০০ ইউজার)
+  if (userLastMessageTime.size > 500) {
+    const oldestKey = userLastMessageTime.keys().next().value;
+    userLastMessageTime.delete(oldestKey);
+  }
 
   // ১. D1 ডেটাবেসে কাস্টমার ও মেসেজ সেভ
   await upsertConversation(env.DB, conversationId, "telegram", senderId, senderName, incomingText);

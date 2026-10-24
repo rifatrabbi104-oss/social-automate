@@ -17,93 +17,14 @@ function getApiBase() {
 }
 const API_BASE = getApiBase();
 
-// অ্যাপ্লিকেশন স্টেট (State Management)
+// অ্যাপ্লিকেশন স্টেট (Clean State - Zero Demo Data)
 let appState = {
   globalAiActive: true,
   activeFilter: 'all',
-  activeConversationId: 'fb_10203040',
-  conversations: [
-    {
-      id: 'fb_10203040',
-      name: 'Rahim Ahmed',
-      platform: 'facebook',
-      sender_id: '10203040',
-      admin_takeover: 0,
-      needs_attention: 1,
-      last_message: 'Ami 50 ta piece bulk order dite chai, manager er number den.',
-      time: '2 mins ago',
-      unread: true
-    },
-    {
-      id: 'tg_987654321',
-      name: 'Tanvir Hossain',
-      platform: 'telegram',
-      sender_id: '987654321',
-      admin_takeover: 0,
-      needs_attention: 0,
-      last_message: 'Delivery charge koto Dhaka-r baire?',
-      time: '12 mins ago',
-      unread: false
-    },
-    {
-      id: 'wa_8801712345678',
-      name: 'Sadia Islam',
-      platform: 'whatsapp',
-      sender_id: '8801712345678',
-      admin_takeover: 1,
-      needs_attention: 0,
-      last_message: 'Payment send korechi, bKash TrxID check korun.',
-      time: '35 mins ago',
-      unread: false
-    },
-    {
-      id: 'fb_cmt_55443322',
-      name: 'Kamrul Hasan',
-      platform: 'facebook',
-      sender_id: '55443322',
-      admin_takeover: 0,
-      needs_attention: 0,
-      last_message: 'White color ta ki available ache?',
-      time: '1 hr ago',
-      unread: false
-    }
-  ],
-  messages: {
-    'fb_10203040': [
-      { id: '1', sender_type: 'customer', text: 'Apnader premium package er price koto?', time: '10:14 AM' },
-      { id: '2', sender_type: 'ai', text: 'হ্যালো রহিম সাহেব! আমাদের প্রিমিয়াম প্যাকেজের মূল্য ৩,৫০০ টাকা। এতে সম্পূর্ণ অটোমেশন এবং লাইভ সাপোর্ট অন্তর্ভুক্ত রয়েছে। আপনি কি বিস্তারিত জানতে চান?', time: '10:14 AM' },
-      { id: '3', sender_type: 'customer', text: 'Ami 50 ta piece bulk order dite chai, manager er number den.', time: '10:16 AM' },
-      { id: '4', sender_type: 'ai', text: 'অসাধারণ! আমাদের বাল্ক অর্ডারে আকর্ষণীয় স্পেশাল ডিসকাউন্ট রয়েছে। আমি বিষয়টি আমাদের ম্যানেজার ও অ্যাডমিনকে সরাসরি নোটিফিকেশন পাঠিয়ে জানিয়ে দিয়েছি। ইতিমধ্যে আমি কি আপনাকে আমাদের হোলসেল রেট কার্ডটি দেখাতে পারি?', time: '10:16 AM' }
-    ],
-    'tg_987654321': [
-      { id: '11', sender_type: 'customer', text: 'Delivery charge koto Dhaka-r baire?', time: '09:40 AM' },
-      { id: '12', sender_type: 'ai', text: 'ঢাকার বাইরে আমাদের ক্যাশ অন ডেলিভারি চার্জ ১৩০ টাকা এবং ঢাকার ভেতরে ৮০ টাকা। অর্ডার করতে আপনার নাম, পূর্ণ ঠিকানা ও মোবাইল নম্বর পাঠাতে পারেন।', time: '09:40 AM' }
-    ],
-    'wa_8801712345678': [
-      { id: '21', sender_type: 'customer', text: 'Payment send korechi, bKash TrxID check korun.', time: '09:15 AM' },
-      { id: '22', sender_type: 'admin', text: 'ধন্যবাদ সাদিয়া আপু! আপনার TrxID ভেরিফাই হয়েছে। পার্সেল আজকেই সুন্দরবন কুরিয়ারে বুকিং হবে। বুকিং স্লিপ ইনবক্সে দিয়ে দিচ্ছি।', time: '09:20 AM' }
-    ],
-    'fb_cmt_55443322': [
-      { id: '31', sender_type: 'customer', text: 'White color ta ki available ache?', time: '08:30 AM' },
-      { id: '32', sender_type: 'ai', text: 'জি কামরুল ভাই, হোয়াইট কালারটি বর্তমানে স্টকে আছে! দ্রুত অর্ডার করতে ইনবক্সে মেসেজ পাঠান।', time: '08:30 AM' }
-    ]
-  },
-  scheduledPosts: [
-    {
-      id: 'p1',
-      content: '🔥 নতুন কালেকশন এখন লাইভ! আকর্ষণীয় ছাড় পেতে আজই ভিজিট করুন আমাদের পেইজে।',
-      platforms: ['telegram', 'facebook'],
-      scheduled_at: '2026-10-24 10:00 AM',
-      status: 'pending'
-    },
-    {
-      id: 'p2',
-      content: 'সাপ্তাহিক ফ্ল্যাশ সেল শুরু হয়েছে! সীমিত সময়ের অফার মিস করবেন না। 🚀',
-      platforms: ['facebook'],
-      scheduled_at: '2026-10-23 04:00 PM',
-      status: 'published'
-    }
-  ]
+  activeConversationId: null,
+  conversations: [],
+  messages: {},
+  scheduledPosts: []
 };
 
 // ইনিশিয়ালাইজেশন
@@ -202,6 +123,17 @@ function renderConversationList() {
     return true;
   });
 
+  if (filtered.length === 0) {
+    listEl.innerHTML = `
+      <div style="padding: 40px 16px; text-align: center; color: var(--text-dim); font-size: 13px;">
+        <div style="font-size: 32px; margin-bottom: 8px;">💬</div>
+        <div style="color: var(--text-muted); font-weight: 600;">কোনো চ্যাট হিস্ট্রি নেই</div>
+        <p style="font-size: 11px; margin-top: 4px; line-height: 1.5;">টেলিগ্রাম বট কানেক্ট করলে বা Test & Connect ট্যাব থেকে মেসেজ টেস্ট করলে এখানে চ্যাট জমা হবে।</p>
+      </div>
+    `;
+    return;
+  }
+
   filtered.forEach(c => {
     const item = document.createElement('div');
     item.className = `conv-item ${c.id === appState.activeConversationId ? 'active' : ''}`;
@@ -257,7 +189,7 @@ function initChatView() {
 
       const newStatus = conv.admin_takeover ? 0 : 1;
       conv.admin_takeover = newStatus;
-      if (newStatus === 1) conv.needs_attention = 0; // অ্যাডমিন টেকওভার নিলে অ্যালার্ট মিটে যায়
+      if (newStatus === 1) conv.needs_attention = 0;
 
       updateHandoverUI(conv);
       renderConversationList();
@@ -266,7 +198,6 @@ function initChatView() {
         ? `👤 ${conv.name}-এর জন্য Admin Takeover সক্রিয়। AI আর উত্তর দেবে না।` 
         : `🤖 ${conv.name}-এর জন্য AI সক্রিয় করা হয়েছে। AI স্বাভাবিক উত্তর দেবে।`);
 
-      // API কল
       fetch(`${API_BASE}/handover`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -293,7 +224,37 @@ function initChatView() {
 
 function renderActiveChat() {
   const conv = appState.conversations.find(c => c.id === appState.activeConversationId);
-  if (!conv) return;
+  const container = document.getElementById('messages-container');
+  const badge = document.getElementById('handover-badge');
+  const btn = document.getElementById('btn-toggle-handover');
+  const warning = document.getElementById('ai-active-warning');
+
+  if (!conv) {
+    document.getElementById('active-chat-avatar').textContent = '-';
+    document.getElementById('active-chat-name').textContent = 'কোনো চ্যাট সিলেক্ট করা নেই';
+    document.getElementById('active-chat-id').textContent = '';
+    const platformTag = document.getElementById('active-chat-platform');
+    if (platformTag) {
+      platformTag.className = 'platform-tag';
+      platformTag.textContent = 'Waiting for chat';
+    }
+    if (badge) badge.style.display = 'none';
+    if (btn) btn.style.display = 'none';
+    if (warning) warning.classList.add('hidden');
+    if (container) {
+      container.innerHTML = `
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); text-align: center;">
+          <div style="font-size: 38px; margin-bottom: 12px; opacity: 0.6;">💬</div>
+          <h4 style="font-size: 15px; color: var(--text-main); margin-bottom: 4px;">কোনো চ্যাট ওপেন করা নেই</h4>
+          <p style="font-size: 12px; max-width: 280px; line-height: 1.5;">বাম পাশের তালিকা থেকে একটি কনভারসেশন সিলেক্ট করুন অথবা Test & Connect ট্যাব থেকে টেস্ট মেসেজ পাঠান।</p>
+        </div>
+      `;
+    }
+    return;
+  }
+
+  if (badge) badge.style.display = 'flex';
+  if (btn) btn.style.display = 'flex';
 
   document.getElementById('active-chat-avatar').textContent = conv.name.charAt(0).toUpperCase();
   document.getElementById('active-chat-name').textContent = conv.name;
@@ -574,6 +535,17 @@ function renderScheduledPosts() {
   const tbody = document.getElementById('scheduled-posts-tbody');
   if (!tbody) return;
   tbody.innerHTML = '';
+
+  if (appState.scheduledPosts.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="4" style="text-align: center; padding: 36px 16px; color: var(--text-dim); font-size: 13px;">
+          📅 কোনো শিডিউল্ড পোস্ট নেই। বাম পাশের ফর্ম থেকে সোশ্যাল পোস্ট শিডিউল করুন।
+        </td>
+      </tr>
+    `;
+    return;
+  }
 
   appState.scheduledPosts.forEach(p => {
     const tr = document.createElement('tr');
