@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SocialAutomate — Business D1 & Telegram Live Engine</title>
-  <meta name="description" content="Cloudflare D1 Business Data & Telegram AI Live Chat with Admin Takeover">
+  <title>SocialAutomate — Lifetime Multi-Platform & D1 Business Suite</title>
+  <meta name="description" content="Event-Driven Multi-Platform Social Automate with Zero-Worker-Polling">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -18,7 +18,7 @@
         <div class="brand-icon">⚡</div>
         <div class="brand-text">
           <h2>SocialAutomate</h2>
-          <span class="sub-badge">D1 Business Suite</span>
+          <span class="sub-badge">0-Polling Engine</span>
         </div>
       </div>
 
@@ -34,9 +34,9 @@
           <span class="badge-alert" style="background: var(--emerald); color: #fff;" id="badge-prod-count">0</span>
         </button>
         <button class="nav-item" data-tab="settings" id="nav-btn-settings">
-          <span class="nav-icon">⚙️</span>
-          <span class="nav-label">Telegram & Settings</span>
-          <span class="badge-alert" id="setup-status-badge" style="background: var(--amber); color: #000;">Setup</span>
+          <span class="nav-icon">🌐</span>
+          <span class="nav-label">Lifetime Social Connect</span>
+          <span class="badge-alert" style="background: var(--violet); color: #fff;">1-Time</span>
         </button>
       </nav>
 
@@ -49,8 +49,8 @@
           </div>
         </div>
         <div class="fallback-status">
-          <span class="status-dot-mini" id="d1-status-dot" style="background: var(--amber);"></span>
-          <span id="d1-status-text">Checking D1 Database...</span>
+          <span class="status-dot-mini" style="background: var(--emerald);"></span>
+          <span>Local Cache: 0 Quota Drain</span>
         </div>
       </div>
     </aside>
@@ -60,18 +60,17 @@
       <!-- Top Navbar -->
       <header class="topbar">
         <div class="topbar-left">
-          <h1 id="page-title">Live Chat & AI Handover</h1>
-          <p class="subtitle" id="page-subtitle">AI কাস্টমারকে D1 বিজনেস ডেটা থেকে উত্তর দেবে। আপনি চাইলে যেকোনো চ্যাট টেকওভার করে সরাসরি টেলিগ্রামে রিপ্লাই দিতে পারেন।</p>
+          <h1 id="page-title">Live Chat & Handover</h1>
+          <p class="subtitle" id="page-subtitle">কাস্টমার সোশ্যাল মিডিয়ায় মেসেজ দিলে AI উত্তর দেবে। আপনি চাইলে ড্যাশবোর্ড থেকে টেকওভার করে রিপ্লাই দিতে পারেন।</p>
         </div>
 
         <div class="topbar-right">
-          <!-- Live Status -->
           <div class="global-switch-card" style="padding: 8px 14px; gap: 12px;">
             <div class="switch-info">
-              <span class="switch-title" id="topbar-tg-bot">✈️ Telegram: Connecting...</span>
-              <span class="switch-sub" id="topbar-sync-status">🔄 Edge Live Sync: Active</span>
+              <span class="switch-title">⚡ 0-Polling Mode Active</span>
+              <span class="switch-sub">লোকাল ক্যাশ থেকে ইনস্ট্যান্ট লোড</span>
             </div>
-            <button class="btn-refresh" id="btn-manual-sync" title="ম্যানুয়াল সিঙ্ক করুন" style="padding: 6px 12px; font-size: 13px;">🔄 Sync</button>
+            <button class="btn-refresh" id="btn-manual-sync" title="ক্লাউড থেকে নতুন ডেটা সিঙ্ক করুন" style="padding: 6px 14px; font-size: 13px;">🔄 Sync</button>
           </div>
 
           <div class="admin-badge">
@@ -81,17 +80,12 @@
         </div>
       </header>
 
-      <!-- D1 Warning Banner -->
-      <div id="d1-warning-banner" style="display: none; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); padding: 12px 18px; margin: 16px 28px 0; border-radius: var(--radius-md); font-size: 13px; color: #fca5a5;">
-        ⚠️ <strong>D1 Database বাইন্ডিং সংযুক্ত নেই!</strong> Cloudflare Dashboard &gt; Workers &gt; Settings &gt; Bindings এ গিয়ে <strong>D1 Database</strong> বাইন্ডিং যোগ করুন (Variable name: <code>DB</code>)।
-      </div>
-
       <!-- Metric Highlights Strip -->
       <section class="metrics-strip">
         <div class="metric-card">
           <div class="metric-icon indigo">💬</div>
           <div class="metric-info">
-            <span class="metric-label">Active Sessions</span>
+            <span class="metric-label">Cached Chats</span>
             <h3 class="metric-value" id="stat-active-sessions">0</h3>
           </div>
         </div>
@@ -103,17 +97,17 @@
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-icon violet">✈️</div>
+          <div class="metric-icon violet">🛡️</div>
           <div class="metric-info">
-            <span class="metric-label">Telegram Bot</span>
-            <h3 class="metric-value" id="stat-tg-status" style="font-size: 15px;">Checking...</h3>
+            <span class="metric-label">Worker Usage</span>
+            <h3 class="metric-value" style="font-size: 15px; color: var(--emerald);">0 Req / View</h3>
           </div>
         </div>
         <div class="metric-card">
           <div class="metric-icon amber">🗄️</div>
           <div class="metric-info">
             <span class="metric-label">D1 Business Data</span>
-            <h3 class="metric-value" id="stat-d1-status" style="font-size: 15px;">Connected ✅</h3>
+            <h3 class="metric-value" style="font-size: 15px;">Cached (10m) ✅</h3>
           </div>
         </div>
       </section>
@@ -124,35 +118,28 @@
           <!-- Conversation List -->
           <div class="conv-sidebar">
             <div class="conv-header">
-              <h3>Active Telegram Chats</h3>
-              <span style="font-size: 11px; color: var(--emerald); font-weight: 600;">● Live Edge</span>
+              <h3>Social Conversations</h3>
+              <span style="font-size: 11px; color: var(--emerald); font-weight: 600;">● Local Cache</span>
             </div>
             <div class="conv-list" id="conversation-list">
-              <!-- Dynamically populated via JS -->
-              <div style="padding: 40px 16px; text-align: center; color: var(--text-dim); font-size: 13px;">
-                <div style="font-size: 36px; margin-bottom: 8px;">✈️</div>
-                <div style="color: var(--text-muted); font-weight: 600;">কোনো সক্রিয় চ্যাট নেই</div>
-                <p style="font-size: 11px; margin-top: 4px; line-height: 1.5;">টেলিগ্রামে মেসেজ পাঠালে এখানে লাইভ সেশন দেখতে পাবেন।</p>
-              </div>
+              <!-- Dynamically populated from localStorage -->
             </div>
           </div>
 
           <!-- Chat Viewport -->
           <div class="chat-viewport">
-            <!-- Chat Header -->
             <div class="chat-header">
               <div class="chat-user-meta">
                 <div class="chat-avatar" id="active-chat-avatar">-</div>
                 <div>
                   <h3 id="active-chat-name">কোনো চ্যাট সিলেক্ট করা নেই</h3>
                   <div class="platform-indicator">
-                    <span class="platform-tag tg" id="active-chat-platform">TELEGRAM</span>
+                    <span class="platform-tag" id="active-chat-platform">CHANNEL</span>
                     <span class="chat-id-tag" id="active-chat-id"></span>
                   </div>
                 </div>
               </div>
 
-              <!-- Handover Controls -->
               <div class="chat-actions">
                 <div class="handover-status-badge ai" id="handover-badge" style="display: none;">
                   <span class="dot"></span>
@@ -160,23 +147,23 @@
                 </div>
                 <button class="btn-handover" id="btn-toggle-handover" style="display: none;">
                   <span class="icon">👤</span>
-                  <span class="btn-text">Takeover This Chat</span>
+                  <span class="btn-text">Takeover Chat</span>
                 </button>
               </div>
             </div>
 
             <!-- Messages Stream -->
             <div class="messages-container" id="messages-container">
-              <!-- Message bubbles loaded dynamically -->
+              <!-- Loaded from local cache -->
             </div>
 
             <!-- Chat Input / Reply Box -->
             <div class="chat-input-bar">
               <div class="handover-notice hidden" id="ai-active-warning">
-                💡 AI বর্তমানে এই চ্যাটে D1 ডেটা অনুযায়ী উত্তর দিচ্ছে। আপনি নিচে রিপ্লাই দিলে চ্যাটটি স্বয়ংক্রিয়ভাবে <strong>Admin Takeover</strong> মোডে চলে আসবে।
+                💡 আপনি মেসেজ পাঠালে চ্যাটটি স্বয়ংক্রিয়ভাবে <strong>Admin Takeover</strong> মোডে চলে আসবে।
               </div>
               <form class="input-form" id="chat-reply-form">
-                <input type="text" id="admin-message-input" placeholder="কাস্টমারকে উত্তর দিন (মেসেজটি সরাসরি ইউজারের টেলিগ্রামে যাবে)..." autocomplete="off" required>
+                <input type="text" id="admin-message-input" placeholder="কাস্টমারকে উত্তর দিন (সরাসরি কাস্টমারের সোশ্যাল ইনবক্সে যাবে)..." autocomplete="off" required>
                 <button type="submit" class="btn-send" id="btn-send-message">
                   <span>Send</span>
                   <span class="send-icon">➤</span>
@@ -190,13 +177,13 @@
       <!-- TAB 2: D1 BUSINESS DATA & PRODUCTS -->
       <section class="tab-pane" id="tab-business-d1">
         <div class="scheduler-grid">
-          <!-- Card 1: Products & Catalog in D1 -->
+          <!-- Card 1: Products in D1 -->
           <div class="card">
             <div class="card-header">
-              <h3>📦 Products & Pricing (Stored in Cloudflare D1)</h3>
-              <span class="badge-zero-worker" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald);">D1 SQL Table</span>
+              <h3>📦 Products & Pricing (D1 SQL Table)</h3>
+              <span class="badge-zero-worker" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald);">Cached in Browser</span>
             </div>
-            <p class="section-desc">এখানে প্রোডাক্ট যোগ করুন। টেলিগ্রামে কাস্টমার যেকোনো প্রোডাক্টের নাম বা দাম জানতে চাইলে AI সরাসরি এই D1 টেবিল থেকে সঠিক তথ্য দেবে:</p>
+            <p class="section-desc">প্রোডাক্ট যোগ করুন। কাস্টমার দাম বা বিবরণ জানতে চাইলে AI সরাসরি এই D1 টেবিল থেকে উত্তর দেবে:</p>
             
             <form id="add-product-form" style="margin-bottom: 24px;">
               <div class="form-row">
@@ -219,10 +206,10 @@
                 </div>
                 <div class="form-group" style="flex: 2;">
                   <label>Description / Details</label>
-                  <input type="text" id="prod-desc" placeholder="কালার: কালো ও বাদামী, ১০০% অরিজিনাল চামড়া">
+                  <input type="text" id="prod-desc" placeholder="কালার: কালো ও বাদামী, ১০০% চামড়া">
                 </div>
               </div>
-              <button type="submit" class="btn-primary" id="btn-add-product">➕ Add Product to D1 Database</button>
+              <button type="submit" class="btn-primary" id="btn-add-product">➕ Save Product to D1</button>
             </form>
 
             <h4 style="font-size: 14px; margin-bottom: 12px; color: var(--text-main);">D1 প্রোডাক্ট তালিকা:</h4>
@@ -237,21 +224,19 @@
                   </tr>
                 </thead>
                 <tbody id="products-table-tbody">
-                  <tr>
-                    <td colspan="4" style="text-align: center; padding: 24px; color: var(--text-dim);">লোড হচ্ছে...</td>
-                  </tr>
+                  <!-- Populated from local cache -->
                 </tbody>
               </table>
             </div>
           </div>
 
-          <!-- Card 2: Store Profile & Delivery Policies in D1 -->
+          <!-- Card 2: Store Policies in D1 -->
           <div class="card">
             <div class="card-header">
-              <h3>🏪 Store Policies & Info (Stored in D1)</h3>
+              <h3>🏪 Store Policies & Delivery Info (D1)</h3>
               <span class="badge-status published">AI Knowledge Base</span>
             </div>
-            <p class="section-desc">আপনার দোকানের ডেলিভারি চার্জ, পেমেন্ট পলিসি ও ঠিকানা D1-এ সেভ রাখুন। কাস্টমার ডেলিভারি চার্জ বা অর্ডার সম্পর্কে জানতে চাইলে AI এই তথ্য ব্যবহার করবে:</p>
+            <p class="section-desc">ডেলিভারি চার্জ ও শর্তাবলী D1-এ সেভ রাখুন। AI স্বয়ংক্রিয়ভাবে কাস্টমারকে এই তথ্য দেবে:</p>
 
             <form id="business-profile-form">
               <div class="form-group">
@@ -262,11 +247,11 @@
               <div class="form-row">
                 <div class="form-group" style="flex: 1;">
                   <label>Delivery Inside Dhaka</label>
-                  <input type="text" id="del-dhaka" placeholder="যেমন: ৬০ টাকা (২৪-৪৮ ঘণ্টা)">
+                  <input type="text" id="del-dhaka" placeholder="৬০ টাকা (২৪-৪৮ ঘণ্টা)">
                 </div>
                 <div class="form-group" style="flex: 1;">
                   <label>Delivery Outside Dhaka</label>
-                  <input type="text" id="del-outside" placeholder="যেমন: ১২০ টাকা (২-৩ দিন)">
+                  <input type="text" id="del-outside" placeholder="১২০ টাকা (২-৩ দিন)">
                 </div>
               </div>
 
@@ -281,7 +266,7 @@
               </div>
 
               <div class="form-group">
-                <label>About / Support Phone</label>
+                <label>Support Phone</label>
                 <input type="text" id="contact-phone" placeholder="+8801XXXXXXXXX">
               </div>
 
@@ -291,67 +276,57 @@
         </div>
       </section>
 
-      <!-- TAB 3: TELEGRAM & SETTINGS -->
+      <!-- TAB 3: LIFETIME SOCIAL CONNECTION -->
       <section class="tab-pane" id="tab-settings">
         <div class="scheduler-grid">
-          <!-- Telegram Connection Card -->
+          <!-- Meta 1-Time Lifetime Connection -->
           <div class="card">
             <div class="card-header">
-              <h3>✈️ Telegram Bot Connection</h3>
-              <span class="badge-status published" id="tg-connected-badge" style="display: none;">Connected</span>
+              <h3>🌐 Meta (Facebook Page & WhatsApp) 1-Time Lifetime Connect</h3>
+              <span class="badge-status published">Zero Terminal</span>
             </div>
-            <p class="section-desc">আপনার টেলিগ্রাম বট টোকেন দিয়ে কানেক্ট করুন। টোকেনটি সরাসরি D1-এর <code>system_settings</code>-এ সংরক্ষিত থাকবে এবং Webhook স্বয়ংক্রিয়ভাবে সক্রিয় হবে:</p>
+            <p class="section-desc">আজীবন একবারের জন্য আপনার ফেসবুক পেজ বা হোয়াটসঅ্যাপ বিজনেস কানেক্ট করুন। পেজে মেসেজ বা কমেন্ট আসলেই ক্লাউডফ্লেয়ার ওয়ার্কার স্বয়ংক্রিয়ভাবে মেসেজ রিসিভ ও AI রিপ্লাই দেবে:</p>
             
-            <form id="tg-connect-form">
+            <form id="meta-connect-form">
               <div class="form-group">
-                <label>Telegram Bot Token (from @BotFather)</label>
-                <input type="password" id="input-tg-bot-token" placeholder="যেমন: 789123456:ABCdefGHIJklmnoPQRstuVWxyz" required>
-                <small class="help-text">টেলিগ্রামে <strong>@BotFather</strong>-এ গিয়ে <code>/newbot</code> দিয়ে ১ মিনিটে বট তৈরি করে টোকেন কপি করুন।</small>
+                <label>Meta Page Access Token (Permanent / Long-Lived Token)</label>
+                <input type="password" id="input-meta-token" placeholder="যেমন: EAABwzLIX4bkBA..." required>
+                <small class="help-text">মেটা বিজনেস ম্যানেজার বা ডেভেলপার পোর্টাল থেকে পাওয়া Page Access Token দিন।</small>
               </div>
 
               <div class="form-group">
-                <label>Admin Personal Telegram Chat ID (For Urgent Alerts)</label>
-                <input type="text" id="input-tg-admin-chat" placeholder="যেমন: 123456789">
-                <small class="help-text">কোনো কাস্টমার "ম্যানেজার" বা "অ্যাডমিন"-এর সাথে কথা বলতে চাইলে আপনার টেলিগ্রামে সাথে সাথে অ্যালার্ট পাঠানো হবে।</small>
+                <label>Facebook Page ID (Optional)</label>
+                <input type="text" id="input-meta-page-id" placeholder="যেমন: 1029384756">
               </div>
 
-              <button type="submit" class="btn-primary full-width" id="btn-save-tg">💾 Connect Telegram & Save to D1</button>
+              <button type="submit" class="btn-primary full-width" id="btn-save-meta">💾 Connect Once for Lifetime</button>
             </form>
 
-            <div id="tg-setup-result" style="display: none; margin-top: 18px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
+            <div id="meta-setup-result" style="display: none; margin-top: 18px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
 
             <div class="form-group" style="margin-top: 20px;">
-              <label>Worker Webhook URL</label>
+              <label>Your Meta Webhook URL (For Meta App Dashboard)</label>
               <div style="display: flex; gap: 8px;">
-                <input type="text" id="display-webhook-url" readonly style="flex: 1;">
+                <input type="text" id="display-webhook-url" value="https://social-automate.rifatrabbi104.workers.dev/webhook/meta" readonly style="flex: 1;">
                 <button type="button" class="btn-refresh" id="btn-copy-webhook" style="padding: 10px 16px;">📋 Copy</button>
               </div>
+              <small class="help-text">Verify Token: <code>social_automate_verify_token_2026</code></small>
             </div>
           </div>
 
-          <!-- D1 Binding & Worker Config -->
+          <!-- Optimization Info -->
           <div class="card">
             <div class="card-header">
-              <h3>🗄️ Cloudflare D1 Connection Guide</h3>
-              <span class="badge-zero-worker" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald);">Business DB</span>
+              <h3>⚡ Worker Quota Protection Strategy</h3>
+              <span class="badge-zero-worker" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald);">0-Quota Wasted</span>
             </div>
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); padding: 16px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.8; color: var(--text-muted); margin-bottom: 16px;">
-              <strong style="color: var(--text-main);">Cloudflare Dashboard-এ D1 বাইন্ড করার সহজ নিয়ম:</strong>
-              <ol style="padding-left: 20px; margin-top: 8px;">
-                <li>Cloudflare Dashboard &gt; <strong>Workers &amp; Pages</strong> এ যান।</li>
-                <li>আপনার Worker (<strong>social-automate</strong>) সিলেক্ট করুন।</li>
-                <li><strong>Settings &gt; Bindings &gt; Add binding</strong>-এ ক্লিক করে <strong>D1 Database</strong> বেছে নিন।</li>
-                <li><strong>Variable name</strong>: লিখুন <code style="color: var(--emerald); font-weight: 700;">DB</code> (বড় হাতের DB)।</li>
-                <li><strong>D1 Database</strong>: আপনার D1 ডেটাবেস সিলেক্ট করে <strong>Save and Deploy</strong> চাপুন।</li>
-              </ol>
-            </div>
-
-            <div class="form-group">
-              <label>Cloudflare Worker Endpoint</label>
-              <div style="display: flex; gap: 8px;">
-                <input type="url" id="setting-worker-url" value="https://social-automate.rifatrabbi104.workers.dev" style="flex: 1;">
-                <button type="button" class="btn-primary" id="btn-save-worker-url" style="padding: 10px 16px;">💾 Save</button>
-              </div>
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); padding: 16px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.8; color: var(--text-muted);">
+              <strong style="color: var(--text-main);">এই আর্কিটেকচারে ক্লাউডফ্লেয়ারের ফ্রি ১০০,০০০ কোটা যেভাবে শতভাগ সুরক্ষিত:</strong>
+              <ul style="padding-left: 20px; margin-top: 8px;">
+                <li><strong>০ ব্যাকগ্রাউন্ড পোলিং:</strong> ড্যাশবোর্ডে কোনো <code>setInterval</code> বা স্বয়ংক্রিয় লুপ নেই। সারাদিন পেজ খোলা থাকলেও ১টিও রিকোয়েস্ট কাটবে না।</li>
+                <li><strong>লোকাল ব্রাউজার ক্যাশ:</strong> কাস্টমার চ্যাট, প্রোডাক্ট তালিকা এবং স্টোর প্রোফাইল ব্রাউজারের <code>localStorage</code>-এ থাকে, ফলে ড্যাশবোর্ড লোড হয় ০ মিলিসেকেন্ডে এবং ০ ওয়ার্কার রিকোয়েস্টে।</li>
+                <li><strong>শুধুমাত্র ইভেন্ট ড্রাইভেন:</strong> কাস্টমার বাইরে থেকে আসল মেসেজ পাঠালে অথবা আপনি ড্যাশবোর্ড থেকে "Send" বা "🔄 Sync" চাপলেই কেবল ওয়ার্কার কল হবে।</li>
+              </ul>
             </div>
           </div>
         </div>

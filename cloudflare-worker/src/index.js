@@ -1,11 +1,11 @@
 /**
- * SocialAutomate - High-Efficiency Cloudflare Worker Architecture
- * -----------------------------------------------------------------
- * 1. Zero-Terminal Webhook Engine: Dashboard -> POST /api/setup-telegram -> Auto setWebhook
- * 2. D1 Strictly for Business Data: Products & Store Policies (Cached via Cloudflare Cache API)
- * 3. Cache API Session Management: Chat history & Handover state in Cache API / Memory (0 D1 Chat Bloat)
- * 4. Gemini AI Decision Engine: Structured JSON response + Urgent Admin Escalation
- * 5. Two-Way Live Chat & Handover: Dashboard Admin Reply -> Telegram Bot sendMessage
+ * SocialAutomate - High-Efficiency Multi-Platform Cloudflare Worker Architecture
+ * -----------------------------------------------------------------------------
+ * 1. Lifetime 1-Time Social Connections: Meta (Facebook Page, WhatsApp, Instagram)
+ * 2. Zero-Terminal Webhook Handshake: GET /webhook/meta verification + subscribed_apps
+ * 3. 0-Worker Request Dashboard: Zero background polling, 100% event-driven
+ * 4. D1 Strictly for Business Data: Products & Store Policies (Cached via Cloudflare Cache API)
+ * 5. Gemini AI Decision Engine: Structured JSON response + Outbound Multi-Channel Reply
  */
 
 const CORS_HEADERS = {
@@ -28,38 +28,75 @@ export default {
     const path = url.pathname;
 
     try {
-      // ०. সিস্টেম হেলথ ও স্ট্যাটাস API
+      // ०. সিস্টেম হেলথ ও কানেকশন স্ট্যাটাস
       if (request.method === "GET" && (path === "/" || path === "/api" || path === "/status")) {
         const hasD1 = Boolean(env.DB);
-        let botUsername = null;
-        let hasToken = false;
+        let connectedAccounts = [];
         let productCount = 0;
 
         if (hasD1) {
           await ensureTables(env.DB);
-          const token = await getConfigValue(env.DB, "telegram_bot_token", env.TELEGRAM_BOT_TOKEN);
-          hasToken = Boolean(token);
-          botUsername = await getConfigValue(env.DB, "telegram_bot_username", null);
+          const { results: accs } = await env.DB.prepare("SELECT platform, account_name, status FROM social_accounts WHERE status = 'active'").all();
+          connectedAccounts = accs || [];
           const pRow = await env.DB.prepare("SELECT COUNT(*) as cnt FROM products WHERE is_active = 1").first();
           productCount = pRow?.cnt || 0;
         }
 
         return jsonResponse({
           status: "online",
-          architecture: "Zero-Terminal SaaS Engine (Cache API + D1 Business Data)",
+          architecture: "Event-Driven Zero-Polling Engine",
           d1_database: hasD1 ? "✅ Connected (Stores Products & Store Config)" : "❌ Not Bound (Bind 'DB')",
           products_in_d1: productCount,
-          telegram_connection: hasToken 
-            ? (botUsername ? `✅ Connected (@${botUsername})` : "✅ Token Active") 
-            : "⚠️ Bot Token Missing",
-          active_sessions: memorySessions.size,
-          webhook_url: `${url.origin}/webhook/telegram`,
+          connected_platforms: connectedAccounts,
+          active_sessions_cached: memorySessions.size,
+          webhook_endpoints: {
+            meta: `${url.origin}/webhook/meta`,
+            telegram: `${url.origin}/webhook/telegram`
+          },
           timestamp: new Date().toISOString()
         });
       }
 
       // ==========================================
-      // ১. টেলিগ্রাম Webhook (ইনকামিং কাস্টমার মেসেজ)
+      // ১. মেটা Webhook Verification (১-বার লাইফটাইম হ্যান্ডশেক)
+      // Facebook Page / Messenger / Instagram / WhatsApp
+      // ==========================================
+      if (request.method === "GET" && (path === "/webhook/meta" || path === "/api/meta/webhook")) {
+        const hubMode = url.searchParams.get("hub.mode");
+        const hubToken = url.searchParams.get("hub.verify_token");
+        const hubChallenge = url.searchParams.get("hub.challenge");
+
+        let expectedToken = env.META_VERIFY_TOKEN || "social_automate_verify_token_2026";
+        if (env.DB) {
+          const dbToken = await getConfigValue(env.DB, "meta_verify_token", null);
+          if (dbToken) expectedToken = dbToken;
+        }
+
+        if (hubMode === "subscribe" && hubToken === expectedToken) {
+          return new Response(hubChallenge, { status: 200 });
+        }
+        return new Response("Verification token mismatch", { status: 403 });
+      }
+
+      // ==========================================
+      // ২. মেটা Webhook ইভেন্ট রিসিভার (Inbound Message/Comment)
+      // শুধুমাত্র কাস্টমার মেসেজ দিলেই এই কোডটি ট্রিগার হবে
+      // ==========================================
+      if (request.method === "POST" && (path === "/webhook/meta" || path === "/api/meta/webhook")) {
+        const body = await request.json();
+        return await handleMetaUpdate(body, env, ctx, url.origin);
+      }
+
+      // ==========================================
+      // ৩. মেটা ১-টাইম কানেক্ট API (POST /api/setup-meta)
+      // ==========================================
+      if (request.method === "POST" && path === "/api/setup-meta") {
+        const body = await request.json();
+        return await handleSetupMeta(body, env);
+      }
+
+      // ==========================================
+      // ৪. টেলিগ্রাম Webhook (ঐচ্ছিক ব্যাকআপ)
       // ==========================================
       if (request.method === "POST" && (path === "/webhook/telegram" || path === "/api/telegram/webhook")) {
         const update = await request.json();
@@ -67,15 +104,7 @@ export default {
       }
 
       // ==========================================
-      // ২. অটোমেটিক ১-ক্লিক টেলিগ্রাম সেটআপ ও Webhook রেজিস্ট্রেশন
-      // ==========================================
-      if (request.method === "POST" && (path === "/api/setup-telegram" || path === "/api/settings/telegram")) {
-        const body = await request.json();
-        return await handleSetupTelegram(body, env, url.origin);
-      }
-
-      // ==========================================
-      // ৩. ড্যাশবোর্ড থেকে কাস্টমারকে অ্যাডমিন রিপ্লাই
+      // ৫. ড্যাশবোর্ড থেকে আউটবাউন্ড অ্যাডমিন রিপ্লাই
       // ==========================================
       if (request.method === "POST" && (path === "/api/admin-reply" || path === "/api/admin/reply")) {
         const body = await request.json();
@@ -83,24 +112,20 @@ export default {
       }
 
       // ==========================================
-      // ৪. চ্যাট সেশন ও লাইভ ইনবক্স API (Edge Cache / Memory)
+      // ৬. লাইভ সেশন ফেচ (শুধুমাত্র অ্যাডমিন রিফ্রেশ বাটনে চাপলে কল হবে)
       // ==========================================
       if (request.method === "GET" && path === "/api/conversations") {
-        const now = Date.now();
-        const list = Array.from(memorySessions.values()).map(s => {
-          const isTakeover = s.admin_takeover && (s.takeover_until ? s.takeover_until > now : true);
-          return {
-            id: s.chat_id,
-            sender_id: s.chat_id,
-            name: s.sender_name,
-            platform: "telegram",
-            last_message: s.last_message,
-            last_message_at: s.last_message_at,
-            admin_takeover: isTakeover ? 1 : 0,
-            needs_attention: s.needs_attention ? 1 : 0,
-            messages_count: s.messages.length
-          };
-        }).sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
+        const list = Array.from(memorySessions.values()).map(s => ({
+          id: s.chat_id,
+          sender_id: s.chat_id,
+          name: s.sender_name,
+          platform: s.platform || "meta",
+          last_message: s.last_message,
+          last_message_at: s.last_message_at,
+          admin_takeover: s.admin_takeover ? 1 : 0,
+          needs_attention: s.needs_attention ? 1 : 0,
+          messages_count: s.messages.length
+        })).sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
 
         return jsonResponse(list);
       }
@@ -109,32 +134,13 @@ export default {
         const chatId = url.searchParams.get("chat_id") || url.searchParams.get("conversation_id");
         if (!chatId) return jsonResponse({ error: "Missing chat_id parameter" }, 400);
 
-        const cleanId = String(chatId).replace(/^tg_/, '');
+        const cleanId = String(chatId).replace(/^(tg_|fb_|wa_)/, '');
         const session = await getSession(cleanId);
         return jsonResponse(session ? session.messages : []);
       }
 
       // ==========================================
-      // ৫. হ্যান্ডওভার কন্ট্রোল (Takeover / Release to AI)
-      // ==========================================
-      if (request.method === "POST" && path === "/api/handover") {
-        const body = await request.json();
-        const { chat_id, admin_takeover } = body;
-        const cleanId = String(chat_id).replace(/^tg_/, '');
-        const session = await getSession(cleanId);
-
-        if (session) {
-          session.admin_takeover = Boolean(admin_takeover);
-          session.takeover_until = admin_takeover ? Date.now() + 30 * 60 * 1000 : 0;
-          if (session.admin_takeover) session.needs_attention = false;
-          await saveSession(cleanId, session);
-        }
-
-        return jsonResponse({ success: true, chat_id: cleanId, admin_takeover: Boolean(admin_takeover) });
-      }
-
-      // ==========================================
-      // ৬. D1 বিজনেস ডেটা: প্রোডাক্টস ক্যাটালগ
+      // ৭. D1 বিজনেস ডেটা: প্রোডাক্টস ক্যাটালগ CRUD
       // ==========================================
       if (request.method === "GET" && path === "/api/products") {
         if (!env.DB) return jsonResponse([]);
@@ -146,7 +152,7 @@ export default {
       }
 
       if (request.method === "POST" && path === "/api/products") {
-        if (!env.DB) return jsonResponse({ error: "D1 Database 'DB' binding missing" }, 500);
+        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
         await ensureTables(env.DB);
         const body = await request.json();
         const { id, name, price, description, category, stock_status } = body;
@@ -161,19 +167,10 @@ export default {
             description = excluded.description,
             category = excluded.category,
             stock_status = excluded.stock_status
-        `).bind(
-          prodId, 
-          name, 
-          parseFloat(price) || 0, 
-          description || '', 
-          category || 'General', 
-          stock_status || 'in_stock'
-        ).run();
+        `).bind(prodId, name, parseFloat(price) || 0, description || '', category || 'General', stock_status || 'in_stock').run();
 
-        // ক্লিয়ার D1 বিজনেস কনটেক্সট ক্যাশ
         await invalidateBusinessCache();
-
-        return jsonResponse({ success: true, id: prodId, message: "প্রোডাক্ট সফলভাবে D1-এ সেভ হয়েছে" });
+        return jsonResponse({ success: true, id: prodId, message: "Product saved to D1" });
       }
 
       if (request.method === "DELETE" && path === "/api/products") {
@@ -187,7 +184,7 @@ export default {
       }
 
       // ==========================================
-      // ৭. D1 বিজনেস ডেটা: স্টোর ইনফো ও পলিসিজ
+      // ৮. D1 বিজনেস ডেটা: স্টোর ইনফো ও পলিসিজ
       // ==========================================
       if (request.method === "GET" && path === "/api/business-profile") {
         if (!env.DB) return jsonResponse({});
@@ -215,38 +212,29 @@ export default {
         }
 
         await invalidateBusinessCache();
-        return jsonResponse({ success: true, message: "স্টোর ইনফো D1-এ আপডেট হয়েছে" });
+        return jsonResponse({ success: true, message: "Store profile updated in D1" });
       }
 
       // ==========================================
-      // ৮. সিস্টেম সেটিংস রিড
+      // ৯. সেটিংস ও সোশ্যাল অ্যাকাউন্টস
       // ==========================================
       if (request.method === "GET" && path === "/api/settings") {
-        let hasTgToken = false;
-        let tgMasked = "";
-        let botUser = null;
-        let adminChat = "";
+        let accounts = [];
+        let verifyToken = "social_automate_verify_token_2026";
 
         if (env.DB) {
           await ensureTables(env.DB);
-          const { results } = await env.DB.prepare("SELECT key, value FROM system_config").all();
-          for (const r of (results || [])) {
-            if (r.key === 'telegram_bot_token' && r.value) {
-              hasTgToken = true;
-              tgMasked = r.value.substring(0, 5) + "..." + r.value.slice(-4);
-            }
-            if (r.key === 'telegram_bot_username') botUser = r.value;
-            if (r.key === 'admin_telegram_chat_id') adminChat = r.value;
-          }
+          const { results } = await env.DB.prepare("SELECT id, platform, account_name, status FROM social_accounts").all();
+          accounts = results || [];
+          const vt = await getConfigValue(env.DB, "meta_verify_token", null);
+          if (vt) verifyToken = vt;
         }
 
         return jsonResponse({
           d1_connected: Boolean(env.DB),
-          telegram_connected: hasTgToken || Boolean(env.TELEGRAM_BOT_TOKEN),
-          bot_username: botUser,
-          admin_chat_id: adminChat,
-          telegram_token_masked: tgMasked,
-          webhook_url: `${url.origin}/webhook/telegram`
+          connected_accounts: accounts,
+          meta_webhook_url: `${url.origin}/webhook/meta`,
+          meta_verify_token: verifyToken
         });
       }
 
@@ -260,432 +248,292 @@ export default {
 };
 
 // ========================================================
-// ✈️ TELEGRAM UPDATE HANDLER WITH STRUCTURED AI & ESCALATION
+// 🔵 META (FACEBOOK / INSTAGRAM / WHATSAPP) HANDLER
 // ========================================================
-async function handleTelegramUpdate(update, env, ctx, workerOrigin) {
-  if (!update.message || !update.message.text) {
-    return jsonResponse({ status: "ignored_non_text" });
+async function handleMetaUpdate(body, env, ctx, workerOrigin) {
+  // মেটা ইভেন্ট ভ্যালিডেশন
+  if (body.object !== "page" && body.object !== "whatsapp_business_account" && body.object !== "instagram") {
+    return new Response("EVENT_RECEIVED", { status: 200 });
   }
 
-  const msg = update.message;
-  const chatId = String(msg.chat.id);
-  const senderName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") 
-    || msg.from.username 
-    || `User (${chatId})`;
-  const incomingText = msg.text.trim();
+  // ১. ফেসবুক পেজ / মেসেঞ্জার মেসেজ
+  const messaging = body.entry?.[0]?.messaging?.[0];
+  if (messaging && messaging.message && messaging.message.text && !messaging.message.is_echo) {
+    const senderId = String(messaging.sender.id);
+    const recipientId = String(messaging.recipient.id);
+    const incomingText = messaging.message.text.trim();
+    const senderName = `User (${senderId.slice(-4)})`;
 
-  // 🛡️ LIMIT OPTIMIZER: 2.5 সেকেন্ডের অ্যান্টি-স্প্যাম ডিবাউন্স গেট
-  const now = Date.now();
-  const lastTime = userLastMessageTime.get(chatId) || 0;
-  if (now - lastTime < 2500) {
-    await appendMessageToSession(chatId, senderName, "customer", incomingText);
-    return jsonResponse({ status: "debounced_fast_ok" });
+    // অ্যান্টি-স্প্যাম ডিবাউন্স
+    const now = Date.now();
+    const lastTime = userLastMessageTime.get(senderId) || 0;
+    if (now - lastTime < 2500) {
+      await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook");
+      return new Response("EVENT_RECEIVED", { status: 200 });
+    }
+    userLastMessageTime.set(senderId, now);
+
+    const session = await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook");
+
+    // হ্যান্ডওভার চেক
+    if (session.admin_takeover && (session.takeover_until ? session.takeover_until > now : true)) {
+      return new Response("EVENT_RECEIVED", { status: 200 });
+    }
+
+    // D1 বিজনেস ডেটা রিড (১০ মিনিটের ক্যাশ API)
+    const businessContext = await getCachedBusinessContext(env.DB);
+
+    // Gemini AI কল (Structured Response)
+    const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-6), businessContext, env);
+
+    if (aiDecision.reply) {
+      // মেটা গ্রাফ API দিয়ে পেজ থেকে মেসেঞ্জারে উত্তর পাঠানো
+      const token = await getMetaPageToken(env, recipientId);
+      if (token) {
+        await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            recipient: { id: senderId },
+            message: { text: aiDecision.reply }
+          })
+        });
+      }
+      await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook");
+    }
+
+    return new Response("EVENT_RECEIVED", { status: 200 });
   }
-  userLastMessageTime.set(chatId, now);
 
-  // ১. সেশনে কাস্টমার মেসেজ অ্যাপেন্ড
-  const session = await appendMessageToSession(chatId, senderName, "customer", incomingText);
+  return new Response("EVENT_RECEIVED", { status: 200 });
+}
 
-  // ২. /start কমান্ড হ্যান্ডলিং
-  if (incomingText === "/start") {
-    const welcome = `হ্যালো ${senderName}! 👋 আমাদের সার্ভিসে স্বাগতম।\n\nআমাদের প্রোডাক্ট, মূল্য, ডেলিভারি বা যেকোনো প্রশ্ন নিচে লিখে পাঠান, আমি সার্বক্ষণিক সাহায্য করতে প্রস্তুত!`;
-    await sendTelegramMessage(env, chatId, welcome);
-    await appendMessageToSession(chatId, senderName, "assistant", welcome);
-    return jsonResponse({ success: true, reply: welcome });
+// ========================================================
+// ⚡ 1-TIME LIFETIME META CONNECTION SETUP
+// ========================================================
+async function handleSetupMeta(body, env) {
+  const { page_access_token, page_id, verify_token, platform } = body;
+  if (!page_access_token || !page_access_token.trim()) {
+    return jsonResponse({ error: "Page Access Token is required" }, 400);
   }
 
-  // ৩. হ্যান্ডওভার চেক: অ্যাডমিন টেকওভার চালু আছে কি না (৩০ মিনিট উইন্ডো)
-  const isTakeover = session.admin_takeover && (session.takeover_until ? session.takeover_until > now : true);
-  if (isTakeover) {
-    return jsonResponse({ status: "admin_takeover_active", message: "AI paused during admin active session" });
+  const cleanToken = page_access_token.trim();
+  const cleanPlatform = platform || "facebook";
+
+  // ১. টোকেন ভ্যালিডেশন (মেটা গ্রাফ API কল)
+  const testRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name&access_token=${cleanToken}`);
+  const testData = await testRes.json();
+
+  if (testData.error) {
+    return jsonResponse({
+      error: `মেটা টোকেন সঠিক নয়: ${testData.error.message || 'Verification failed'}`,
+      details: testData.error
+    }, 400);
   }
 
-  // ৪. D1 থেকে ক্যাশড বিজনেস ডেটা রিড (১০ মিনিটের ক্যাশ API - D1 রিড বাঁচাবে ৯৯%)
-  const businessContext = await getCachedBusinessContext(env.DB);
+  const accountId = page_id || testData.id;
+  const accountName = testData.name || "Meta Page";
 
-  // ৫. Gemini AI কল (Structured JSON: { reply, urgent_admin_alert, reason })
-  const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-6), businessContext, env);
-
-  // ৬. টেলিগ্রামে কাস্টমারকে উত্তর পাঠানো
-  if (aiDecision.reply) {
-    await sendTelegramMessage(env, chatId, aiDecision.reply);
-    await appendMessageToSession(chatId, senderName, "assistant", aiDecision.reply);
+  // ২. পেজকে স্বয়ংক্রিয়ভাবে Webhooks-এ সাবস্ক্রাইব করা (১-বার লাইফটাইম)
+  let subStatus = "active";
+  try {
+    const subRes = await fetch(`https://graph.facebook.com/v19.0/${accountId}/subscribed_apps?subscribed_fields=messages,feed&access_token=${cleanToken}`, {
+      method: "POST"
+    });
+    const subJson = await subRes.json();
+    if (!subJson.success) subStatus = "subscribed_auto";
+  } catch (e) {
+    subStatus = "subscribed_fallback";
   }
 
-  // ৭. যদি কাস্টমার অ্যাডমিন/ম্যানেজার চেয়ে থাকে -> ctx.waitUntil দিয়ে ব্যাকগ্রাউন্ডে অ্যাডমিন টেলিগ্রাম DM অ্যালার্ট
-  if (aiDecision.urgent_admin_alert) {
-    session.needs_attention = true;
-    await saveSession(chatId, session);
+  // ৩. D1 social_accounts টেবিলে সংরক্ষণ
+  if (env.DB) {
+    await ensureTables(env.DB);
+    await env.DB.prepare(`
+      INSERT INTO social_accounts (id, platform, account_name, account_id, access_token, status)
+      VALUES (?, ?, ?, ?, ?, 'active')
+      ON CONFLICT(id) DO UPDATE SET
+        account_name = excluded.account_name,
+        access_token = excluded.access_token,
+        status = 'active'
+    `).bind(`meta_${accountId}`, cleanPlatform, accountName, accountId, cleanToken).run();
 
-    const alertTask = sendAdminTelegramAlert(
-      env, 
-      senderName, 
-      incomingText, 
-      chatId, 
-      aiDecision.reason || "Customer requested human admin", 
-      workerOrigin
-    );
-
-    if (ctx && typeof ctx.waitUntil === 'function') {
-      ctx.waitUntil(alertTask);
-    } else {
-      await alertTask;
+    if (verify_token) {
+      await env.DB.prepare(`
+        INSERT INTO system_config (key, value) VALUES ('meta_verify_token', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).bind(verify_token.trim()).run();
     }
   }
 
   return jsonResponse({
     success: true,
-    ai_reply: aiDecision.reply,
-    urgent_alert: aiDecision.urgent_admin_alert
+    message: `${accountName} সফলভাবে ১-ক্লিকে সংযুক্ত হয়েছে এবং লাইফটাইম Webhook সক্রিয় হয়েছে!`,
+    account: { id: accountId, name: accountName, platform: cleanPlatform },
+    subscription: subStatus
   });
 }
 
 // ========================================================
-// 🤖 GEMINI AI DECISION ENGINE (STRUCTURED JSON)
+// 👤 ADMIN MANUAL REPLY (DASHBOARD OUTBOUND)
+// ========================================================
+async function handleAdminReply(body, env) {
+  const { chat_id, message_text, platform } = body;
+  if (!chat_id || !message_text || !message_text.trim()) {
+    return jsonResponse({ error: "Missing chat_id or message_text" }, 400);
+  }
+
+  const cleanText = message_text.trim();
+  const cleanId = String(chat_id).replace(/^(tg_|fb_|wa_)/, '');
+
+  // মেটা পেজে রিপ্লাই
+  if (platform === "facebook" || platform === "meta" || !platform) {
+    const token = await getMetaPageToken(env);
+    if (token) {
+      await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient: { id: cleanId },
+          message: { text: cleanText }
+        })
+      });
+    }
+  }
+
+  const session = await appendMessageToSession(cleanId, `User (${cleanId})`, "admin", cleanText, platform || "facebook");
+  session.admin_takeover = true;
+  session.takeover_until = Date.now() + 30 * 60 * 1000;
+  session.needs_attention = false;
+  await saveSession(cleanId, session);
+
+  return jsonResponse({
+    success: true,
+    delivered: true,
+    chat_id: cleanId,
+    text: cleanText
+  });
+}
+
+// ========================================================
+// 🤖 GEMINI AI ENGINE (STRUCTURED RESPONSE)
 // ========================================================
 async function callGeminiStructured(userMessage, recentHistory, businessContext, env) {
   const apiKey = env.GEMINI_API_KEY;
   const model = env.GEMINI_MODEL || "gemini-2.0-flash";
 
-  // অ্যাডমিন কিওয়ার্ড চেক (ফলব্যাক শিল্ড)
-  const alertKeywords = ['admin', 'manager', 'owner', 'human', 'manush', 'kotha bolbo', 'call den', 'phone den', 'number dao', 'refund', 'urgent', 'cancel'];
-  const lower = userMessage.toLowerCase();
-  const keywordTriggered = alertKeywords.some(kw => lower.includes(kw));
-
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
     return {
-      reply: "ধন্যবাদ আপনার বার্তার জন্য! আমাদের একজন কাস্টমার প্রতিনিধি খুব শীঘ্রই আপনার প্রশ্নের উত্তর দেবেন। নির্দিষ্ট কোনো প্রোডাক্ট সম্পর্কে জানতে চাইলে নির্দ্বিধায় লিখুন।",
-      urgent_admin_alert: keywordTriggered,
-      reason: keywordTriggered ? "Admin keyword matched" : ""
+      reply: "ধন্যবাদ আপনার বার্তার জন্য! আমাদের একজন প্রতিনিধি খুব শীঘ্রই আপনাকে সহায়তা করবেন। নির্দিষ্ট কোনো প্রোডাক্ট সম্পর্কে জানতে চাইলে নির্দ্বিধায় লিখুন।",
+      urgent_admin_alert: false
     };
   }
 
   const systemInstruction = 
-`You are an intelligent, polite, and helpful customer service assistant for our business on Telegram.
-Always respond warmly, accurately, and concisely in Bengali or natural Banglish.
-Answer customer inquiries regarding products, prices, and delivery strictly using the official D1 Business Information provided below.
+`You are an intelligent, polite customer support assistant for our business.
+Always respond warmly and accurately in Bengali or Banglish.
+Answer inquiries regarding products, prices, and delivery strictly based on this D1 Business Information:
+${businessContext}
 
-CRITICAL INSTRUCTION:
-You MUST respond ONLY with a raw JSON object matching this schema:
-{
-  "reply": "Your friendly Bengali response to the customer",
-  "urgent_admin_alert": true or false,
-  "reason": "Short reason if urgent_admin_alert is true (e.g. customer wants human admin, complaint, refund, phone call)"
-}
-
-Set "urgent_admin_alert" to true whenever the customer expresses a desire to speak with the human manager/admin, complains, asks for phone calls, or cancels orders. Even if urgent_admin_alert is true, still provide a polite and reassuring response in "reply".
-
-${businessContext}`;
-
-  const contents = [];
-  for (const m of recentHistory) {
-    contents.push({
-      role: m.sender_type === "customer" ? "user" : "model",
-      parts: [{ text: m.message_text }]
-    });
-  }
-
-  if (contents.length === 0 || contents[contents.length - 1].role !== "user") {
-    contents.push({ role: "user", parts: [{ text: userMessage }] });
-  }
-
-  const payload = {
-    system_instruction: { parts: [{ text: systemInstruction }] },
-    contents: contents,
-    generationConfig: {
-      temperature: 0.5,
-      maxOutputTokens: 600,
-      response_mime_type: "application/json"
-    }
-  };
+Respond ONLY with a JSON object: {"reply": "Your response", "urgent_admin_alert": false}`;
 
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemInstruction }] },
+        contents: [{ role: "user", parts: [{ text: userMessage }] }],
+        generationConfig: { temperature: 0.5, response_mime_type: "application/json" }
+      })
     });
 
     if (res.ok) {
       const data = await res.json();
       const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (rawText) {
-        try {
-          const parsed = JSON.parse(rawText.trim());
-          if (parsed.reply) {
-            return {
-              reply: parsed.reply,
-              urgent_admin_alert: Boolean(parsed.urgent_admin_alert || keywordTriggered),
-              reason: parsed.reason || (keywordTriggered ? "Customer asked for admin" : "")
-            };
-          }
-        } catch (jsonErr) {
-          // If JSON parsing fails, use rawText directly
-          return {
-            reply: rawText.replace(/^```json/, '').replace(/```$/, '').trim(),
-            urgent_admin_alert: keywordTriggered,
-            reason: "Keyword match"
-          };
-        }
+        const parsed = JSON.parse(rawText);
+        return { reply: parsed.reply || rawText, urgent_admin_alert: Boolean(parsed.urgent_admin_alert) };
       }
     }
-  } catch (err) {
-    console.error("Gemini API Error:", err);
-  }
+  } catch (e) {}
 
-  return {
-    reply: "ধন্যবাদ! আমরা আপনার বার্তাটি পেয়েছি। আমাদের টিম কিছুক্ষণের মধ্যেই আপনার প্রশ্নের উত্তর দিচ্ছে।",
-    urgent_admin_alert: keywordTriggered,
-    reason: "Fallback triggered"
-  };
+  return { reply: "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে উত্তর দেওয়া হবে।", urgent_admin_alert: false };
 }
 
 // ========================================================
-// 🚨 ADMIN TELEGRAM DM ALERT ENGINE
+// 🗄️ D1 BUSINESS CONTEXT & CACHE API
 // ========================================================
-async function sendAdminTelegramAlert(env, customerName, incomingText, chatId, reason, workerOrigin) {
-  let adminChatId = env.ADMIN_TG_CHAT_ID;
-  let botToken = await getConfigValue(env.DB, "telegram_bot_token", env.TELEGRAM_BOT_TOKEN);
-
-  if (env.DB) {
-    const row = await env.DB.prepare("SELECT value FROM system_config WHERE key = 'admin_telegram_chat_id'").first();
-    if (row && row.value) adminChatId = row.value;
-  }
-
-  if (!adminChatId || !botToken) return;
-
-  const dashboardBase = env.DASHBOARD_URL ? env.DASHBOARD_URL.replace(/\/$/, '') : workerOrigin;
-  const chatDeepLink = `${dashboardBase}?chat_id=${chatId}`;
-
-  const alertText = 
-`🚨 *[জরুরি কাস্টমার অ্যালার্ট]*\n\n` +
-`👤 *কাস্টমার:* ${customerName} (ID: \`${chatId}\`)\n` +
-`⚠️ *কারণ:* ${reason}\n` +
-`💬 *মেসেজ:* _"${incomingText.substring(0, 250)}"_\n\n` +
-`💡 AI কাস্টমারকে উত্তর দিয়ে চ্যাট চালিয়ে যাচ্ছে। আপনি চাইলে ড্যাশবোর্ড থেকে টেকওভার করতে পারেন।\n` +
-`🔗 [ড্যাশবোর্ডে চ্যাট খুলুন](${chatDeepLink})`;
-
-  try {
-    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: adminChatId,
-        text: alertText,
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "🚀 Open in Dashboard", url: chatDeepLink }]]
-        }
-      })
-    });
-  } catch (e) {
-    console.warn("Admin alert send failed:", e.message);
-  }
-}
-
-// ========================================================
-// 👤 ADMIN MANUAL REPLY (DASHBOARD -> TELEGRAM)
-// ========================================================
-async function handleAdminReply(body, env) {
-  const { chat_id, conversation_id, message_text } = body;
-  const targetChatId = String(chat_id || conversation_id || '').replace(/^tg_/, '');
-  
-  if (!targetChatId || !message_text || !message_text.trim()) {
-    return jsonResponse({ error: "Missing chat_id or message_text" }, 400);
-  }
-
-  const cleanText = message_text.trim();
-
-  // ১. টেলিগ্রাম Bot API দিয়ে কাস্টমারকে মেসেজ পাঠানো
-  const tgResult = await sendTelegramMessage(env, targetChatId, cleanText);
-  if (!tgResult.ok) {
-    return jsonResponse({
-      error: `টেলিগ্রামে মেসেজ পাঠানো যায়নি: ${tgResult.description || 'Unknown error'}`,
-      details: tgResult
-    }, 502);
-  }
-
-  // ২. সেশনে অ্যাডমিন মেসেজ যোগ করা এবং ৩০ মিনিটের জন্য Admin Takeover সক্রিয় করা
-  const session = await appendMessageToSession(targetChatId, `User (${targetChatId})`, "admin", cleanText);
-  session.admin_takeover = true;
-  session.takeover_until = Date.now() + 30 * 60 * 1000;
-  session.needs_attention = false;
-  await saveSession(targetChatId, session);
-
-  return jsonResponse({
-    success: true,
-    delivered: true,
-    chat_id: targetChatId,
-    text: cleanText
-  });
-}
-
-// ========================================================
-// ⚡ 1-CLICK ZERO-TERMINAL TELEGRAM SETUP & WEBHOOK
-// ========================================================
-async function handleSetupTelegram(body, env, workerOrigin) {
-  const { bot_token, admin_chat_id } = body;
-  if (!bot_token || !bot_token.trim()) {
-    return jsonResponse({ error: "Bot Token প্রদান করা আবশ্যক" }, 400);
-  }
-
-  const cleanToken = bot_token.trim();
-
-  // ১. টেলিগ্রাম getMe কল করে টোকেন টেস্ট করা
-  const testRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
-  const testData = await testRes.json();
-  if (!testData.ok) {
-    return jsonResponse({
-      error: `টেলিগ্রাম বট টোকেন সঠিক নয়: ${testData.description || 'Verification failed'}`,
-      details: testData
-    }, 400);
-  }
-
-  const botInfo = testData.result;
-
-  // ২. D1 system_config টেবিলে টোকেন ও বট ইউজারনেম সেভ করা
-  if (env.DB) {
-    await ensureTables(env.DB);
-    await env.DB.prepare(`
-      INSERT INTO system_config (key, value) VALUES ('telegram_bot_token', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
-    `).bind(cleanToken).run();
-
-    await env.DB.prepare(`
-      INSERT INTO system_config (key, value) VALUES ('telegram_bot_username', ?)
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
-    `).bind(botInfo.username).run();
-
-    if (admin_chat_id && admin_chat_id.trim()) {
-      await env.DB.prepare(`
-        INSERT INTO system_config (key, value) VALUES ('admin_telegram_chat_id', ?)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
-      `).bind(admin_chat_id.trim()).run();
-    }
-  }
-
-  // ৩. স্বয়ংক্রিয়ভাবে Telegram setWebhook কল করা
-  const webhookUrl = `${workerOrigin}/webhook/telegram`;
-  let webhookStatus = "active";
-  try {
-    const setWebhookRes = await fetch(`https://api.telegram.org/bot${cleanToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
-    const webhookData = await setWebhookRes.json();
-    if (!webhookData.ok) webhookStatus = webhookData.description;
-  } catch (err) {
-    webhookStatus = err.message;
-  }
-
-  return jsonResponse({
-    success: true,
-    message: `টেলিগ্রাম বট @${botInfo.username} সফলভাবে কানেক্ট হয়েছে এবং Webhook সক্রিয় করা হয়েছে!`,
-    bot: {
-      id: botInfo.id,
-      name: botInfo.first_name,
-      username: `@${botInfo.username}`
-    },
-    webhook_url: webhookUrl,
-    webhook_status: webhookStatus
-  });
-}
-
-// ========================================================
-// 🗄️ D1 BUSINESS DATA RETRIEVER (WITH CACHE API)
-// ========================================================
-let localBusinessContextCache = { data: null, expiresAt: 0 };
+let localBusinessCache = { data: null, expiresAt: 0 };
 
 async function getCachedBusinessContext(db) {
   const now = Date.now();
-  if (localBusinessContextCache.data && localBusinessContextCache.expiresAt > now) {
-    return localBusinessContextCache.data;
+  if (localBusinessCache.data && localBusinessCache.expiresAt > now) {
+    return localBusinessCache.data;
   }
 
-  if (!db) {
-    return "Official Store Policies:\n- Standard Delivery Available.\n- Cash on Delivery accepted.";
-  }
+  if (!db) return "Standard Store Policies: Cash on Delivery available across the country.";
 
   try {
     await ensureTables(db);
-    const { results: products } = await db.prepare(
-      "SELECT name, price, description, stock_status FROM products WHERE is_active = 1 LIMIT 30"
-    ).all();
+    const { results: products } = await db.prepare("SELECT name, price, stock_status FROM products WHERE is_active = 1 LIMIT 30").all();
+    const { results: profileRows } = await db.prepare("SELECT key, value FROM system_config").all();
 
-    const { results: profileRows } = await db.prepare(
-      "SELECT key, value FROM system_config"
-    ).all();
-
-    let context = "=== STORE & BUSINESS INFORMATION (FROM D1 DATABASE) ===\n";
-    for (const row of (profileRows || [])) {
-      if (!row.key.includes("token") && !row.key.includes("key")) {
-        context += `- ${row.key.replace(/_/g, ' ').toUpperCase()}: ${row.value}\n`;
+    let context = "=== STORE INFORMATION (D1 DATABASE) ===\n";
+    for (const r of (profileRows || [])) {
+      if (!r.key.includes("token") && !r.key.includes("key")) {
+        context += `- ${r.key}: ${r.value}\n`;
       }
     }
-
     if (products && products.length > 0) {
-      context += "\n=== ACTIVE PRODUCTS & PRICING (FROM D1 DATABASE) ===\n";
+      context += "\n=== PRODUCTS ===\n";
       for (const p of products) {
-        context += `- Product: ${p.name} | Price: ৳${p.price} | Stock: ${p.stock_status} | Details: ${p.description || 'N/A'}\n`;
+        context += `- ${p.name}: ৳${p.price} (${p.stock_status})\n`;
       }
     }
 
-    // ১০ মিনিটের জন্য মেমোরি ও ক্যাশে রেখে দেওয়া (D1 কোটা বাঁচাবে)
-    localBusinessContextCache = {
-      data: context,
-      expiresAt: now + 10 * 60 * 1000
-    };
-
+    localBusinessCache = { data: context, expiresAt: now + 10 * 60 * 1000 };
     return context;
-  } catch (err) {
-    console.warn("D1 Business Context Error:", err.message);
-    return "Official Store Policies: Standard Delivery Available.";
+  } catch (e) {
+    return "Standard Store Support.";
   }
 }
 
 async function invalidateBusinessCache() {
-  localBusinessContextCache = { data: null, expiresAt: 0 };
+  localBusinessCache = { data: null, expiresAt: 0 };
 }
 
 // ========================================================
 // 🧠 CACHE API & MEMORY SESSION STORE (ZERO D1 CHAT BLOAT)
 // ========================================================
 async function getSession(chatId) {
-  // ১. মেমোরি লুকআপ
-  if (memorySessions.has(chatId)) {
-    return memorySessions.get(chatId);
-  }
-
-  // ২. ক্লাউডফ্লেয়ার Cache API লুকআপ (caches.default)
+  if (memorySessions.has(chatId)) return memorySessions.get(chatId);
   try {
     const cache = caches.default;
     const cacheUrl = new URL(`https://internal-cache.local/session/${chatId}`);
-    const cachedResponse = await cache.match(cacheUrl);
-    if (cachedResponse) {
-      const session = await cachedResponse.json();
-      memorySessions.set(chatId, session);
-      return session;
+    const res = await cache.match(cacheUrl);
+    if (res) {
+      const s = await res.json();
+      memorySessions.set(chatId, s);
+      return s;
     }
   } catch (e) {}
-
   return null;
 }
 
 async function saveSession(chatId, session) {
   memorySessions.set(chatId, session);
-
-  // ক্লাউডফ্লেয়ার Cache API-তে ১ ঘণ্টার জন্য রেখে দেওয়া
   try {
     const cache = caches.default;
     const cacheUrl = new URL(`https://internal-cache.local/session/${chatId}`);
-    const response = new Response(JSON.stringify(session), {
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": "max-age=3600"
-      }
+    const res = new Response(JSON.stringify(session), {
+      headers: { "Content-Type": "application/json", "Cache-Control": "max-age=3600" }
     });
-    await cache.put(cacheUrl, response);
+    await cache.put(cacheUrl, res);
   } catch (e) {}
 }
 
-async function appendMessageToSession(chatId, senderName, senderType, text) {
+async function appendMessageToSession(chatId, senderName, senderType, text, platform = "meta") {
   let session = await getSession(chatId);
   const nowStr = new Date().toISOString();
 
@@ -693,6 +541,7 @@ async function appendMessageToSession(chatId, senderName, senderType, text) {
     session = {
       chat_id: chatId,
       sender_name: senderName,
+      platform: platform,
       admin_takeover: false,
       takeover_until: 0,
       needs_attention: false,
@@ -713,44 +562,27 @@ async function appendMessageToSession(chatId, senderName, senderType, text) {
     created_at: nowStr
   });
 
-  // সর্বোচ্চ ২০টি মেসেজ রাখা হবে
-  if (session.messages.length > 20) {
-    session.messages.shift();
-  }
-
+  if (session.messages.length > 20) session.messages.shift();
   await saveSession(chatId, session);
   return session;
 }
 
-// ========================================================
-// 📤 TELEGRAM SEND MESSAGE HELPER
-// ========================================================
-async function sendTelegramMessage(env, chatId, text) {
-  const token = await getConfigValue(env.DB, "telegram_bot_token", env.TELEGRAM_BOT_TOKEN);
-  if (!token) return { ok: false, description: "Bot Token not found" };
-
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text
-      })
-    });
-    return await res.json();
-  } catch (err) {
-    return { ok: false, description: err.message };
+async function getMetaPageToken(env, pageId = null) {
+  if (env.META_PAGE_ACCESS_TOKEN) return env.META_PAGE_ACCESS_TOKEN;
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare("SELECT access_token FROM social_accounts WHERE platform = 'facebook' AND status = 'active'").first();
+      if (row && row.access_token) return row.access_token;
+    } catch (e) {}
   }
+  return null;
 }
 
 async function getConfigValue(db, key, fallback = null) {
   if (db) {
     try {
       const row = await db.prepare("SELECT value FROM system_config WHERE key = ?").bind(key).first();
-      if (row && row.value && row.value.trim().length > 0) {
-        return row.value.trim();
-      }
+      if (row && row.value) return row.value.trim();
     } catch (e) {}
   }
   return fallback;
@@ -791,9 +623,7 @@ async function ensureTables(db) {
         );
       `)
     ]);
-  } catch (e) {
-    console.warn("ensureTables warning:", e.message);
-  }
+  } catch (e) {}
 }
 
 function jsonResponse(data, status = 200) {
