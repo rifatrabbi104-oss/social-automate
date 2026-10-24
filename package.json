@@ -1,0 +1,11 @@
+{
+  "name": "social-automate",
+  "version": "1.0.0",
+  "description": "Social Automation System",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.50.0"
+  }
+}
