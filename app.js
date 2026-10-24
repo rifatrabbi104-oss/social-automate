@@ -1,57 +1,70 @@
 /**
- * SocialAutomate Frontend Application Engine
- * -------------------------------------------
- * Powers the Live Chat Inbox, Per-Chat Handover, Global Master Switch,
- * Social Post Scheduler, and Admin Alert Configuration.
- * Works seamlessly with Cloudflare Worker API & local interactive preview.
+ * SocialAutomate - Telegram Live Chat & Cloudflare D1 Application Engine
+ * ---------------------------------------------------------------------
+ * 1. Live 2-way communication: Customer on Telegram <-> Admin in Dashboard
+ * 2. Persistent Cloudflare D1 storage for all conversations & messages
+ * 3. Automated Telegram Bot token verification & webhook sync
+ * 4. Real-time background polling (zero local demo mock data)
  */
 
-// কনফিগারেশন: ক্লাউডফ্লেয়ার ওয়ার্কার এপিআই এন্ডপয়েন্ট (ডায়নামিক ও ক্রস-ডিভাইস সাপোর্ট)
 function getApiBase() {
   const custom = localStorage.getItem('social_automate_worker_url');
   if (custom) return custom.replace(/\/$/, '') + '/api';
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return 'http://127.0.0.1:8787/api';
   }
-  // লাইভ ডিপ্লয়ড ওয়ার্কার ডিফল্ট ফলব্যাক
   return 'https://social-automate.rifatrabbi104.workers.dev/api';
 }
+
 const API_BASE = getApiBase();
 
-// অ্যাপ্লিকেশন স্টেট (Clean State - Zero Demo Data)
+// Application State
 let appState = {
-  globalAiActive: true,
-  activeFilter: 'all',
   activeConversationId: null,
   conversations: [],
   messages: {},
-  scheduledPosts: []
+  d1Connected: false,
+  telegramConnected: false,
+  botUsername: null,
+  pollTimer: null,
+  isSending: false
 };
 
-// ইনিশিয়ালাইজেশন
 document.addEventListener('DOMContentLoaded', () => {
   initNavigation();
-  initGlobalSwitch();
-  initConversationList();
-  initChatView();
-  initSandboxSimulator();
-  initScheduler();
-  initSettingsForms();
-  fetchLiveStats();
+  initChatReply();
+  initSettingsForm();
+  initManualSync();
+
+  // Initial load
+  loadAllData();
+
+  // Background real-time polling every 3.5 seconds
+  appState.pollTimer = setInterval(pollLiveUpdates, 3500);
 });
 
+// ========================================================
 // ১. নেভিগেশন ট্যাব হ্যান্ডলিং
+// ========================================================
 function initNavigation() {
   const navItems = document.querySelectorAll('.nav-item');
   const panes = document.querySelectorAll('.tab-pane');
   const pageTitle = document.getElementById('page-title');
+  const pageSubtitle = document.getElementById('page-subtitle');
 
-  const titles = {
-    'inbox': 'Live Chat & AI Handover',
-    'test-sandbox': 'Interactive Test Sandbox & Easy Connect',
-    'scheduler': 'Social Post Scheduler & Publisher',
-    'analytics': 'Quota Monitor & Performance Analytics',
-    'settings': 'Settings & Telegram Admin Alert'
+  const headers = {
+    'inbox': {
+      title: 'Telegram Live Inbox',
+      sub: 'কাস্টমার টেলিগ্রামে মেসেজ পাঠালে এখানে আসবে, আপনি ড্যাশবোর্ড থেকে উত্তর দিলে সরাসরি ইউজারের টেলিগ্রামেই রিপ্লাই যাবে।'
+    },
+    'telegram-setup': {
+      title: 'Telegram & Cloudflare D1 Setup',
+      sub: 'টেলিগ্রাম বটের টোকেন D1 ডেটাবেসে সংরক্ষণ করুন এবং স্বয়ংক্রিয়ভাবে Webhook চালু করুন।'
+    },
+    'logs': {
+      title: 'D1 Activity & Message History',
+      sub: 'Cloudflare D1 ডেটাবেসে স্থায়ীভাবে সংরক্ষিত মেসেজ ও ইভেন্ট হিস্ট্রি।'
+    }
   };
 
   navItems.forEach(item => {
@@ -63,321 +76,415 @@ function initNavigation() {
       item.classList.add('active');
       const targetPane = document.getElementById(`tab-${tab}`);
       if (targetPane) targetPane.classList.add('active');
-      if (pageTitle && titles[tab]) pageTitle.textContent = titles[tab];
+
+      if (headers[tab]) {
+        if (pageTitle) pageTitle.textContent = headers[tab].title;
+        if (pageSubtitle) pageSubtitle.textContent = headers[tab].sub;
+      }
+
+      if (tab === 'logs') {
+        renderAuditLogs();
+      }
     });
   });
 }
 
-// ২. গ্লোবাল AI মাস্টার সুইচ
-function initGlobalSwitch() {
-  const toggle = document.getElementById('global-ai-toggle');
-  const statusText = document.getElementById('global-status-text');
-
-  toggle.addEventListener('change', async (e) => {
-    const isEnabled = e.target.checked;
-    appState.globalAiActive = isEnabled;
-
-    if (statusText) {
-      statusText.textContent = isEnabled ? 'Active (AI replying)' : 'Disabled (Admin Mode)';
-      statusText.style.color = isEnabled ? 'var(--emerald)' : 'var(--amber)';
-    }
-
-    showToast(isEnabled ? '🤖 Global AI Auto-Pilot চালু হয়েছে।' : '👤 Global Admin Mode চালু হয়েছে (AI রিপ্লাই সাময়িক বন্ধ)।');
-
-    try {
-      await fetch(`${API_BASE}/settings/global-ai`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: isEnabled })
-      });
-    } catch (err) {
-      console.log('Running in local/offline mode.');
-    }
-  });
+// ========================================================
+// ২. ডেটা লোড ও ব্যাকগ্রাউন্ড সিঙ্ক (Live D1 Polling)
+// ========================================================
+async function loadAllData() {
+  await fetchSystemSettings();
+  await fetchConversations();
+  if (appState.activeConversationId) {
+    await fetchMessages(appState.activeConversationId);
+  }
 }
 
-// ৩. চ্যাট কনভারসেশন লিস্ট রেন্ডার
-function initConversationList() {
-  const listEl = document.getElementById('conversation-list');
-  const filterBtns = document.querySelectorAll('.filter-pill');
+async function pollLiveUpdates() {
+  await fetchConversations(true);
+  if (appState.activeConversationId) {
+    await fetchMessages(appState.activeConversationId, true);
+  }
+}
 
-  filterBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      filterBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      appState.activeFilter = btn.getAttribute('data-filter');
-      renderConversationList();
+function initManualSync() {
+  const syncBtn = document.getElementById('btn-manual-sync');
+  if (syncBtn) {
+    syncBtn.addEventListener('click', async () => {
+      syncBtn.textContent = '⏳ Syncing...';
+      await loadAllData();
+      showToast('🔄 ডেটাবেস থেকে রিয়েল-টাইম ডেটা রিফ্রেশ করা হয়েছে।');
+      syncBtn.textContent = '🔄 Sync';
     });
-  });
+  }
 
-  renderConversationList();
+  const refreshChatBtn = document.getElementById('btn-refresh-active-chat');
+  if (refreshChatBtn) {
+    refreshChatBtn.addEventListener('click', async () => {
+      if (appState.activeConversationId) {
+        await fetchMessages(appState.activeConversationId);
+        showToast('🔄 চ্যাট হিস্ট্রি রিফ্রেশ হয়েছে।');
+      }
+    });
+  }
+}
+
+// ========================================================
+// ৩. সিস্টেম ও D1 সেটিংস ফেচ
+// ========================================================
+async function fetchSystemSettings() {
+  try {
+    const res = await fetch(`${API_BASE}/settings`);
+    if (res.ok) {
+      const data = await res.json();
+      appState.d1Connected = Boolean(data.d1_connected);
+      appState.telegramConnected = Boolean(data.telegram_connected);
+      appState.botUsername = data.bot_username || null;
+
+      updateStatusUI(data);
+    } else {
+      updateStatusUI({ d1_connected: false, telegram_connected: false });
+    }
+  } catch (err) {
+    console.warn("API offline or unreachable:", err);
+    updateStatusUI({ d1_connected: false, telegram_connected: false });
+  }
+}
+
+function updateStatusUI(data) {
+  const d1Dot = document.getElementById('d1-status-dot');
+  const d1Text = document.getElementById('d1-status-text');
+  const d1Banner = document.getElementById('d1-warning-banner');
+  const statD1 = document.getElementById('stat-d1-status');
+  const statTg = document.getElementById('stat-tg-status');
+  const topbarTg = document.getElementById('topbar-tg-bot');
+  const setupBadge = document.getElementById('setup-status-badge');
+  const tgConnectedBadge = document.getElementById('tg-connected-badge');
+  const webhookInput = document.getElementById('display-webhook-url');
+
+  if (webhookInput) {
+    const baseOrigin = API_BASE.replace(/\/api$/, '');
+    webhookInput.value = `${baseOrigin}/webhook/telegram`;
+  }
+
+  // D1 Status
+  if (data.d1_connected) {
+    if (d1Dot) d1Dot.style.background = 'var(--emerald)';
+    if (d1Text) d1Text.textContent = 'D1 Database: Active';
+    if (statD1) {
+      statD1.textContent = 'Connected ✅';
+      statD1.style.color = 'var(--emerald)';
+    }
+    if (d1Banner) d1Banner.style.display = 'none';
+  } else {
+    if (d1Dot) d1Dot.style.background = 'var(--rose)';
+    if (d1Text) d1Text.textContent = 'D1 DB: Not Bound';
+    if (statD1) {
+      statD1.textContent = 'Not Bound ❌';
+      statD1.style.color = 'var(--rose)';
+    }
+    if (d1Banner) d1Banner.style.display = 'block';
+  }
+
+  // Telegram Status
+  if (data.telegram_connected) {
+    const username = data.bot_username ? `@${data.bot_username}` : 'Active';
+    if (topbarTg) topbarTg.textContent = `✈️ Telegram: ${username}`;
+    if (statTg) {
+      statTg.textContent = username;
+      statTg.style.color = 'var(--emerald)';
+    }
+    if (setupBadge) {
+      setupBadge.textContent = 'Active';
+      setupBadge.style.background = 'var(--emerald)';
+      setupBadge.style.color = '#fff';
+    }
+    if (tgConnectedBadge) tgConnectedBadge.style.display = 'inline-block';
+  } else {
+    if (topbarTg) topbarTg.textContent = '✈️ Telegram: Not Connected';
+    if (statTg) {
+      statTg.textContent = 'Not Connected ⚠️';
+      statTg.style.color = 'var(--amber)';
+    }
+    if (setupBadge) {
+      setupBadge.textContent = 'Setup';
+      setupBadge.style.background = 'var(--amber)';
+      setupBadge.style.color = '#000';
+    }
+    if (tgConnectedBadge) tgConnectedBadge.style.display = 'none';
+  }
+}
+
+// ========================================================
+// ৪. কনভারসেশন লিস্ট ফেচ ও রেন্ডার (D1)
+// ========================================================
+async function fetchConversations(isBackground = false) {
+  try {
+    const res = await fetch(`${API_BASE}/conversations`);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        appState.conversations = data;
+        renderConversationList();
+
+        const badge = document.getElementById('unread-badge');
+        if (badge) badge.textContent = data.length;
+
+        const statTotal = document.getElementById('stat-total-convs');
+        if (statTotal) statTotal.textContent = data.length;
+
+        // Auto select first conversation if none selected
+        if (!appState.activeConversationId && data.length > 0) {
+          appState.activeConversationId = data[0].id;
+          renderActiveChat();
+          fetchMessages(data[0].id);
+        }
+      }
+    }
+  } catch (err) {
+    if (!isBackground) console.warn("Failed to fetch conversations:", err);
+  }
 }
 
 function renderConversationList() {
   const listEl = document.getElementById('conversation-list');
   if (!listEl) return;
-  listEl.innerHTML = '';
 
-  const filtered = appState.conversations.filter(c => {
-    if (appState.activeFilter === 'attention') return c.needs_attention === 1;
-    if (appState.activeFilter === 'takeover') return c.admin_takeover === 1;
-    return true;
-  });
-
-  if (filtered.length === 0) {
+  if (appState.conversations.length === 0) {
     listEl.innerHTML = `
       <div style="padding: 40px 16px; text-align: center; color: var(--text-dim); font-size: 13px;">
-        <div style="font-size: 32px; margin-bottom: 8px;">💬</div>
-        <div style="color: var(--text-muted); font-weight: 600;">কোনো চ্যাট হিস্ট্রি নেই</div>
-        <p style="font-size: 11px; margin-top: 4px; line-height: 1.5;">টেলিগ্রাম বট কানেক্ট করলে বা Test & Connect ট্যাব থেকে মেসেজ টেস্ট করলে এখানে চ্যাট জমা হবে।</p>
+        <div style="font-size: 36px; margin-bottom: 8px;">✈️</div>
+        <div style="color: var(--text-muted); font-weight: 600; font-size: 14px;">কোনো চ্যাট নেই</div>
+        <p style="font-size: 12px; margin-top: 6px; line-height: 1.5;">
+          আপনার টেলিগ্রাম বটে মেসেজ দিলে সেটি সরাসরি এখানে আসবে।
+        </p>
       </div>
     `;
     return;
   }
 
-  filtered.forEach(c => {
-    const item = document.createElement('div');
-    item.className = `conv-item ${c.id === appState.activeConversationId ? 'active' : ''}`;
-    
-    const initial = c.name.charAt(0).toUpperCase();
-    const platformLabel = c.platform === 'facebook' ? '🔵 FB' : (c.platform === 'telegram' ? '✈️ TG' : '🟢 WA');
+  listEl.innerHTML = '';
 
-    let badgeHtml = '';
-    if (c.needs_attention) {
-      badgeHtml += `<span class="badge-tag attention">🚨 Needs Attention</span>`;
-    }
-    if (c.admin_takeover) {
-      badgeHtml += `<span class="badge-tag takeover">👤 Handover</span>`;
-    } else {
-      badgeHtml += `<span class="badge-tag ai">🤖 AI Active</span>`;
-    }
+  appState.conversations.forEach(c => {
+    const item = document.createElement('div');
+    const isActive = c.id === appState.activeConversationId;
+    item.className = `conv-item ${isActive ? 'active' : ''}`;
+
+    const senderName = c.sender_name || 'Telegram User';
+    const initial = senderName.charAt(0).toUpperCase();
+    const timeFormatted = formatTime(c.last_message_at);
 
     item.innerHTML = `
       <div class="conv-avatar">${initial}</div>
       <div class="conv-details">
         <div class="conv-top-row">
-          <span class="conv-name">${escapeHtml(c.name)}</span>
-          <span class="conv-time">${c.time}</span>
+          <span class="conv-name">${escapeHtml(senderName)}</span>
+          <span class="conv-time">${timeFormatted}</span>
         </div>
-        <div class="conv-snippet">${escapeHtml(c.last_message)}</div>
+        <div class="conv-snippet">${escapeHtml(c.last_message || 'No messages yet')}</div>
         <div class="conv-badges">
-          <span class="badge-tag platform">${platformLabel}</span>
-          ${badgeHtml}
+          <span class="badge-tag platform">✈️ TG</span>
+          <span class="badge-tag" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald);">ID: ${escapeHtml(c.sender_id || '')}</span>
         </div>
       </div>
     `;
 
     item.addEventListener('click', () => {
-      appState.activeConversationId = c.id;
-      renderConversationList();
-      renderActiveChat();
+      if (appState.activeConversationId !== c.id) {
+        appState.activeConversationId = c.id;
+        renderConversationList();
+        renderActiveChat();
+        fetchMessages(c.id);
+      }
     });
 
     listEl.appendChild(item);
   });
 }
 
-// ৪. চ্যাট ভিউ এবং হ্যান্ডওভার টগল
-function initChatView() {
-  renderActiveChat();
-
-  // পার-চ্যাট হ্যান্ডওভার বাটন
-  const toggleBtn = document.getElementById('btn-toggle-handover');
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', () => {
-      const conv = appState.conversations.find(c => c.id === appState.activeConversationId);
-      if (!conv) return;
-
-      const newStatus = conv.admin_takeover ? 0 : 1;
-      conv.admin_takeover = newStatus;
-      if (newStatus === 1) conv.needs_attention = 0;
-
-      updateHandoverUI(conv);
-      renderConversationList();
-
-      showToast(newStatus === 1 
-        ? `👤 ${conv.name}-এর জন্য Admin Takeover সক্রিয়। AI আর উত্তর দেবে না।` 
-        : `🤖 ${conv.name}-এর জন্য AI সক্রিয় করা হয়েছে। AI স্বাভাবিক উত্তর দেবে।`);
-
-      fetch(`${API_BASE}/handover`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversation_id: conv.id, admin_takeover: newStatus })
-      }).catch(err => console.log('Handover sync locally.'));
-    });
-  }
-
-  // অ্যাডমিন মেসেজ সাবমিশন
-  const replyForm = document.getElementById('chat-reply-form');
-  const inputEl = document.getElementById('admin-message-input');
-
-  if (replyForm && inputEl) {
-    replyForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const text = inputEl.value.trim();
-      if (!text) return;
-
-      sendAdminReply(text);
-      inputEl.value = '';
-    });
-  }
-}
-
+// ========================================================
+// ৫. চ্যাট ভিউ ও মেসেজ হিস্ট্রি (D1 Messages)
+// ========================================================
 function renderActiveChat() {
   const conv = appState.conversations.find(c => c.id === appState.activeConversationId);
   const container = document.getElementById('messages-container');
-  const badge = document.getElementById('handover-badge');
-  const btn = document.getElementById('btn-toggle-handover');
-  const warning = document.getElementById('ai-active-warning');
+  const refreshBtn = document.getElementById('btn-refresh-active-chat');
 
   if (!conv) {
     document.getElementById('active-chat-avatar').textContent = '-';
     document.getElementById('active-chat-name').textContent = 'কোনো চ্যাট সিলেক্ট করা নেই';
     document.getElementById('active-chat-id').textContent = '';
-    const platformTag = document.getElementById('active-chat-platform');
-    if (platformTag) {
-      platformTag.className = 'platform-tag';
-      platformTag.textContent = 'Waiting for chat';
-    }
-    if (badge) badge.style.display = 'none';
-    if (btn) btn.style.display = 'none';
-    if (warning) warning.classList.add('hidden');
+    if (refreshBtn) refreshBtn.style.display = 'none';
+
     if (container) {
       container.innerHTML = `
         <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); text-align: center;">
-          <div style="font-size: 38px; margin-bottom: 12px; opacity: 0.6;">💬</div>
-          <h4 style="font-size: 15px; color: var(--text-main); margin-bottom: 4px;">কোনো চ্যাট ওপেন করা নেই</h4>
-          <p style="font-size: 12px; max-width: 280px; line-height: 1.5;">বাম পাশের তালিকা থেকে একটি কনভারসেশন সিলেক্ট করুন অথবা Test & Connect ট্যাব থেকে টেস্ট মেসেজ পাঠান।</p>
+          <div style="font-size: 42px; margin-bottom: 12px; opacity: 0.5;">💬</div>
+          <h4 style="font-size: 15px; color: var(--text-main); margin-bottom: 4px;">কোনো চ্যাট সিলেক্ট করা নেই</h4>
+          <p style="font-size: 12px; max-width: 300px; line-height: 1.6;">বাম পাশের তালিকা থেকে যেকোনো কাস্টমার চ্যাট সিলেক্ট করুন।</p>
         </div>
       `;
     }
     return;
   }
 
-  if (badge) badge.style.display = 'flex';
-  if (btn) btn.style.display = 'flex';
+  if (refreshBtn) refreshBtn.style.display = 'block';
 
-  document.getElementById('active-chat-avatar').textContent = conv.name.charAt(0).toUpperCase();
-  document.getElementById('active-chat-name').textContent = conv.name;
-  document.getElementById('active-chat-id').textContent = `#${conv.id}`;
+  const senderName = conv.sender_name || 'Telegram User';
+  document.getElementById('active-chat-avatar').textContent = senderName.charAt(0).toUpperCase();
+  document.getElementById('active-chat-name').textContent = senderName;
+  document.getElementById('active-chat-id').textContent = `#${conv.sender_id || conv.id}`;
 
-  const platformTag = document.getElementById('active-chat-platform');
-  if (platformTag) {
-    platformTag.className = `platform-tag ${conv.platform === 'facebook' ? 'fb' : (conv.platform === 'telegram' ? 'tg' : 'wa')}`;
-    platformTag.textContent = conv.platform.toUpperCase();
-  }
-
-  updateHandoverUI(conv);
-  renderMessages(conv.id);
+  renderMessageBubbles(conv.id);
 }
 
-function updateHandoverUI(conv) {
-  const badge = document.getElementById('handover-badge');
-  const btn = document.getElementById('btn-toggle-handover');
-  const warning = document.getElementById('ai-active-warning');
+async function fetchMessages(convId, isBackground = false) {
+  try {
+    const res = await fetch(`${API_BASE}/messages?conversation_id=${encodeURIComponent(convId)}`);
+    if (res.ok) {
+      const msgs = await res.json();
+      if (Array.isArray(msgs)) {
+        appState.messages[convId] = msgs;
+        if (appState.activeConversationId === convId) {
+          renderMessageBubbles(convId);
+        }
 
-  if (conv.admin_takeover) {
-    badge.className = 'handover-status-badge takeover';
-    badge.querySelector('.text').textContent = 'Admin Takeover';
-    btn.className = 'btn-handover release';
-    btn.querySelector('.btn-text').textContent = 'Release to AI';
-    btn.querySelector('.icon').textContent = '🤖';
-    if (warning) warning.classList.add('hidden');
-  } else {
-    badge.className = 'handover-status-badge ai';
-    badge.querySelector('.text').textContent = 'AI Active';
-    btn.className = 'btn-handover';
-    btn.querySelector('.btn-text').textContent = 'Takeover This Chat';
-    btn.querySelector('.icon').textContent = '👤';
-    if (warning) warning.classList.remove('hidden');
+        // Update total message metric
+        const total = Object.values(appState.messages).reduce((acc, mList) => acc + mList.length, 0);
+        const statMsg = document.getElementById('stat-total-msgs');
+        if (statMsg) statMsg.textContent = total;
+      }
+    }
+  } catch (err) {
+    if (!isBackground) console.warn("Failed to fetch messages:", err);
   }
 }
 
-function renderMessages(convId) {
+function renderMessageBubbles(convId) {
   const container = document.getElementById('messages-container');
   if (!container) return;
-  container.innerHTML = '';
 
   const msgs = appState.messages[convId] || [];
+  if (msgs.length === 0) {
+    container.innerHTML = `
+      <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); text-align: center;">
+        <div style="font-size: 32px; margin-bottom: 8px;">📩</div>
+        <p style="font-size: 13px;">কোনো মেসেজ হিস্ট্রি নেই। নিচে মেসেজ লিখে পাঠিয়ে দিন!</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = '';
 
   msgs.forEach(m => {
     const row = document.createElement('div');
-    row.className = `msg-row ${m.sender_type}`;
+    const isAdmin = m.sender_type === 'admin';
+    row.className = `msg-row ${isAdmin ? 'admin' : 'customer'}`;
 
-    let senderLabel = 'Customer';
-    if (m.sender_type === 'ai') senderLabel = '🤖 AI Assistant';
-    if (m.sender_type === 'admin') senderLabel = '👤 Admin (You)';
+    const senderTag = isAdmin ? '👤 You (Dashboard Admin)' : '✈️ Telegram Customer';
+    const timeFormatted = formatTime(m.created_at);
 
     row.innerHTML = `
-      <div class="msg-sender-tag">${senderLabel}</div>
-      <div class="msg-bubble">${escapeHtml(m.text)}</div>
-      <span class="msg-time">${m.time}</span>
+      <div class="msg-sender-tag">${senderTag}</div>
+      <div class="msg-bubble">${escapeHtml(m.message_text)}</div>
+      <span class="msg-time">${timeFormatted}</span>
     `;
 
     container.appendChild(row);
   });
 
+  // Scroll to bottom
   container.scrollTop = container.scrollHeight;
 }
 
-function sendAdminReply(text) {
-  const convId = appState.activeConversationId;
-  const conv = appState.conversations.find(c => c.id === convId);
-  if (!conv) return;
+// ========================================================
+// ৬. অ্যাডমিন রিপ্লাই হ্যান্ডলার (Dashboard -> Telegram API)
+// ========================================================
+function initChatReply() {
+  const replyForm = document.getElementById('chat-reply-form');
+  const inputEl = document.getElementById('admin-message-input');
+  const sendBtn = document.getElementById('btn-send-message');
 
-  // ১. স্বয়ংক্রিয়ভাবে টেকওভার এনেবল করা যদি অ্যাডমিন নিজে মেসেজ পাঠায়
-  if (!conv.admin_takeover) {
-    conv.admin_takeover = 1;
-    conv.needs_attention = 0;
-    updateHandoverUI(conv);
-    showToast('👤 আপনি উত্তর দিয়েছেন, এই চ্যাটটি স্বয়ংক্রিয়ভাবে Admin Takeover মোডে চলে এসেছে।');
-  }
+  if (!replyForm || !inputEl) return;
 
-  // ২. লোকাল মেসেজ যোগ
-  const newMsg = {
-    id: 'm_' + Date.now(),
-    sender_type: 'admin',
-    text: text,
-    time: 'Just now'
-  };
+  replyForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = inputEl.value.trim();
+    if (!text || appState.isSending) return;
 
-  if (!appState.messages[convId]) appState.messages[convId] = [];
-  appState.messages[convId].push(newMsg);
+    const convId = appState.activeConversationId;
+    if (!convId) {
+      showToast('⚠️ অনুগ্রহ করে প্রথমে বাম পাশের তালিকা থেকে একটি চ্যাট সিলেক্ট করুন।');
+      return;
+    }
 
-  conv.last_message = text;
-  conv.time = 'Just now';
+    appState.isSending = true;
+    sendBtn.disabled = true;
+    sendBtn.querySelector('span').textContent = 'Sending...';
 
-  renderMessages(convId);
-  renderConversationList();
+    // ১. লোকাল স্টেট এবং UI-তে তাৎক্ষণিক বাবল যোগ
+    const tempMsg = {
+      id: 'temp_' + Date.now(),
+      conversation_id: convId,
+      sender_type: 'admin',
+      message_text: text,
+      created_at: new Date().toISOString()
+    };
 
-  // ৩. ব্যাকএন্ড API-তে সেন্ড
-  fetch(`${API_BASE}/admin/reply`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversation_id: convId, message_text: text })
-  }).catch(err => console.log('Admin reply saved locally.'));
+    if (!appState.messages[convId]) appState.messages[convId] = [];
+    appState.messages[convId].push(tempMsg);
+    renderMessageBubbles(convId);
+    inputEl.value = '';
+
+    // ২. Cloudflare Worker API তে পোস্ট
+    try {
+      const res = await fetch(`${API_BASE}/admin/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversation_id: convId,
+          message_text: text
+        })
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        showToast('✅ মেসেজটি ইউজারের টেলিগ্রামে সফলভাবে পৌঁছেছে!');
+        // D1 থেকে নিশ্চিত মেসেজ রিফ্রেশ
+        await fetchMessages(convId, true);
+        await fetchConversations(true);
+      } else {
+        showToast(`❌ টেলিগ্রামে মেসেজ পাঠানো যায়নি: ${data.error || 'Server error'}`);
+      }
+    } catch (err) {
+      showToast(`❌ নেটওয়ার্ক ত্রুটি: ${err.message}`);
+    } finally {
+      appState.isSending = false;
+      sendBtn.disabled = false;
+      sendBtn.querySelector('span').textContent = 'Send';
+      inputEl.focus();
+    }
+  });
 }
 
-// ৪.৫ টেস্ট স্যান্ডবক্স ও ১-ক্লিক টেলিগ্রাম কানেক্টর
-function initSandboxSimulator() {
-  const form = document.getElementById('sandbox-simulator-form');
+// ========================================================
+// ৭. টেলিগ্রাম সেটিংস ও D1 কানেকশন ফর্ম
+// ========================================================
+function initSettingsForm() {
+  const form = document.getElementById('tg-connect-form');
+  const tokenInput = document.getElementById('input-tg-bot-token');
+  const adminChatInput = document.getElementById('input-tg-admin-chat');
+  const submitBtn = document.getElementById('btn-save-tg');
+  const resultBox = document.getElementById('tg-setup-result');
   const copyBtn = document.getElementById('btn-copy-webhook');
-  const webhookInput = document.getElementById('tg-webhook-url-input');
-
-  // টেলিগ্রাম ওয়েবমুক কপি বাটন ও ডায়নামিক URL পপুলেশন
-  if (webhookInput) {
-    const savedWorker = localStorage.getItem('social_automate_worker_url');
-    if (savedWorker) {
-      webhookInput.value = `${savedWorker.replace(/\/$/, '')}/webhook/telegram`;
-    }
-  }
+  const webhookInput = document.getElementById('display-webhook-url');
+  const workerUrlInput = document.getElementById('setting-worker-url');
+  const saveWorkerBtn = document.getElementById('btn-save-worker-url');
 
   if (copyBtn && webhookInput) {
     copyBtn.addEventListener('click', () => {
-      if (!webhookInput.value) {
-        showToast('⚠️ অনুগ্রহ করে প্রথমে Settings থেকে আপনার Worker URL কানেক্ট করুন।');
-        return;
-      }
       navigator.clipboard.writeText(webhookInput.value).then(() => {
         showToast('📋 Webhook URL ক্লিপবোর্ডে কপি হয়েছে!');
       }).catch(() => {
@@ -388,267 +495,163 @@ function initSandboxSimulator() {
     });
   }
 
-  // লাইভ টেস্ট ফর্ম সাবমিশন
-  if (form) {
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const customerName = document.getElementById('sim-customer-name').value.trim() || 'Test Customer';
-      const platform = document.getElementById('sim-platform').value;
-      const messageText = document.getElementById('sim-message-text').value.trim();
+  // Worker URL Save
+  if (saveWorkerBtn && workerUrlInput) {
+    const saved = localStorage.getItem('social_automate_worker_url');
+    if (saved) workerUrlInput.value = saved;
 
-      if (!messageText) return;
-
-      const outputBox = document.getElementById('sim-output-box');
-      const responseText = document.getElementById('sim-response-text');
-      const alertBadge = document.getElementById('sim-alert-badge');
-      const runBtn = document.getElementById('btn-run-sim');
-
-      runBtn.disabled = true;
-      runBtn.textContent = '⏳ Processing with Gemini Live...';
-
-      let aiReply = '';
-      let needsAlert = false;
-      let alertReason = '';
-
-      // কিওয়ার্ড চেক (অ্যাডমিন অ্যালার্ট সিমুলেশন)
-      const alertKws = ['admin', 'manager', 'owner', 'human', 'manush', 'kotha bolbo', 'call den', 'urgent', 'cancel', 'refund'];
-      for (const kw of alertKws) {
-        if (messageText.toLowerCase().includes(kw)) {
-          needsAlert = true;
-          alertReason = `Keyword match: '${kw}'`;
-          break;
-        }
+    saveWorkerBtn.addEventListener('click', () => {
+      const val = workerUrlInput.value.trim();
+      if (val) {
+        localStorage.setItem('social_automate_worker_url', val);
+        showToast('🌐 Worker URL সংরক্ষিত হয়েছে! পেজ রিফ্রেশ হচ্ছে...');
+        setTimeout(() => window.location.reload(), 1000);
       }
-
-      try {
-        const res = await fetch(`${API_BASE}/test/simulate-message`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customer_name: customerName,
-            platform: platform,
-            message_text: messageText
-          })
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          aiReply = data.ai_reply;
-          needsAlert = data.admin_alert_triggered;
-          alertReason = data.alert_reason;
-        } else {
-          throw new Error('API offline');
-        }
-      } catch (err) {
-        // অফলাইন/লোকাল সিমুলেশন রেসপন্স
-        if (needsAlert) {
-          aiReply = `হ্যালো ${customerName}! আমি আমাদের ম্যানেজমেন্ট ও অ্যাডমিনকে বিষয়টি তাৎক্ষণিক জানিয়ে দিয়েছি। তিনি শীঘ্রই আপনার সাথে যোগাযোগ করবেন। ইতিমধ্যে আপনার পণ্যের অর্ডার বা সাইজ সম্পর্কে কি কিছু জানতে চান?`;
-        } else {
-          aiReply = `ধন্যবাদ ${customerName}! আমাদের যেকোনো পণ্যের মূল্য, ক্যাশ অন ডেলিভারি এবং দ্রুত শিপিং সম্পর্কে আমি আপনাকে সম্পূর্ণ সাহায্য করতে পারি। আপনি কোন পণ্যটি সম্পর্কে জানতে আগ্রহী?`;
-        }
-      }
-
-      // আউটপুট বক্সে ডিসপ্লে
-      if (outputBox && responseText) {
-        outputBox.style.display = 'block';
-        responseText.textContent = aiReply;
-
-        if (alertBadge) {
-          if (needsAlert) {
-            alertBadge.innerHTML = `🚨 <strong>Telegram Admin DM Alert Triggered!</strong> (কারণ: ${alertReason || 'Customer asked for human admin'})`;
-            alertBadge.style.color = 'var(--amber)';
-          } else {
-            alertBadge.innerHTML = `✅ <strong>Standard AI Reply</strong> (কোনো অ্যাডমিন অ্যালার্টের প্রয়োজন হয়নি, AI একাই সমাধান করেছে)`;
-            alertBadge.style.color = 'var(--emerald)';
-          }
-        }
-      }
-
-      // ইনবক্স কনভারসেশনে লাইভ যোগ করা
-      const testConvId = `test_${Date.now()}`;
-      appState.conversations.unshift({
-        id: testConvId,
-        name: customerName,
-        platform: platform,
-        sender_id: 'sim_123',
-        admin_takeover: 0,
-        needs_attention: needsAlert ? 1 : 0,
-        last_message: messageText,
-        time: 'Just now',
-        unread: true
-      });
-
-      appState.messages[testConvId] = [
-        { id: 'm1', sender_type: 'customer', text: messageText, time: 'Just now' },
-        { id: 'm2', sender_type: 'ai', text: aiReply, time: 'Just now' }
-      ];
-
-      renderConversationList();
-      showToast('⚡ টেস্ট মেসেজ সফলভাবে প্রসেস হয়েছে এবং Live Inbox-এ নতুন চ্যাট হিসেবে যোগ হয়েছে!');
-
-      runBtn.disabled = false;
-      runBtn.textContent = '⚡ Send Test Message';
     });
   }
-}
 
-// ৫. পোস্ট শিডিউলার লজিক
-function initScheduler() {
-  renderScheduledPosts();
-
-  const form = document.getElementById('schedule-post-form');
-  if (form) {
-    form.addEventListener('submit', (e) => {
+  // Telegram Connect Form
+  if (form && tokenInput) {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const content = document.getElementById('post-content').value.trim();
-      const mediaUrl = document.getElementById('post-media-url').value.trim();
-      const datetime = document.getElementById('post-datetime').value;
+      const token = tokenInput.value.trim();
+      const adminChat = adminChatInput.value.trim();
 
-      const checkedPlatforms = Array.from(document.querySelectorAll('input[name="platform"]:checked')).map(cb => cb.value);
-
-      if (!content || checkedPlatforms.length === 0) {
-        showToast('⚠️ অনুগ্রহ করে পোস্টের টেক্সট এবং অন্তত ১টি প্ল্যাটফর্ম সিলেক্ট করুন।');
+      if (!token) {
+        showToast('⚠️ অনুগ্রহ করে টেলিগ্রাম বট টোকেন লিখুন।');
         return;
       }
 
-      const newPost = {
-        id: 'p_' + Date.now(),
-        content: content,
-        media_urls: mediaUrl ? [mediaUrl] : [],
-        platforms: checkedPlatforms,
-        scheduled_at: datetime || '2026-10-24 10:00 AM',
-        status: 'pending'
-      };
+      submitBtn.disabled = true;
+      submitBtn.textContent = '⏳ Verifying & Saving to D1...';
 
-      appState.scheduledPosts.unshift(newPost);
-      renderScheduledPosts();
-      form.reset();
-      showToast('📅 পোস্ট সফলভাবে শিডিউল হয়েছে! GitHub Actions যথাসময়ে স্বয়ংক্রিয়ভাবে পোস্ট করবে (০ Worker রিকোয়েস্টে)।');
+      try {
+        const res = await fetch(`${API_BASE}/settings/telegram`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bot_token: token,
+            admin_chat_id: adminChat
+          })
+        });
 
-      // API সিঙ্ক
-      fetch(`${API_BASE}/posts/schedule`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newPost)
-      }).catch(err => console.log('Post saved locally.'));
-    });
-  }
+        const data = await res.json();
 
-  const refreshBtn = document.getElementById('btn-refresh-posts');
-  if (refreshBtn) {
-    refreshBtn.addEventListener('click', () => {
-      renderScheduledPosts();
-      showToast('🔄 শিডিউল পোস্ট লিস্ট রিফ্রেশ হয়েছে।');
+        if (res.ok && data.success) {
+          resultBox.style.display = 'block';
+          resultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+          resultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          resultBox.style.color = '#a7f3d0';
+          resultBox.innerHTML = `
+            <strong>✅ সফলভাবে কানেক্ট হয়েছে!</strong><br>
+            বট নাম: <strong>${escapeHtml(data.bot.name)}</strong> (${escapeHtml(data.bot.username)})<br>
+            টোকেন স্ট্যাটাস: Cloudflare D1-এ স্থায়ীভাবে সেভ হয়েছে।<br>
+            Webhook স্ট্যাটাস: <strong>${escapeHtml(data.webhook_status)}</strong>
+          `;
+
+          showToast('🎉 টেলিগ্রাম বট সফলভাবে D1-এ কানেক্ট হয়েছে!');
+          tokenInput.value = '';
+          await fetchSystemSettings();
+        } else {
+          resultBox.style.display = 'block';
+          resultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+          resultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          resultBox.style.color = '#fca5a5';
+          resultBox.innerHTML = `❌ <strong>কানেক্ট করা যায়নি:</strong> ${escapeHtml(data.error || 'Unknown error')}`;
+          showToast(`❌ ত্রুটি: ${data.error || 'Server error'}`);
+        }
+      } catch (err) {
+        showToast(`❌ কানেকশন ত্রুটি: ${err.message}`);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '💾 Connect Telegram & Save to D1';
+      }
     });
   }
 }
 
-function renderScheduledPosts() {
-  const tbody = document.getElementById('scheduled-posts-tbody');
+// ========================================================
+// ৮. D1 লগস ভিউ রেন্ডার
+// ========================================================
+async function renderAuditLogs() {
+  const tbody = document.getElementById('logs-table-tbody');
   if (!tbody) return;
-  tbody.innerHTML = '';
 
-  if (appState.scheduledPosts.length === 0) {
+  const refreshBtn = document.getElementById('btn-refresh-logs');
+  if (refreshBtn) {
+    refreshBtn.onclick = () => {
+      renderAuditLogs();
+      showToast('🔄 লগস রিফ্রেশ করা হয়েছে।');
+    };
+  }
+
+  const allMsgs = [];
+  for (const convId of Object.keys(appState.messages)) {
+    const list = appState.messages[convId] || [];
+    for (const m of list) {
+      allMsgs.push(m);
+    }
+  }
+
+  // Sort by created_at DESC
+  allMsgs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  if (allMsgs.length === 0) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="4" style="text-align: center; padding: 36px 16px; color: var(--text-dim); font-size: 13px;">
-          📅 কোনো শিডিউল্ড পোস্ট নেই। বাম পাশের ফর্ম থেকে সোশ্যাল পোস্ট শিডিউল করুন।
+        <td colspan="4" style="text-align: center; padding: 32px; color: var(--text-dim);">
+          কোনো মেসেজ লগ পাওয়া যায়নি।
         </td>
       </tr>
     `;
     return;
   }
 
-  appState.scheduledPosts.forEach(p => {
+  tbody.innerHTML = '';
+  allMsgs.slice(0, 50).forEach(m => {
     const tr = document.createElement('tr');
-    const platformsStr = (p.platforms || []).join(', ').toUpperCase();
-    const statusClass = p.status === 'published' ? 'published' : 'pending';
+    const senderTag = m.sender_type === 'admin' 
+      ? '<span style="color: var(--primary); font-weight: 700;">Admin (Dashboard)</span>' 
+      : '<span style="color: var(--emerald); font-weight: 700;">Customer (Telegram)</span>';
 
     tr.innerHTML = `
-      <td>${escapeHtml(p.content.substring(0, 70))}...</td>
-      <td><strong>${platformsStr}</strong></td>
-      <td>${p.scheduled_at}</td>
-      <td><span class="badge-status ${statusClass}">${p.status.toUpperCase()}</span></td>
+      <td><code>${escapeHtml(m.conversation_id || '-')}</code></td>
+      <td>${senderTag}</td>
+      <td>${escapeHtml(m.message_text || '')}</td>
+      <td><small style="color: var(--text-muted);">${formatTime(m.created_at)}</small></td>
     `;
     tbody.appendChild(tr);
   });
 }
 
-// ৬. সেটিংস ফরম্স
-function initSettingsForms() {
-  const alertForm = document.getElementById('settings-alert-form');
-  if (alertForm) {
-    alertForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const chatId = document.getElementById('setting-tg-chat-id').value;
-      showToast(`✅ Telegram Admin Alert সফলভাবে কনফিগার হয়েছে (Chat ID: ${chatId || 'Saved'})!`);
-    });
-  }
-
-  const promptForm = document.getElementById('settings-prompt-form');
-  if (promptForm) {
-    promptForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      showToast('✅ Gemini AI System Prompt সফলভাবে আপডেট হয়েছে!');
-    });
-  }
-
-  // Worker URL Form (For GitHub Pages integration)
-  const workerForm = document.getElementById('settings-worker-form');
-  const workerInput = document.getElementById('setting-worker-url');
-  if (workerInput) {
-    workerInput.value = localStorage.getItem('social_automate_worker_url') || '';
-  }
-  if (workerForm && workerInput) {
-    workerForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const url = workerInput.value.trim();
-      if (url) {
-        localStorage.setItem('social_automate_worker_url', url);
-        showToast('🌐 Cloudflare Worker URL সংরক্ষিত হয়েছে! পেজ রিফ্রেশ হচ্ছে...');
-        setTimeout(() => window.location.reload(), 1200);
-      } else {
-        localStorage.removeItem('social_automate_worker_url');
-        showToast('Worker URL রিমুভ করা হয়েছে।');
-      }
-    });
-  }
-}
-
-// ৭. লাইভ স্ট্যাটাস ফেচ
-async function fetchLiveStats() {
+// ========================================================
+// ইউটিলিটি ফাংশন
+// ========================================================
+function formatTime(isoStr) {
+  if (!isoStr) return '';
   try {
-    const res = await fetch(`${API_BASE}/stats`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.total_conversations !== undefined) {
-        document.getElementById('stat-total-convs').textContent = data.total_conversations;
-        document.getElementById('stat-ai-chats').textContent = data.ai_active_chats;
-        document.getElementById('stat-takeover-chats').textContent = data.admin_takeover_chats;
-        document.getElementById('stat-attention-chats').textContent = data.needs_attention_chats;
-      }
-    }
+    const date = new Date(isoStr);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } catch (e) {
-    // Local fallback
+    return isoStr;
   }
 }
 
-// ইউটিলিটি: টোস্ট নোটিফিকেশন
 function showToast(message) {
   const toast = document.getElementById('toast');
   if (!toast) return;
   toast.textContent = message;
   toast.style.display = 'block';
 
-  setTimeout(() => {
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
     toast.style.display = 'none';
-  }, 3500);
+  }, 4000);
 }
 
-// ইউটিলিটি: HTML Escape
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/[&<>"']/g, function(m) {
+  return String(str).replace(/[&<>"']/g, function(m) {
     return {
       '&': '&amp;',
       '<': '&lt;',

@@ -1,12 +1,11 @@
 /**
- * Cloudflare Worker All-in-One Engine (Native Cloudflare Suite)
- * -------------------------------------------------------------
- * 1. Webhook Handlers: Telegram Bot (Easiest 1-click test) & Meta Page
- * 2. High-Throughput Gemini 2.0 / 3.8 Flash AI Engine (Always-On)
- * 3. Two-Level Handover (Global Master Switch & Per-Chat Takeover)
- * 4. Instant Telegram DM Admin Alert (with Dashboard Deep Link)
- * 5. In-Dashboard Live Test Sandbox Simulator
- * 6. Cloudflare D1 SQL Persistence
+ * SocialAutomate - Telegram-First D1 Native Worker Engine
+ * --------------------------------------------------------
+ * 1. Cloudflare D1 Database Persistence (Zero LocalStorage Rely)
+ * 2. Telegram Webhook Receiver (Saves customer messages to D1)
+ * 3. Outbound Admin Reply API (Sends message from Bot/ID to Customer on Telegram)
+ * 4. Automatic Webhook & Bot Token Manager (Stored in D1)
+ * 5. Conversations & Message History Query API
  */
 
 const CORS_HEADERS = {
@@ -25,44 +24,34 @@ export default {
     const path = url.pathname;
 
     try {
-      // ०. হেলথচেক ও এনভায়রনমেন্ট স্ট্যাটাস চেক
+      // ०. হেলথচেক ও সিস্টেম স্ট্যাটাস API
       if (request.method === "GET" && (path === "/" || path === "/api" || path === "/status")) {
-        const hasTelegram = Boolean(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_BOT_TOKEN !== "YOUR_CUSTOMER_BOT_TOKEN");
-        const hasGemini = Boolean(env.GEMINI_API_KEY && env.GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY");
-        const hasAdminTg = Boolean(env.ADMIN_TG_BOT_TOKEN && env.ADMIN_TG_CHAT_ID);
+        const hasD1 = Boolean(env.DB);
+        let botUsername = null;
+        let hasToken = false;
+
+        if (hasD1) {
+          await ensureTables(env.DB);
+          const token = await getTelegramBotToken(env);
+          hasToken = Boolean(token);
+          const uRow = await env.DB.prepare("SELECT value FROM system_settings WHERE key = 'telegram_bot_username'").first();
+          botUsername = uRow?.value || null;
+        }
 
         return jsonResponse({
           status: "online",
-          service: "Telegram AI Customer Assistant Worker",
-          setup_checklist: {
-            telegram_bot_token: hasTelegram ? "✅ Configured" : "❌ Missing (Set in Cloudflare Variables)",
-            gemini_api_key: hasGemini ? "✅ Configured" : "❌ Missing (Set in Cloudflare Variables)",
-            admin_alert_channel: hasAdminTg ? "✅ Configured" : "⚠️ Optional",
-            webhook_endpoint: `${url.origin}/webhook/telegram`
-          },
-          action_needed: (!hasTelegram || !hasGemini) 
-            ? "Cloudflare Dashboard > Workers > social-automate > Settings > Variables এ গিয়ে TELEGRAM_BOT_TOKEN এবং GEMINI_API_KEY যোগ করুন।"
-            : "All ready! Send message to your Telegram bot to test live AI replies.",
+          service: "SocialAutomate Telegram Live Engine",
+          d1_database: hasD1 ? "✅ Connected (D1 Active)" : "❌ Not Bound (Bind 'DB' in Cloudflare Settings)",
+          telegram_connection: hasToken 
+            ? (botUsername ? `✅ Connected (@${botUsername})` : "✅ Token Active") 
+            : "⚠️ Bot Token Missing (Set in Dashboard Settings)",
+          webhook_url: `${url.origin}/webhook/telegram`,
           timestamp: new Date().toISOString()
         });
       }
 
       // ==========================================
-      // ১. মেটা Webhook Verification (GET Handshake)
-      // ==========================================
-      if (request.method === "GET" && (path === "/webhook/meta" || path === "/api/meta/webhook")) {
-        const hubMode = url.searchParams.get("hub.mode");
-        const hubToken = url.searchParams.get("hub.verify_token");
-        const hubChallenge = url.searchParams.get("hub.challenge");
-
-        if (hubMode === "subscribe" && hubToken === (env.META_VERIFY_TOKEN || "my_secure_meta_webhook_token_123")) {
-          return new Response(hubChallenge, { status: 200 });
-        }
-        return new Response("Invalid verify token", { status: 403 });
-      }
-
-      // ==========================================
-      // ২. টেলিগ্রাম বট Webhook (Customer AI Assistant)
+      // ১. টেলিগ্রাম Webhook (ইনকামিং কাস্টমার মেসেজ)
       // ==========================================
       if (request.method === "POST" && (path === "/webhook/telegram" || path === "/api/telegram/webhook")) {
         const update = await request.json();
@@ -70,76 +59,41 @@ export default {
       }
 
       // ==========================================
-      // ৩. মেটা পেজ ও কমেন্টস Webhook
-      // ==========================================
-      if (request.method === "POST" && (path === "/webhook/meta" || path === "/api/meta/webhook")) {
-        const metaPayload = await request.json();
-        return await handleMetaUpdate(metaPayload, env);
-      }
-
-      // ==========================================
-      // ৪. ইন-ড্যাশবোর্ড লাইভ টেস্ট সিমুলেটর (Live Sandbox)
-      // ==========================================
-      if (request.method === "POST" && path === "/api/test/simulate-message") {
-        const body = await request.json();
-        return await handleTestSimulation(body, env);
-      }
-
-      // ==========================================
-      // ৫. ড্যাশবোর্ড ওভারভিউ স্ট্যাটাস (Stats API)
-      // ==========================================
-      if (request.method === "GET" && path === "/api/stats") {
-        return await getDashboardStats(env);
-      }
-
-      // ==========================================
-      // ৬. কনভারসেশন ও চ্যাট মেসেজ হিস্ট্রি
+      // ২. কনভারসেশন লিস্ট ফেচ API (D1 থেকে সরাসরি)
       // ==========================================
       if (request.method === "GET" && path === "/api/conversations") {
+        if (!env.DB) {
+          return jsonResponse({ 
+            error: "D1 Database 'DB' binding missing in Cloudflare Worker settings.",
+            help: "Cloudflare Dashboard > Workers > Settings > Bindings এ গিয়ে D1 Database যোগ করুন।"
+          }, 503);
+        }
+        await ensureTables(env.DB);
         const { results } = await env.DB.prepare(
           "SELECT * FROM conversations ORDER BY last_message_at DESC LIMIT 50;"
         ).all();
         return jsonResponse(results || []);
       }
 
+      // ==========================================
+      // ৩. মেসেজ হিস্ট্রি ফেচ API (D1 থেকে সরাসরি)
+      // ==========================================
       if (request.method === "GET" && path === "/api/messages") {
         const convId = url.searchParams.get("conversation_id");
-        if (!convId) return jsonResponse({ error: "Missing conversation_id" }, 400);
+        if (!convId) return jsonResponse({ error: "Missing conversation_id parameter" }, 400);
 
+        if (!env.DB) {
+          return jsonResponse([], 200);
+        }
+        await ensureTables(env.DB);
         const { results } = await env.DB.prepare(
-          "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 100;"
+          "SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 150;"
         ).bind(convId).all();
         return jsonResponse(results || []);
       }
 
       // ==========================================
-      // ৭. হ্যান্ডওভার কন্ট্রোল (Per-Chat & Global)
-      // ==========================================
-      if (request.method === "POST" && path === "/api/handover") {
-        const body = await request.json();
-        const { conversation_id, admin_takeover } = body;
-        const takeoverVal = admin_takeover ? 1 : 0;
-
-        await env.DB.prepare(
-          "UPDATE conversations SET admin_takeover = ?, needs_attention = 0, last_message_at = CURRENT_TIMESTAMP WHERE id = ?"
-        ).bind(takeoverVal, conversation_id).run();
-
-        return jsonResponse({ success: true, conversation_id, admin_takeover: takeoverVal });
-      }
-
-      if (request.method === "POST" && path === "/api/settings/global-ai") {
-        const body = await request.json();
-        const isEnabled = body.enabled ? "1" : "0";
-
-        await env.DB.prepare(
-          "INSERT INTO system_settings (key, value) VALUES ('global_ai_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-        ).bind(isEnabled).run();
-
-        return jsonResponse({ success: true, global_ai_mode: isEnabled === "1" });
-      }
-
-      // ==========================================
-      // ৮. অ্যাডমিন সরাসরি রিপ্লাই পাঠানো (Outbound)
+      // ৪. ড্যাশবোর্ড থেকে অ্যাডমিন রিপ্লাই পাঠানো (আউটবাউন্ড)
       // ==========================================
       if (request.method === "POST" && path === "/api/admin/reply") {
         const body = await request.json();
@@ -147,45 +101,68 @@ export default {
       }
 
       // ==========================================
-      // ৯. পোস্ট শিডিউলিং API
+      // ৫. টেলিগ্রাম বট কানেকশন ও D1 সেটিংস সেভ
       // ==========================================
-      if (request.method === "POST" && path === "/api/posts/schedule") {
+      if (request.method === "POST" && path === "/api/settings/telegram") {
         const body = await request.json();
-        const { content, media_urls, target_platforms, scheduled_at } = body;
-        const postId = crypto.randomUUID();
-
-        await env.DB.prepare(
-          `INSERT INTO scheduled_posts (id, content, media_urls, target_platforms, scheduled_at, status)
-           VALUES (?, ?, ?, ?, ?, 'pending')`
-        ).bind(
-          postId,
-          content,
-          JSON.stringify(media_urls || []),
-          JSON.stringify(target_platforms || ["telegram", "facebook"]),
-          scheduled_at || new Date().toISOString()
-        ).run();
-
-        return jsonResponse({ success: true, post_id: postId });
+        return await handleSaveTelegramSettings(body, env, request.url);
       }
 
-      if (request.method === "GET" && path === "/api/posts") {
-        const { results } = await env.DB.prepare("SELECT * FROM scheduled_posts ORDER BY scheduled_at DESC LIMIT 30").all();
-        return jsonResponse(results || []);
+      if (request.method === "GET" && path === "/api/settings") {
+        if (!env.DB) {
+          return jsonResponse({
+            d1_connected: false,
+            telegram_connected: false,
+            message: "D1 Database binding missing"
+          });
+        }
+        await ensureTables(env.DB);
+        const { results } = await env.DB.prepare("SELECT key, value FROM system_settings").all();
+        const settings = {};
+        for (const row of (results || [])) {
+          if (row.key === "telegram_bot_token") {
+            settings.has_telegram_token = Boolean(row.value);
+            settings.telegram_bot_token_masked = row.value ? row.value.substring(0, 5) + "..." + row.value.slice(-4) : "";
+          } else {
+            settings[row.key] = row.value;
+          }
+        }
+        return jsonResponse({
+          d1_connected: true,
+          telegram_connected: Boolean(settings.has_telegram_token),
+          bot_username: settings.telegram_bot_username || null,
+          webhook_url: `${url.origin}/webhook/telegram`,
+          settings: settings
+        });
+      }
+
+      // ==========================================
+      // ৬. ডেটাবেস ইনিশিয়ালাইজেশন চেক
+      // ==========================================
+      if (request.method === "POST" && path === "/api/setup-db") {
+        if (!env.DB) return jsonResponse({ error: "DB binding missing" }, 500);
+        await ensureTables(env.DB);
+        return jsonResponse({ success: true, message: "D1 tables initialized successfully" });
+      }
+
+      // ==========================================
+      // ৭. ড্যাশবোর্ড স্ট্যাটস
+      // ==========================================
+      if (request.method === "GET" && path === "/api/stats") {
+        return await getDashboardStats(env);
       }
 
       return jsonResponse({ error: "Endpoint not found", path }, 404);
 
     } catch (err) {
+      console.error("Worker error:", err);
       return jsonResponse({ error: err.message, stack: err.stack }, 500);
     }
   }
 };
 
-// In-Memory Debounce & Spam Shield (Worker Limit Protection)
-const userLastMessageTime = new Map();
-
 // ========================================================
-// ✈️ TELEGRAM UPDATE HANDLER (EASIEST LIVE TEST)
+// ✈️ TELEGRAM INBOUND UPDATE HANDLER (D1 SAVER)
 // ========================================================
 async function handleTelegramUpdate(update, env) {
   if (!update.message || !update.message.text) {
@@ -194,420 +171,301 @@ async function handleTelegramUpdate(update, env) {
 
   const msg = update.message;
   const senderId = String(msg.chat.id);
-  const senderName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || "Telegram User";
+  const senderName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") 
+    || msg.from.username 
+    || `Telegram User (${senderId})`;
   const incomingText = msg.text.trim();
   const conversationId = `tg_${senderId}`;
 
-  // 🛡️ LIMIT OPTIMIZATION: স্প্যাম ফিল্টার ও রেট-লিমিট চেক
-  // একই ইউজার যদি ৩ সেকেন্ডের মধ্যে একাধিক মেসেজ দেয়, অতিরিক্ত সাব-রিকোয়েস্ট বাঁচিয়ে ফাস্ট রিটার্ন
-  const now = Date.now();
-  const lastTime = userLastMessageTime.get(senderId) || 0;
-  if (now - lastTime < 2500) {
-    // দ্রুত মেসেজ আসলে ব্যাকগ্রাউন্ডে সেভ করে রাখব কিন্তু অতিরিক্ত এআই কল করব না
-    await saveMessage(env.DB, conversationId, "customer", incomingText);
-    return jsonResponse({ status: "debounced_fast_return", message: "Processed to save worker limits" });
-  }
-  userLastMessageTime.set(senderId, now);
-
-  // মেমরি পরিষ্কার রাখা (সর্বোচ্চ ৫০০ ইউজার)
-  if (userLastMessageTime.size > 500) {
-    const oldestKey = userLastMessageTime.keys().next().value;
-    userLastMessageTime.delete(oldestKey);
+  if (!env.DB) {
+    console.error("D1 database binding missing in Worker");
+    return jsonResponse({ error: "D1 Database 'DB' binding not found" }, 500);
   }
 
-  // ১. D1 ডেটাবেসে কাস্টমার ও মেসেজ সেভ
+  await ensureTables(env.DB);
+
+  // ১. D1 ডেটাবেসে কাস্টমার ও চ্যাট রেকর্ড আপডেট
   await upsertConversation(env.DB, conversationId, "telegram", senderId, senderName, incomingText);
-  await saveMessage(env.DB, conversationId, "customer", incomingText);
 
-  // ১.৫ /start কমান্ডের জন্য ইনস্ট্যান্ট ওয়েলকাম মেসেজ
+  // ২. কাস্টমারের পাঠানো মেসেজ D1 messages টেবিলে সেভ করা
+  const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  await saveMessage(env.DB, messageId, conversationId, "customer", incomingText);
+
+  // ৩. /start কমান্ড দিলে একটি ফ্রেন্ডলি কনফার্মেশন পাঠানো (যদি বটের টোকেন থাকে)
   if (incomingText === "/start") {
-    const welcomeReply = env.WELCOME_MESSAGE || 
-      `হ্যালো ${senderName}! 👋 আমাদের সার্ভিসে স্বাগতম। আমি আপনার সার্বক্ষণিক AI কাস্টমার অ্যাসিস্ট্যান্ট।\n\nআমাদের প্রোডাক্ট, মূল্য, অর্ডার বা ডেলিভারি সম্পর্কে যেকোনো তথ্য জানতে নিচে লিখে পাঠান। আমি আপনাকে সাহায্য করতে প্রস্তুত!`;
-    
-    if (env.TELEGRAM_BOT_TOKEN) {
-      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const token = await getTelegramBotToken(env);
+    if (token) {
+      const welcome = `হ্যালো ${senderName}! 👋\nআপনার মেসেজটি আমাদের ড্যাশবোর্ডে পৌঁছেছে। আমাদের প্রতিনিধি খুব শীঘ্রই এখান থেকেই আপনার উত্তর দেবেন।`;
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: senderId, text: welcomeReply })
-      });
+        body: JSON.stringify({ chat_id: senderId, text: welcome })
+      }).catch(e => console.warn("Welcome msg failed:", e.message));
+
+      await saveMessage(env.DB, `msg_welcome_${Date.now()}`, conversationId, "admin", welcome);
     }
-
-    await saveMessage(env.DB, conversationId, "ai", welcomeReply);
-    return jsonResponse({ success: true, ai_reply: welcomeReply });
   }
-
-  // ২. হ্যান্ডওভার স্টেট চেক (Global Mode & Per-Chat Takeover)
-  const isGlobalAi = await checkGlobalAiMode(env.DB);
-  const isTakeover = await checkChatTakeover(env.DB, conversationId);
-
-  if (!isGlobalAi || isTakeover) {
-    return jsonResponse({ status: "admin_mode_active", ai_paused: true });
-  }
-
-  // ৩. হিস্ট্রি ফেচ ও Gemini AI রেসপন্স জেনারেট (AI কখনোই থামবে না)
-  const history = await getChatHistory(env.DB, conversationId, 6);
-  const aiResult = await callGemini(incomingText, history, env);
-
-  // ৪. যদি কাস্টমার অ্যাডমিনকে খুঁজে থাকে -> ব্যাকগ্রাউন্ডে টেলিগ্রাম DM অ্যালার্ট পাঠানো
-  if (aiResult.needs_admin_alert) {
-    await markNeedsAttention(env.DB, conversationId);
-    await sendAdminTelegramAlert(senderName, "Telegram", incomingText, conversationId, aiResult.alert_reason, env);
-  }
-
-  // ৫. টেলিগ্রাম কাস্টমারকে সরাসরি AI উত্তর পাঠানো
-  if (env.TELEGRAM_BOT_TOKEN) {
-    const tgRes = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: senderId,
-        text: aiResult.reply
-      })
-    });
-    const tgJson = await tgRes.json();
-    console.log("[Telegram Outbound]", tgJson);
-  } else {
-    console.warn("[Telegram Outbound] TELEGRAM_BOT_TOKEN not configured in environment variables.");
-  }
-
-  // ৬. AI এর উত্তর D1-এ সেভ করা
-  await saveMessage(env.DB, conversationId, "ai", aiResult.reply);
-
-  return jsonResponse({ success: true, ai_reply: aiResult.reply });
-}
-
-// ========================================================
-// 🔵 META PAGE & COMMENT WEBHOOK HANDLER
-// ========================================================
-async function handleMetaUpdate(data, env) {
-  // ফেসবুক মেসেঞ্জার DM
-  if (data.entry?.[0]?.messaging?.[0]?.message?.text) {
-    const messaging = data.entry[0].messaging[0];
-    const senderId = String(messaging.sender.id);
-    const incomingText = messaging.message.text.trim();
-    const conversationId = `fb_${senderId}`;
-    const senderName = `Facebook User ${senderId.slice(-4)}`;
-
-    await upsertConversation(env.DB, conversationId, "facebook", senderId, senderName, incomingText);
-    await saveMessage(env.DB, conversationId, "customer", incomingText);
-
-    const isGlobalAi = await checkGlobalAiMode(env.DB);
-    const isTakeover = await checkChatTakeover(env.DB, conversationId);
-
-    if (!isGlobalAi || isTakeover) {
-      return jsonResponse({ status: "admin_mode_active" });
-    }
-
-    const history = await getChatHistory(env.DB, conversationId, 6);
-    const aiResult = await callGemini(incomingText, history, env);
-
-    if (aiResult.needs_admin_alert) {
-      await markNeedsAttention(env.DB, conversationId);
-      await sendAdminTelegramAlert(senderName, "Facebook Messenger", incomingText, conversationId, aiResult.alert_reason, env);
-    }
-
-    // মেসেঞ্জারে রিপ্লাই
-    if (env.META_PAGE_ACCESS_TOKEN) {
-      await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${env.META_PAGE_ACCESS_TOKEN}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          recipient: { id: senderId },
-          message: { text: aiResult.reply }
-        })
-      });
-    }
-
-    await saveMessage(env.DB, conversationId, "ai", aiResult.reply);
-    return jsonResponse({ success: true });
-  }
-
-  return jsonResponse({ status: "acknowledged" });
-}
-
-// ========================================================
-// 🧪 LIVE TEST SIMULATOR (ইন-ড্যাশবোর্ড টেস্টের জন্য)
-// ========================================================
-async function handleTestSimulation(body, env) {
-  const { customer_name, platform, message_text } = body;
-  const senderName = customer_name || "Test Customer";
-  const channel = platform || "telegram";
-  const incomingText = (message_text || "").trim();
-  const testId = `test_${Date.now()}`;
-
-  // ১. সেভ
-  await upsertConversation(env.DB, testId, channel, testId, senderName, incomingText);
-  await saveMessage(env.DB, testId, "customer", incomingText);
-
-  // ২. Gemini কল
-  const aiResult = await callGemini(incomingText, [], env);
-
-  // ৩. অ্যালার্ট চেক
-  let alertSent = false;
-  if (aiResult.needs_admin_alert) {
-    await markNeedsAttention(env.DB, testId);
-    alertSent = await sendAdminTelegramAlert(senderName, channel, incomingText, testId, aiResult.alert_reason, env);
-  }
-
-  // ৪. AI রিপ্লাই সেভ
-  await saveMessage(env.DB, testId, "ai", aiResult.reply);
 
   return jsonResponse({
     success: true,
-    conversation_id: testId,
-    customer_message: incomingText,
-    ai_reply: aiResult.reply,
-    admin_alert_triggered: aiResult.needs_admin_alert,
-    alert_reason: aiResult.alert_reason,
-    telegram_notification_sent: alertSent
+    stored_in_d1: true,
+    conversation_id: conversationId,
+    customer: senderName,
+    message: incomingText
   });
 }
 
 // ========================================================
-// 🤖 GEMINI AI CORE ENGINE (2.0 / 3.8 FLASH HIGH THROUGHPUT)
-// ========================================================
-async function callGemini(incomingText, chatHistory = [], env) {
-  // ১. অ্যাডমিন অ্যালার্ট কিওয়ার্ড ডিটেকশন
-  const alertKeywords = [
-    'admin', 'manager', 'owner', 'human', 'manush', 
-    'kotha bolbo', 'kotha bolte chai', 'call den', 'phone den', 
-    'number dao', 'complaint', 'urgent', 'emergency',
-    'order cancel', 'taka ferot', 'refund', 'help lagbe'
-  ];
-
-  let needsAlert = false;
-  let alertReason = "";
-  const lowerText = incomingText.toLowerCase();
-
-  for (const kw of alertKeywords) {
-    if (lowerText.includes(kw)) {
-      needsAlert = true;
-      alertReason = `Customer mentioned: '${kw}'`;
-      break;
-    }
-  }
-
-  const apiKey = env.GEMINI_API_KEY;
-  const model = env.GEMINI_MODEL || "gemini-2.0-flash";
-
-  // যদি API Key এখনো না দেওয়া থাকে, স্মার্ট ইন্টেলিজেন্ট ডিফল্ট রিপ্লাই (কখনো থামবে না)
-  if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
-    return {
-      reply: "ধন্যবাদ আপনার বার্তার জন্য! আমাদের একজন কাস্টমার প্রতিনিধি খুব দ্রুত আপনার সাথে যোগাযোগ করবেন। আপনি কি আমাদের প্রোডাক্ট বা ডেলিভারি সম্পর্কে কোনো নির্দিষ্ট তথ্য জানতে চান?",
-      needs_admin_alert: needsAlert,
-      alert_reason: alertReason || "Standard Inquiry"
-    };
-  }
-
-  // প্রম্পট হিস্ট্রি তৈরি
-  const contents = [];
-  for (const msg of chatHistory) {
-    contents.push({
-      role: msg.sender_type === "customer" ? "user" : "model",
-      parts: [{ text: msg.message_text }]
-    });
-  }
-  contents.push({
-    role: "user",
-    parts: [{ text: incomingText }]
-  });
-
-  const systemInstruction = env.SYSTEM_PROMPT || 
-`You are an intelligent, polite, and enthusiastic customer service AI assistant representing our business on Telegram.
-- Always respond warmly, accurately, and promptly in Bengali or English (Banglish style is welcomed when the customer uses it).
-- Never stop responding. Always provide the best possible help regarding prices, delivery, and products.
-- Answer all customer queries directly and helpfully as the official assistant.
-- If a customer asks to speak with the manager or admin, reassure them warmly that the admin has been alerted and will review their chat shortly, while continuing to assist them with any questions they have.
-${env.BUSINESS_INFO ? `\n\nOfficial Business Information & Pricing:\n${env.BUSINESS_INFO}` : ''}`;
-
-  const payload = {
-    system_instruction: { parts: [{ text: systemInstruction }] },
-    contents: contents,
-    generationConfig: {
-      temperature: 0.7,
-      maxOutputTokens: 600,
-      topP: 0.95
-    }
-  };
-
-  try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (text) {
-        return {
-          reply: text.trim(),
-          needs_admin_alert: needsAlert,
-          alert_reason: alertReason
-        };
-      }
-    }
-  } catch (err) {
-    console.error("Gemini API call failed:", err);
-  }
-
-  // নিরাপদ ব্যাকআপ উত্তর (AI কখনো থামবে না)
-  return {
-    reply: "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। আমরা আপনার সেবায় প্রস্তুত, নির্দিষ্ট কোনো প্রশ্ন থাকলে আমাদের নির্দ্বিধায় জানান।",
-    needs_admin_alert: true,
-    alert_reason: "AI Fallback Triggered"
-  };
-}
-
-// ========================================================
-// 🚨 ADMIN TELEGRAM DM ALERT ENGINE
-// ========================================================
-async function sendAdminTelegramAlert(customerName, platform, incomingMessage, conversationId, reason, env) {
-  const botToken = env.ADMIN_TG_BOT_TOKEN;
-  const adminChatId = env.ADMIN_TG_CHAT_ID;
-  const dashboardUrl = env.DASHBOARD_URL ? env.DASHBOARD_URL.replace(/\/$/, '') : '';
-
-  if (!botToken || !adminChatId || botToken === "YOUR_ADMIN_BOT_TOKEN") {
-    console.log("[AdminAlert] Telegram Bot Token/Chat ID not configured. Skipping alert.");
-    return false;
-  }
-
-  const chatLink = dashboardUrl ? `${dashboardUrl}#chat-${conversationId}` : '';
-  const linkText = chatLink ? `\n\n🔗 [ড্যাশবোর্ডে চ্যাট ওপেন করুন](${chatLink})` : '';
-
-  const text = `🚨 *[ADMIN ALERT: জরুরি কাস্টমার]*\n\n` +
-               `👤 *কাস্টমার:* ${customerName}\n` +
-               `📱 *প্ল্যাটফর্ম:* ${platform}\n` +
-               `⚠️ *কারণ:* ${reason || 'Customer inquiry'}\n` +
-               `💬 *মেসেজ:* _"${incomingMessage.substring(0, 300)}"_\n\n` +
-               `💡 *নোট:* AI কাস্টমারকে উত্তর দিয়ে চ্যাট চালিয়ে যাচ্ছে। আপনি চাইলে ড্যাশবোর্ড থেকে টেকওভার করতে পারেন।` +
-               linkText;
-
-  const payload = {
-    chat_id: adminChatId,
-    text: text,
-    parse_mode: "Markdown"
-  };
-
-  if (chatLink) {
-    payload.reply_markup = {
-      inline_keyboard: [[{ text: "🚀 Open in Dashboard", url: chatLink }]]
-    };
-  }
-
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    return res.ok;
-  } catch (e) {
-    return false;
-  }
-}
-
-// ========================================================
-// 👤 ADMIN OUTBOUND REPLY HANDLER
+// 👤 ADMIN OUTBOUND REPLY (DASHBOARD -> TELEGRAM)
 // ========================================================
 async function handleAdminReply(body, env) {
   const { conversation_id, message_text } = body;
-  if (!conversation_id || !message_text) return jsonResponse({ error: "Missing parameters" }, 400);
-
-  const conv = await env.DB.prepare("SELECT * FROM conversations WHERE id = ?").bind(conversation_id).first();
-  if (!conv) return jsonResponse({ error: "Conversation not found" }, 404);
-
-  // ১. আউটবাউন্ড ডেলিভারি
-  if (conv.platform === "telegram" && env.TELEGRAM_BOT_TOKEN) {
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: conv.sender_id, text: message_text })
-    });
-  } else if (conv.platform === "facebook" && env.META_PAGE_ACCESS_TOKEN) {
-    await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${env.META_PAGE_ACCESS_TOKEN}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recipient: { id: conv.sender_id }, message: { text: message_text } })
-    });
+  if (!conversation_id || !message_text) {
+    return jsonResponse({ error: "Missing conversation_id or message_text" }, 400);
   }
 
-  // ২. সেভ
-  await saveMessage(env.DB, conversation_id, "admin", message_text);
-  await env.DB.prepare("UPDATE conversations SET last_message = ?, last_message_at = CURRENT_TIMESTAMP WHERE id = ?")
-    .bind(message_text, conversation_id).run();
+  if (!env.DB) {
+    return jsonResponse({ error: "Cloudflare D1 Database 'DB' binding missing" }, 500);
+  }
 
-  return jsonResponse({ success: true });
+  await ensureTables(env.DB);
+
+  // ১. D1 থেকে কনভারসেশন খুঁজে বের করা
+  const conv = await env.DB.prepare("SELECT * FROM conversations WHERE id = ?").bind(conversation_id).first();
+  if (!conv) {
+    return jsonResponse({ error: "Conversation not found in D1 database" }, 404);
+  }
+
+  const botToken = await getTelegramBotToken(env);
+  if (!botToken) {
+    return jsonResponse({
+      error: "Telegram Bot Token পাওয়া যায়নি। অনুগ্রহ করে ড্যাশবোর্ডের Settings থেকে Bot Token কানেক্ট করুন।"
+    }, 400);
+  }
+
+  // ২. টেলিগ্রাম Bot API তে কল করে মেসেজ সেন্ড করা
+  let tgResult = null;
+  if (conv.platform === "telegram") {
+    const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: conv.sender_id,
+        text: message_text
+      })
+    });
+
+    tgResult = await tgRes.json();
+    if (!tgResult.ok) {
+      return jsonResponse({
+        error: `Telegram এ মেসেজ পাঠাতে ব্যর্থ হয়েছে: ${tgResult.description || 'Unknown error'}`,
+        tg_details: tgResult
+      }, 502);
+    }
+  }
+
+  // ৩. অ্যাডমিনের পাঠানো মেসেজ D1 messages টেবিলে সেভ করা
+  const msgId = `adm_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  await saveMessage(env.DB, msgId, conversation_id, "admin", message_text);
+
+  // ৪. conversations টেবিলের লাস্ট মেসেজ আপডেট করা
+  await env.DB.prepare(
+    "UPDATE conversations SET last_message = ?, last_message_at = CURRENT_TIMESTAMP, admin_takeover = 1 WHERE id = ?"
+  ).bind(message_text, conversation_id).run();
+
+  return jsonResponse({
+    success: true,
+    delivered_to_telegram: true,
+    message_id: msgId,
+    recipient_chat_id: conv.sender_id,
+    text: message_text
+  });
 }
 
 // ========================================================
-// 🗄️ D1 DATABASE HELPER FUNCTIONS (FAULT-TOLERANT)
+// ⚙️ TELEGRAM SETTINGS & 1-CLICK WEBHOOK SYNC
 // ========================================================
+async function handleSaveTelegramSettings(body, env, requestUrl) {
+  const { bot_token, admin_chat_id } = body;
+  if (!bot_token || !bot_token.trim()) {
+    return jsonResponse({ error: "Bot Token প্রদান করা আবশ্যক" }, 400);
+  }
+
+  if (!env.DB) {
+    return jsonResponse({
+      error: "Cloudflare D1 Database binding 'DB' সংযুক্ত নেই। Cloudflare Dashboard > Workers > Settings > Bindings এ গিয়ে DB সেট করুন।"
+    }, 500);
+  }
+
+  await ensureTables(env.DB);
+
+  const cleanToken = bot_token.trim();
+
+  // ১. ভেরিফাই টোকেন উইথ টেলিগ্রাম getMe API
+  const testRes = await fetch(`https://api.telegram.org/bot${cleanToken}/getMe`);
+  const testData = await testRes.json();
+  if (!testData.ok) {
+    return jsonResponse({
+      error: `টেলিগ্রাম বট টোকেন সঠিক নয়: ${testData.description || 'Verification failed'}`,
+      details: testData
+    }, 400);
+  }
+
+  const botInfo = testData.result;
+  const botUsername = botInfo.username;
+  const botFirstName = botInfo.first_name;
+
+  // ২. D1 ডেটাবেসে টোকেন ও বট ইউজারনেম সংরক্ষণ
+  await env.DB.prepare(`
+    INSERT INTO system_settings (key, value) VALUES ('telegram_bot_token', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+  `).bind(cleanToken).run();
+
+  await env.DB.prepare(`
+    INSERT INTO system_settings (key, value) VALUES ('telegram_bot_username', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+  `).bind(botUsername).run();
+
+  if (admin_chat_id && admin_chat_id.trim()) {
+    await env.DB.prepare(`
+      INSERT INTO system_settings (key, value) VALUES ('admin_telegram_chat_id', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+    `).bind(admin_chat_id.trim()).run();
+  }
+
+  // ৩. সোশ্যাল অ্যাকাউন্টস টেবিলে এন্ট্রি
+  await env.DB.prepare(`
+    INSERT INTO social_accounts (id, platform, account_name, account_id, access_token, status)
+    VALUES (?, 'telegram', ?, ?, ?, 'active')
+    ON CONFLICT(id) DO UPDATE SET 
+      account_name = excluded.account_name,
+      access_token = excluded.access_token,
+      status = 'active'
+  `).bind(`tg_${botInfo.id}`, botFirstName, botUsername, cleanToken).run();
+
+  // ৪. অটোমেটিক টেলিগ্রাম ওয়েবমুক অ্যাক্টিভেশন
+  const origin = new URL(requestUrl).origin;
+  const webhookUrl = `${origin}/webhook/telegram`;
+  let webhookStatus = "active";
+  try {
+    const setWebhookRes = await fetch(`https://api.telegram.org/bot${cleanToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}`);
+    const webhookData = await setWebhookRes.json();
+    if (!webhookData.ok) {
+      webhookStatus = webhookData.description || "Failed to set webhook";
+    }
+  } catch (err) {
+    webhookStatus = err.message;
+  }
+
+  return jsonResponse({
+    success: true,
+    message: `টেলিগ্রাম বট @${botUsername} সফলভাবে D1 ডেটাবেসে কানেক্ট হয়েছে এবং Webhook চালু হয়েছে!`,
+    bot: {
+      id: botInfo.id,
+      name: botFirstName,
+      username: `@${botUsername}`
+    },
+    webhook_url: webhookUrl,
+    webhook_status: webhookStatus
+  });
+}
+
+// ========================================================
+// 🗄️ D1 DATABASE HELPERS (AUTO-MIGRATION & PERSISTENCE)
+// ========================================================
+async function ensureTables(db) {
+  if (!db) return;
+  try {
+    await db.batch([
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS system_settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS social_accounts (
+          id TEXT PRIMARY KEY,
+          platform TEXT NOT NULL,
+          account_name TEXT NOT NULL,
+          account_id TEXT NOT NULL,
+          access_token TEXT NOT NULL,
+          status TEXT DEFAULT 'active',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS conversations (
+          id TEXT PRIMARY KEY,
+          platform TEXT NOT NULL,
+          sender_id TEXT NOT NULL,
+          sender_name TEXT DEFAULT 'Customer',
+          admin_takeover INTEGER DEFAULT 1,
+          needs_attention INTEGER DEFAULT 0,
+          last_message TEXT,
+          last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS messages (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          sender_type TEXT NOT NULL,
+          message_text TEXT NOT NULL,
+          media_url TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `)
+    ]);
+  } catch (e) {
+    console.warn("Table auto-migration warning:", e.message);
+  }
+}
+
+async function getTelegramBotToken(env) {
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare("SELECT value FROM system_settings WHERE key = 'telegram_bot_token'").first();
+      if (row && row.value && row.value.trim().length > 10) {
+        return row.value.trim();
+      }
+    } catch (e) {
+      console.warn("Error reading bot token from D1:", e.message);
+    }
+  }
+
+  if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_BOT_TOKEN !== "YOUR_CUSTOMER_BOT_TOKEN") {
+    return env.TELEGRAM_BOT_TOKEN.trim();
+  }
+  return null;
+}
+
 async function upsertConversation(db, id, platform, senderId, senderName, lastMessage) {
   if (!db) return;
   try {
     await db.prepare(`
-      INSERT INTO conversations (id, platform, sender_id, sender_name, last_message, last_message_at)
-      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      INSERT INTO conversations (id, platform, sender_id, sender_name, last_message, last_message_at, admin_takeover)
+      VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1)
       ON CONFLICT(id) DO UPDATE SET 
+        sender_name = excluded.sender_name,
         last_message = excluded.last_message,
         last_message_at = CURRENT_TIMESTAMP
     `).bind(id, platform, senderId, senderName, lastMessage).run();
   } catch (e) {
-    console.warn("DB Upsert skipped:", e.message);
+    console.warn("D1 upsertConversation error:", e.message);
   }
 }
 
-async function saveMessage(db, conversationId, senderType, text) {
+async function saveMessage(db, id, conversationId, senderType, text) {
   if (!db) return;
   try {
     await db.prepare(
       "INSERT INTO messages (id, conversation_id, sender_type, message_text) VALUES (?, ?, ?, ?)"
-    ).bind(crypto.randomUUID(), conversationId, senderType, text).run();
+    ).bind(id, conversationId, senderType, text).run();
   } catch (e) {
-    console.warn("DB Save message skipped:", e.message);
-  }
-}
-
-async function markNeedsAttention(db, conversationId) {
-  if (!db) return;
-  try {
-    await db.prepare("UPDATE conversations SET needs_attention = 1 WHERE id = ?").bind(conversationId).run();
-  } catch (e) {
-    console.warn("DB Mark attention skipped:", e.message);
-  }
-}
-
-async function getChatHistory(db, conversationId, limit = 6) {
-  if (!db) return [];
-  try {
-    const { results } = await db.prepare(
-      "SELECT sender_type, message_text FROM messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?"
-    ).bind(conversationId, limit).all();
-    return (results || []).reverse();
-  } catch (e) {
-    return [];
-  }
-}
-
-async function checkGlobalAiMode(db) {
-  if (!db) return true;
-  try {
-    const row = await db.prepare("SELECT value FROM system_settings WHERE key = 'global_ai_mode'").first();
-    return row ? row.value === "1" : true;
-  } catch (e) {
-    return true;
-  }
-}
-
-async function checkChatTakeover(db, conversationId) {
-  if (!db) return false;
-  try {
-    const row = await db.prepare("SELECT admin_takeover FROM conversations WHERE id = ?").bind(conversationId).first();
-    return row ? row.admin_takeover === 1 : false;
-  } catch (e) {
-    return false;
+    console.warn("D1 saveMessage error:", e.message);
   }
 }
 
@@ -615,41 +473,34 @@ async function getDashboardStats(env) {
   if (!env.DB) {
     return jsonResponse({
       total_conversations: 0,
-      ai_active_chats: 0,
-      admin_takeover_chats: 0,
-      needs_attention_chats: 0,
-      global_ai_mode: true,
-      engine: "Cloudflare Native Worker + Gemini 2.0/3.8 Flash Live",
-      db_status: "Standalone (D1 optional)",
-      status: "Operational"
+      total_messages: 0,
+      d1_connected: false,
+      telegram_connected: false,
+      status: "Waiting for D1 binding"
     });
   }
 
   try {
+    await ensureTables(env.DB);
     const totalConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations").first();
-    const activeAiConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE admin_takeover = 0").first();
-    const takeoverConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE admin_takeover = 1").first();
-    const attentionConvs = await env.DB.prepare("SELECT COUNT(*) as count FROM conversations WHERE needs_attention = 1").first();
-    const globalAiSetting = await env.DB.prepare("SELECT value FROM system_settings WHERE key = 'global_ai_mode'").first();
+    const totalMsgs = await env.DB.prepare("SELECT COUNT(*) as count FROM messages").first();
+    const botToken = await getTelegramBotToken(env);
+    const botUser = await env.DB.prepare("SELECT value FROM system_settings WHERE key = 'telegram_bot_username'").first();
 
     return jsonResponse({
       total_conversations: totalConvs?.count || 0,
-      ai_active_chats: activeAiConvs?.count || 0,
-      admin_takeover_chats: takeoverConvs?.count || 0,
-      needs_attention_chats: attentionConvs?.count || 0,
-      global_ai_mode: globalAiSetting?.value === "1",
-      engine: "Cloudflare Native Worker + Gemini 2.0/3.8 Flash Live",
+      total_messages: totalMsgs?.count || 0,
+      d1_connected: true,
+      telegram_connected: Boolean(botToken),
+      bot_username: botUser?.value || null,
       status: "Operational"
     });
   } catch (e) {
     return jsonResponse({
       total_conversations: 0,
-      ai_active_chats: 0,
-      admin_takeover_chats: 0,
-      needs_attention_chats: 0,
-      global_ai_mode: true,
-      engine: "Cloudflare Native Worker + Gemini 2.0/3.8 Flash Live",
-      status: "Operational"
+      total_messages: 0,
+      d1_connected: false,
+      error: e.message
     });
   }
 }

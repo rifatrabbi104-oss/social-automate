@@ -1,6 +1,8 @@
-name = "social-automate-api"
+name = "social-automate"
 main = "cloudflare-worker/src/index.js"
 compatibility_date = "2024-04-01"
 
-[vars]
-GEMINI_MODEL = "gemini-2.0-flash"
+[[d1_databases]]
+binding = "DB"
+database_name = "social_automate_db"
+database_id = "social_automate_db"
