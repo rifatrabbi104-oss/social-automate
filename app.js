@@ -1,10 +1,9 @@
 /**
- * SocialAutomate - Telegram Live Chat & Cloudflare D1 Application Engine
- * ---------------------------------------------------------------------
- * 1. Live 2-way communication: Customer on Telegram <-> Admin in Dashboard
- * 2. Persistent Cloudflare D1 storage for all conversations & messages
- * 3. Automated Telegram Bot token verification & webhook sync
- * 4. Real-time background polling (zero local demo mock data)
+ * SocialAutomate - Frontend Application Engine
+ * ---------------------------------------------
+ * 1. Live Telegram Chat & Handover (Edge Sessions)
+ * 2. Cloudflare D1 Business Data Management (Products & Store Policies)
+ * 3. 1-Click Telegram Bot Connection & Automatic Webhook Sync
  */
 
 function getApiBase() {
@@ -18,33 +17,34 @@ function getApiBase() {
 
 const API_BASE = getApiBase();
 
-// Application State
 let appState = {
-  activeConversationId: null,
+  activeChatId: null,
   conversations: [],
   messages: {},
+  products: [],
+  businessProfile: {},
   d1Connected: false,
   telegramConnected: false,
   botUsername: null,
-  pollTimer: null,
   isSending: false
 };
 
 document.addEventListener('DOMContentLoaded', () => {
   initNavigation();
   initChatReply();
+  initHandoverToggle();
+  initBusinessDataForms();
   initSettingsForm();
   initManualSync();
 
-  // Initial load
-  loadAllData();
+  loadInitialData();
 
-  // Background real-time polling every 3.5 seconds
-  appState.pollTimer = setInterval(pollLiveUpdates, 3500);
+  // Polling every 3.5 seconds for live edge chat updates
+  setInterval(pollLiveUpdates, 3500);
 });
 
 // ========================================================
-// ১. নেভিগেশন ট্যাব হ্যান্ডলিং
+// ১. নেভিগেশন
 // ========================================================
 function initNavigation() {
   const navItems = document.querySelectorAll('.nav-item');
@@ -54,16 +54,16 @@ function initNavigation() {
 
   const headers = {
     'inbox': {
-      title: 'Telegram Live Inbox',
-      sub: 'কাস্টমার টেলিগ্রামে মেসেজ পাঠালে এখানে আসবে, আপনি ড্যাশবোর্ড থেকে উত্তর দিলে সরাসরি ইউজারের টেলিগ্রামেই রিপ্লাই যাবে।'
+      title: 'Live Chat & AI Handover',
+      sub: 'AI কাস্টমারকে D1 বিজনেস ডেটা থেকে উত্তর দেবে। আপনি চাইলে যেকোনো চ্যাট টেকওভার করে সরাসরি টেলিগ্রামে রিপ্লাই দিতে পারেন।'
     },
-    'telegram-setup': {
-      title: 'Telegram & Cloudflare D1 Setup',
+    'business-d1': {
+      title: 'D1 Business Data & Products Catalog',
+      sub: 'আপনার স্টোরের প্রোডাক্ট ক্যাটালগ এবং ডেলিভারি পলিসি D1-এ সংরক্ষণ করুন। AI কাস্টমারকে এই ডেটা থেকেই উত্তর দেবে।'
+    },
+    'settings': {
+      title: 'Telegram Connection & Settings',
       sub: 'টেলিগ্রাম বটের টোকেন D1 ডেটাবেসে সংরক্ষণ করুন এবং স্বয়ংক্রিয়ভাবে Webhook চালু করুন।'
-    },
-    'logs': {
-      title: 'D1 Activity & Message History',
-      sub: 'Cloudflare D1 ডেটাবেসে স্থায়ীভাবে সংরক্ষিত মেসেজ ও ইভেন্ট হিস্ট্রি।'
     }
   };
 
@@ -74,63 +74,53 @@ function initNavigation() {
       panes.forEach(p => p.classList.remove('active'));
 
       item.classList.add('active');
-      const targetPane = document.getElementById(`tab-${tab}`);
-      if (targetPane) targetPane.classList.add('active');
+      const target = document.getElementById(`tab-${tab}`);
+      if (target) target.classList.add('active');
 
       if (headers[tab]) {
         if (pageTitle) pageTitle.textContent = headers[tab].title;
         if (pageSubtitle) pageSubtitle.textContent = headers[tab].sub;
       }
 
-      if (tab === 'logs') {
-        renderAuditLogs();
+      if (tab === 'business-d1') {
+        fetchProducts();
+        fetchBusinessProfile();
       }
     });
   });
 }
 
 // ========================================================
-// ২. ডেটা লোড ও ব্যাকগ্রাউন্ড সিঙ্ক (Live D1 Polling)
+// ২. ডেটা লোড ও ব্যাকগ্রাউন্ড সিঙ্ক
 // ========================================================
-async function loadAllData() {
+async function loadInitialData() {
   await fetchSystemSettings();
   await fetchConversations();
-  if (appState.activeConversationId) {
-    await fetchMessages(appState.activeConversationId);
-  }
+  await fetchProducts();
+  await fetchBusinessProfile();
 }
 
 async function pollLiveUpdates() {
   await fetchConversations(true);
-  if (appState.activeConversationId) {
-    await fetchMessages(appState.activeConversationId, true);
+  if (appState.activeChatId) {
+    await fetchMessages(appState.activeChatId, true);
   }
 }
 
 function initManualSync() {
-  const syncBtn = document.getElementById('btn-manual-sync');
-  if (syncBtn) {
-    syncBtn.addEventListener('click', async () => {
-      syncBtn.textContent = '⏳ Syncing...';
-      await loadAllData();
-      showToast('🔄 ডেটাবেস থেকে রিয়েল-টাইম ডেটা রিফ্রেশ করা হয়েছে।');
-      syncBtn.textContent = '🔄 Sync';
-    });
-  }
-
-  const refreshChatBtn = document.getElementById('btn-refresh-active-chat');
-  if (refreshChatBtn) {
-    refreshChatBtn.addEventListener('click', async () => {
-      if (appState.activeConversationId) {
-        await fetchMessages(appState.activeConversationId);
-        showToast('🔄 চ্যাট হিস্ট্রি রিফ্রেশ হয়েছে।');
-      }
+  const btn = document.getElementById('btn-manual-sync');
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      btn.textContent = '⏳ Syncing...';
+      await loadInitialData();
+      showToast('🔄 রিয়েল-টাইম ডেটা সিঙ্ক সম্পন্ন হয়েছে।');
+      btn.textContent = '🔄 Sync';
     });
   }
 }
 
 // ========================================================
-// ৩. সিস্টেম ও D1 সেটিংস ফেচ
+// ৩. সিস্টেম সেটিংস ও স্ট্যাটাস
 // ========================================================
 async function fetchSystemSettings() {
   try {
@@ -139,14 +129,11 @@ async function fetchSystemSettings() {
       const data = await res.json();
       appState.d1Connected = Boolean(data.d1_connected);
       appState.telegramConnected = Boolean(data.telegram_connected);
-      appState.botUsername = data.bot_username || null;
+      appState.botUsername = data.bot_username;
 
       updateStatusUI(data);
-    } else {
-      updateStatusUI({ d1_connected: false, telegram_connected: false });
     }
   } catch (err) {
-    console.warn("API offline or unreachable:", err);
     updateStatusUI({ d1_connected: false, telegram_connected: false });
   }
 }
@@ -155,7 +142,6 @@ function updateStatusUI(data) {
   const d1Dot = document.getElementById('d1-status-dot');
   const d1Text = document.getElementById('d1-status-text');
   const d1Banner = document.getElementById('d1-warning-banner');
-  const statD1 = document.getElementById('stat-d1-status');
   const statTg = document.getElementById('stat-tg-status');
   const topbarTg = document.getElementById('topbar-tg-bot');
   const setupBadge = document.getElementById('setup-status-badge');
@@ -163,32 +149,24 @@ function updateStatusUI(data) {
   const webhookInput = document.getElementById('display-webhook-url');
 
   if (webhookInput) {
-    const baseOrigin = API_BASE.replace(/\/api$/, '');
-    webhookInput.value = `${baseOrigin}/webhook/telegram`;
+    const base = API_BASE.replace(/\/api$/, '');
+    webhookInput.value = `${base}/webhook/telegram`;
   }
 
   // D1 Status
   if (data.d1_connected) {
     if (d1Dot) d1Dot.style.background = 'var(--emerald)';
-    if (d1Text) d1Text.textContent = 'D1 Database: Active';
-    if (statD1) {
-      statD1.textContent = 'Connected ✅';
-      statD1.style.color = 'var(--emerald)';
-    }
+    if (d1Text) d1Text.textContent = 'D1 Business Data: Active';
     if (d1Banner) d1Banner.style.display = 'none';
   } else {
     if (d1Dot) d1Dot.style.background = 'var(--rose)';
-    if (d1Text) d1Text.textContent = 'D1 DB: Not Bound';
-    if (statD1) {
-      statD1.textContent = 'Not Bound ❌';
-      statD1.style.color = 'var(--rose)';
-    }
+    if (d1Text) d1Text.textContent = 'D1: Not Bound';
     if (d1Banner) d1Banner.style.display = 'block';
   }
 
   // Telegram Status
   if (data.telegram_connected) {
-    const username = data.bot_username ? `@${data.bot_username}` : 'Active';
+    const username = data.bot_username ? `@${data.bot_username}` : 'Connected';
     if (topbarTg) topbarTg.textContent = `✈️ Telegram: ${username}`;
     if (statTg) {
       statTg.textContent = username;
@@ -216,7 +194,7 @@ function updateStatusUI(data) {
 }
 
 // ========================================================
-// ৪. কনভারসেশন লিস্ট ফেচ ও রেন্ডার (D1)
+// ৪. লাইভ কনভারসেশন লিস্ট (Edge Sessions)
 // ========================================================
 async function fetchConversations(isBackground = false) {
   try {
@@ -230,19 +208,18 @@ async function fetchConversations(isBackground = false) {
         const badge = document.getElementById('unread-badge');
         if (badge) badge.textContent = data.length;
 
-        const statTotal = document.getElementById('stat-total-convs');
-        if (statTotal) statTotal.textContent = data.length;
+        const statActive = document.getElementById('stat-active-sessions');
+        if (statActive) statActive.textContent = data.length;
 
-        // Auto select first conversation if none selected
-        if (!appState.activeConversationId && data.length > 0) {
-          appState.activeConversationId = data[0].id;
+        if (!appState.activeChatId && data.length > 0) {
+          appState.activeChatId = data[0].id;
           renderActiveChat();
           fetchMessages(data[0].id);
         }
       }
     }
   } catch (err) {
-    if (!isBackground) console.warn("Failed to fetch conversations:", err);
+    if (!isBackground) console.warn("Conversations error:", err);
   }
 }
 
@@ -254,10 +231,8 @@ function renderConversationList() {
     listEl.innerHTML = `
       <div style="padding: 40px 16px; text-align: center; color: var(--text-dim); font-size: 13px;">
         <div style="font-size: 36px; margin-bottom: 8px;">✈️</div>
-        <div style="color: var(--text-muted); font-weight: 600; font-size: 14px;">কোনো চ্যাট নেই</div>
-        <p style="font-size: 12px; margin-top: 6px; line-height: 1.5;">
-          আপনার টেলিগ্রাম বটে মেসেজ দিলে সেটি সরাসরি এখানে আসবে।
-        </p>
+        <div style="color: var(--text-muted); font-weight: 600;">কোনো সক্রিয় চ্যাট নেই</div>
+        <p style="font-size: 11px; margin-top: 4px; line-height: 1.5;">টেলিগ্রামে মেসেজ পাঠালে এখানে লাইভ সেশন দেখতে পাবেন।</p>
       </div>
     `;
     return;
@@ -267,31 +242,40 @@ function renderConversationList() {
 
   appState.conversations.forEach(c => {
     const item = document.createElement('div');
-    const isActive = c.id === appState.activeConversationId;
+    const isActive = c.id === appState.activeChatId;
     item.className = `conv-item ${isActive ? 'active' : ''}`;
 
-    const senderName = c.sender_name || 'Telegram User';
-    const initial = senderName.charAt(0).toUpperCase();
+    const initial = (c.name || 'U').charAt(0).toUpperCase();
     const timeFormatted = formatTime(c.last_message_at);
+
+    let badgeHtml = '';
+    if (c.needs_attention) {
+      badgeHtml += `<span class="badge-tag attention">🚨 Needs Attention</span>`;
+    }
+    if (c.admin_takeover) {
+      badgeHtml += `<span class="badge-tag takeover">👤 Handover</span>`;
+    } else {
+      badgeHtml += `<span class="badge-tag ai">🤖 AI Active</span>`;
+    }
 
     item.innerHTML = `
       <div class="conv-avatar">${initial}</div>
       <div class="conv-details">
         <div class="conv-top-row">
-          <span class="conv-name">${escapeHtml(senderName)}</span>
+          <span class="conv-name">${escapeHtml(c.name)}</span>
           <span class="conv-time">${timeFormatted}</span>
         </div>
-        <div class="conv-snippet">${escapeHtml(c.last_message || 'No messages yet')}</div>
+        <div class="conv-snippet">${escapeHtml(c.last_message || '')}</div>
         <div class="conv-badges">
           <span class="badge-tag platform">✈️ TG</span>
-          <span class="badge-tag" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald);">ID: ${escapeHtml(c.sender_id || '')}</span>
+          ${badgeHtml}
         </div>
       </div>
     `;
 
     item.addEventListener('click', () => {
-      if (appState.activeConversationId !== c.id) {
-        appState.activeConversationId = c.id;
+      if (appState.activeChatId !== c.id) {
+        appState.activeChatId = c.id;
         renderConversationList();
         renderActiveChat();
         fetchMessages(c.id);
@@ -303,18 +287,22 @@ function renderConversationList() {
 }
 
 // ========================================================
-// ৫. চ্যাট ভিউ ও মেসেজ হিস্ট্রি (D1 Messages)
+// ৫. চ্যাট ভিউ এবং হ্যান্ডওভার টগল
 // ========================================================
 function renderActiveChat() {
-  const conv = appState.conversations.find(c => c.id === appState.activeConversationId);
+  const conv = appState.conversations.find(c => c.id === appState.activeChatId);
   const container = document.getElementById('messages-container');
-  const refreshBtn = document.getElementById('btn-refresh-active-chat');
+  const badge = document.getElementById('handover-badge');
+  const btn = document.getElementById('btn-toggle-handover');
+  const warning = document.getElementById('ai-active-warning');
 
   if (!conv) {
     document.getElementById('active-chat-avatar').textContent = '-';
     document.getElementById('active-chat-name').textContent = 'কোনো চ্যাট সিলেক্ট করা নেই';
     document.getElementById('active-chat-id').textContent = '';
-    if (refreshBtn) refreshBtn.style.display = 'none';
+    if (badge) badge.style.display = 'none';
+    if (btn) btn.style.display = 'none';
+    if (warning) warning.classList.add('hidden');
 
     if (container) {
       container.innerHTML = `
@@ -328,48 +316,95 @@ function renderActiveChat() {
     return;
   }
 
-  if (refreshBtn) refreshBtn.style.display = 'block';
+  if (badge) badge.style.display = 'flex';
+  if (btn) btn.style.display = 'flex';
 
-  const senderName = conv.sender_name || 'Telegram User';
-  document.getElementById('active-chat-avatar').textContent = senderName.charAt(0).toUpperCase();
-  document.getElementById('active-chat-name').textContent = senderName;
-  document.getElementById('active-chat-id').textContent = `#${conv.sender_id || conv.id}`;
+  document.getElementById('active-chat-avatar').textContent = (conv.name || 'U').charAt(0).toUpperCase();
+  document.getElementById('active-chat-name').textContent = conv.name;
+  document.getElementById('active-chat-id').textContent = `#${conv.id}`;
 
+  updateHandoverUI(conv);
   renderMessageBubbles(conv.id);
 }
 
-async function fetchMessages(convId, isBackground = false) {
-  try {
-    const res = await fetch(`${API_BASE}/messages?conversation_id=${encodeURIComponent(convId)}`);
-    if (res.ok) {
-      const msgs = await res.json();
-      if (Array.isArray(msgs)) {
-        appState.messages[convId] = msgs;
-        if (appState.activeConversationId === convId) {
-          renderMessageBubbles(convId);
-        }
+function updateHandoverUI(conv) {
+  const badge = document.getElementById('handover-badge');
+  const btn = document.getElementById('btn-toggle-handover');
+  const warning = document.getElementById('ai-active-warning');
 
-        // Update total message metric
-        const total = Object.values(appState.messages).reduce((acc, mList) => acc + mList.length, 0);
-        const statMsg = document.getElementById('stat-total-msgs');
-        if (statMsg) statMsg.textContent = total;
-      }
-    }
-  } catch (err) {
-    if (!isBackground) console.warn("Failed to fetch messages:", err);
+  if (conv.admin_takeover) {
+    badge.className = 'handover-status-badge takeover';
+    badge.querySelector('.text').textContent = 'Admin Takeover';
+    btn.className = 'btn-handover release';
+    btn.querySelector('.btn-text').textContent = 'Release to AI';
+    btn.querySelector('.icon').textContent = '🤖';
+    if (warning) warning.classList.add('hidden');
+  } else {
+    badge.className = 'handover-status-badge ai';
+    badge.querySelector('.text').textContent = 'AI Active (D1)';
+    btn.className = 'btn-handover';
+    btn.querySelector('.btn-text').textContent = 'Takeover This Chat';
+    btn.querySelector('.icon').textContent = '👤';
+    if (warning) warning.classList.remove('hidden');
   }
 }
 
-function renderMessageBubbles(convId) {
+function initHandoverToggle() {
+  const btn = document.getElementById('btn-toggle-handover');
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    const conv = appState.conversations.find(c => c.id === appState.activeChatId);
+    if (!conv) return;
+
+    const newStatus = !conv.admin_takeover;
+    conv.admin_takeover = newStatus;
+    if (newStatus) conv.needs_attention = false;
+
+    updateHandoverUI(conv);
+    renderConversationList();
+
+    showToast(newStatus 
+      ? '👤 আপনি এই চ্যাটটি টেকওভার করেছেন। AI আর রিপ্লাই দেবে না।' 
+      : '🤖 চ্যাটটি AI-এর কাছে হস্তান্তর করা হয়েছে। AI স্বাভাবিক উত্তর দেবে।');
+
+    try {
+      await fetch(`${API_BASE}/handover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: conv.id, admin_takeover: newStatus })
+      });
+    } catch (e) {}
+  });
+}
+
+async function fetchMessages(chatId, isBackground = false) {
+  try {
+    const res = await fetch(`${API_BASE}/messages?chat_id=${encodeURIComponent(chatId)}`);
+    if (res.ok) {
+      const msgs = await res.json();
+      if (Array.isArray(msgs)) {
+        appState.messages[chatId] = msgs;
+        if (appState.activeChatId === chatId) {
+          renderMessageBubbles(chatId);
+        }
+      }
+    }
+  } catch (err) {
+    if (!isBackground) console.warn("Messages error:", err);
+  }
+}
+
+function renderMessageBubbles(chatId) {
   const container = document.getElementById('messages-container');
   if (!container) return;
 
-  const msgs = appState.messages[convId] || [];
+  const msgs = appState.messages[chatId] || [];
   if (msgs.length === 0) {
     container.innerHTML = `
       <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); text-align: center;">
         <div style="font-size: 32px; margin-bottom: 8px;">📩</div>
-        <p style="font-size: 13px;">কোনো মেসেজ হিস্ট্রি নেই। নিচে মেসেজ লিখে পাঠিয়ে দিন!</p>
+        <p style="font-size: 13px;">কোনো মেসেজ নেই। নিচে লিখুন।</p>
       </div>
     `;
     return;
@@ -379,42 +414,46 @@ function renderMessageBubbles(convId) {
 
   msgs.forEach(m => {
     const row = document.createElement('div');
-    const isAdmin = m.sender_type === 'admin';
+    const sender = m.sender_type;
+    const isCustomer = sender === 'customer';
+    const isAi = sender === 'assistant' || sender === 'ai';
+    const isAdmin = sender === 'admin';
+
     row.className = `msg-row ${isAdmin ? 'admin' : 'customer'}`;
 
-    const senderTag = isAdmin ? '👤 You (Dashboard Admin)' : '✈️ Telegram Customer';
-    const timeFormatted = formatTime(m.created_at);
+    let tag = '✈️ Telegram Customer';
+    if (isAi) tag = '🤖 AI Assistant (D1 Context)';
+    if (isAdmin) tag = '👤 You (Dashboard Admin)';
 
     row.innerHTML = `
-      <div class="msg-sender-tag">${senderTag}</div>
+      <div class="msg-sender-tag">${tag}</div>
       <div class="msg-bubble">${escapeHtml(m.message_text)}</div>
-      <span class="msg-time">${timeFormatted}</span>
+      <span class="msg-time">${formatTime(m.created_at)}</span>
     `;
 
     container.appendChild(row);
   });
 
-  // Scroll to bottom
   container.scrollTop = container.scrollHeight;
 }
 
 // ========================================================
-// ৬. অ্যাডমিন রিপ্লাই হ্যান্ডলার (Dashboard -> Telegram API)
+// ৬. ড্যাশবোর্ড থেকে টেলিগ্রামে রিপ্লাই পাঠানো
 // ========================================================
 function initChatReply() {
-  const replyForm = document.getElementById('chat-reply-form');
+  const form = document.getElementById('chat-reply-form');
   const inputEl = document.getElementById('admin-message-input');
   const sendBtn = document.getElementById('btn-send-message');
 
-  if (!replyForm || !inputEl) return;
+  if (!form || !inputEl) return;
 
-  replyForm.addEventListener('submit', async (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = inputEl.value.trim();
     if (!text || appState.isSending) return;
 
-    const convId = appState.activeConversationId;
-    if (!convId) {
+    const chatId = appState.activeChatId;
+    if (!chatId) {
       showToast('⚠️ অনুগ্রহ করে প্রথমে বাম পাশের তালিকা থেকে একটি চ্যাট সিলেক্ট করুন।');
       return;
     }
@@ -423,43 +462,44 @@ function initChatReply() {
     sendBtn.disabled = true;
     sendBtn.querySelector('span').textContent = 'Sending...';
 
-    // ১. লোকাল স্টেট এবং UI-তে তাৎক্ষণিক বাবল যোগ
+    // ১. তাৎক্ষণিক লোকাল বাবল যোগ
     const tempMsg = {
       id: 'temp_' + Date.now(),
-      conversation_id: convId,
       sender_type: 'admin',
       message_text: text,
       created_at: new Date().toISOString()
     };
 
-    if (!appState.messages[convId]) appState.messages[convId] = [];
-    appState.messages[convId].push(tempMsg);
-    renderMessageBubbles(convId);
+    if (!appState.messages[chatId]) appState.messages[chatId] = [];
+    appState.messages[chatId].push(tempMsg);
+    renderMessageBubbles(chatId);
     inputEl.value = '';
 
-    // ২. Cloudflare Worker API তে পোস্ট
+    // ২. Worker API-তে সেন্ড (Worker টেলিগ্রামে পাঠাবে)
     try {
       const res = await fetch(`${API_BASE}/admin/reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversation_id: convId,
-          message_text: text
-        })
+        body: JSON.stringify({ chat_id: chatId, message_text: text })
       });
 
       const data = await res.json();
-
       if (res.ok && data.success) {
-        showToast('✅ মেসেজটি ইউজারের টেলিগ্রামে সফলভাবে পৌঁছেছে!');
-        // D1 থেকে নিশ্চিত মেসেজ রিফ্রেশ
-        await fetchMessages(convId, true);
-        await fetchConversations(true);
+        showToast('✅ মেসেজটি সরাসরি ইউজারের টেলিগ্রামে পৌঁছে গেছে!');
+        // কনভারসেশনে হ্যান্ডওভার একটিভ করা
+        const conv = appState.conversations.find(c => c.id === chatId);
+        if (conv) {
+          conv.admin_takeover = true;
+          conv.needs_attention = false;
+          updateHandoverUI(conv);
+          renderConversationList();
+        }
+        await fetchMessages(chatId, true);
       } else {
         showToast(`❌ টেলিগ্রামে মেসেজ পাঠানো যায়নি: ${data.error || 'Server error'}`);
       }
     } catch (err) {
-      showToast(`❌ নেটওয়ার্ক ত্রুটি: ${err.message}`);
+      showToast(`❌ নেটওয়ার্ক এরর: ${err.message}`);
     } finally {
       appState.isSending = false;
       sendBtn.disabled = false;
@@ -470,7 +510,172 @@ function initChatReply() {
 }
 
 // ========================================================
-// ৭. টেলিগ্রাম সেটিংস ও D1 কানেকশন ফর্ম
+// ৭. D1 বিজনেস ডেটা ও প্রোডাক্ট ক্যাটালগ
+// ========================================================
+async function fetchProducts() {
+  try {
+    const res = await fetch(`${API_BASE}/products`);
+    if (res.ok) {
+      const data = await res.json();
+      appState.products = Array.isArray(data) ? data : [];
+      renderProductsTable();
+
+      const countBadge = document.getElementById('badge-prod-count');
+      if (countBadge) countBadge.textContent = appState.products.length;
+
+      const statProd = document.getElementById('stat-d1-products');
+      if (statProd) statProd.textContent = appState.products.length;
+    }
+  } catch (e) {}
+}
+
+function renderProductsTable() {
+  const tbody = document.getElementById('products-table-tbody');
+  if (!tbody) return;
+
+  if (appState.products.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="4" style="text-align: center; padding: 24px; color: var(--text-dim);">
+          D1 ডেটাবেসে কোনো প্রোডাক্ট নেই। উপরের ফর্ম থেকে প্রোডাক্ট যোগ করুন।
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = '';
+  appState.products.forEach(p => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${escapeHtml(p.name)}</strong><br><small style="color: var(--text-muted);">${escapeHtml(p.description || '')}</small></td>
+      <td><span style="color: var(--emerald); font-weight: 700;">৳${p.price}</span></td>
+      <td><span class="badge-status ${p.stock_status === 'in_stock' ? 'published' : 'pending'}">${p.stock_status === 'in_stock' ? 'In Stock' : 'Out of Stock'}</span></td>
+      <td>
+        <button class="btn-refresh" style="color: var(--rose); padding: 4px 10px; font-size: 11px;" onclick="deleteProduct('${p.id}')">🗑️ Delete</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+window.deleteProduct = async function(id) {
+  if (!confirm('আপনি কি এই প্রোডাক্টটি D1 ডেটাবেস থেকে মুছে ফেলতে চান?')) return;
+  try {
+    const res = await fetch(`${API_BASE}/products?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (res.ok) {
+      showToast('🗑️ প্রোডাক্টটি D1 থেকে ডিলিট করা হয়েছে।');
+      await fetchProducts();
+    }
+  } catch (e) {
+    showToast('ডিলিট করা যায়নি।');
+  }
+};
+
+async function fetchBusinessProfile() {
+  try {
+    const res = await fetch(`${API_BASE}/business-profile`);
+    if (res.ok) {
+      const data = await res.json();
+      appState.businessProfile = data || {};
+      
+      if (data.store_name) document.getElementById('store-name').value = data.store_name;
+      if (data.delivery_inside_dhaka) document.getElementById('del-dhaka').value = data.delivery_inside_dhaka;
+      if (data.delivery_outside_dhaka) document.getElementById('del-outside').value = data.delivery_outside_dhaka;
+      if (data.payment_methods) document.getElementById('payment-methods').value = data.payment_methods;
+      if (data.return_policy) document.getElementById('return-policy').value = data.return_policy;
+      if (data.contact_phone) document.getElementById('contact-phone').value = data.contact_phone;
+    }
+  } catch (e) {}
+}
+
+function initBusinessDataForms() {
+  // Add Product Form
+  const prodForm = document.getElementById('add-product-form');
+  if (prodForm) {
+    prodForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('prod-name').value.trim();
+      const price = document.getElementById('prod-price').value.trim();
+      const stock = document.getElementById('prod-stock').value;
+      const desc = document.getElementById('prod-desc').value.trim();
+
+      if (!name || !price) return;
+
+      const btn = document.getElementById('btn-add-product');
+      btn.disabled = true;
+      btn.textContent = 'Saving to D1...';
+
+      try {
+        const res = await fetch(`${API_BASE}/products`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, price, stock_status: stock, description: desc })
+        });
+
+        if (res.ok) {
+          showToast('✅ প্রোডাক্ট সফলভাবে D1 ডেটাবেসে যুক্ত হয়েছে!');
+          prodForm.reset();
+          await fetchProducts();
+        } else {
+          showToast('❌ সেভ করা যায়নি। D1 বাইন্ডিং চেক করুন।');
+        }
+      } catch (err) {
+        showToast('❌ এরর: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '➕ Add Product to D1 Database';
+      }
+    });
+  }
+
+  // Business Profile Form
+  const profForm = document.getElementById('business-profile-form');
+  if (profForm) {
+    profForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const store_name = document.getElementById('store-name').value.trim();
+      const delivery_inside_dhaka = document.getElementById('del-dhaka').value.trim();
+      const delivery_outside_dhaka = document.getElementById('del-outside').value.trim();
+      const payment_methods = document.getElementById('payment-methods').value.trim();
+      const return_policy = document.getElementById('return-policy').value.trim();
+      const contact_phone = document.getElementById('contact-phone').value.trim();
+
+      const btn = document.getElementById('btn-save-profile');
+      btn.disabled = true;
+      btn.textContent = 'Saving Profile...';
+
+      try {
+        const res = await fetch(`${API_BASE}/business-profile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            store_name,
+            delivery_inside_dhaka,
+            delivery_outside_dhaka,
+            payment_methods,
+            return_policy,
+            contact_phone
+          })
+        });
+
+        if (res.ok) {
+          showToast('✅ স্টোর পলিসি ও বিজনেস প্রোফাইল D1-এ সেভ হয়েছে!');
+        } else {
+          showToast('❌ সেভ করা যায়নি।');
+        }
+      } catch (err) {
+        showToast('❌ এরর: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '💾 Save Business Profile to D1';
+      }
+    });
+  }
+}
+
+// ========================================================
+// ৮. টেলিগ্রাম বট কানেকশন ফর্ম
 // ========================================================
 function initSettingsForm() {
   const form = document.getElementById('tg-connect-form');
@@ -495,7 +700,6 @@ function initSettingsForm() {
     });
   }
 
-  // Worker URL Save
   if (saveWorkerBtn && workerUrlInput) {
     const saved = localStorage.getItem('social_automate_worker_url');
     if (saved) workerUrlInput.value = saved;
@@ -504,52 +708,42 @@ function initSettingsForm() {
       const val = workerUrlInput.value.trim();
       if (val) {
         localStorage.setItem('social_automate_worker_url', val);
-        showToast('🌐 Worker URL সংরক্ষিত হয়েছে! পেজ রিফ্রেশ হচ্ছে...');
-        setTimeout(() => window.location.reload(), 1000);
+        showToast('🌐 Worker URL সংরক্ষিত হয়েছে!');
+        setTimeout(() => window.location.reload(), 800);
       }
     });
   }
 
-  // Telegram Connect Form
   if (form && tokenInput) {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const token = tokenInput.value.trim();
       const adminChat = adminChatInput.value.trim();
 
-      if (!token) {
-        showToast('⚠️ অনুগ্রহ করে টেলিগ্রাম বট টোকেন লিখুন।');
-        return;
-      }
+      if (!token) return;
 
       submitBtn.disabled = true;
-      submitBtn.textContent = '⏳ Verifying & Saving to D1...';
+      submitBtn.textContent = '⏳ Verifying & Connecting...';
 
       try {
         const res = await fetch(`${API_BASE}/settings/telegram`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            bot_token: token,
-            admin_chat_id: adminChat
-          })
+          body: JSON.stringify({ bot_token: token, admin_chat_id: adminChat })
         });
 
         const data = await res.json();
-
         if (res.ok && data.success) {
           resultBox.style.display = 'block';
           resultBox.style.background = 'rgba(16, 185, 129, 0.15)';
           resultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
           resultBox.style.color = '#a7f3d0';
           resultBox.innerHTML = `
-            <strong>✅ সফলভাবে কানেক্ট হয়েছে!</strong><br>
+            <strong>✅ টেলিগ্রাম বট সফলভাবে কানেক্ট হয়েছে!</strong><br>
             বট নাম: <strong>${escapeHtml(data.bot.name)}</strong> (${escapeHtml(data.bot.username)})<br>
-            টোকেন স্ট্যাটাস: Cloudflare D1-এ স্থায়ীভাবে সেভ হয়েছে।<br>
             Webhook স্ট্যাটাস: <strong>${escapeHtml(data.webhook_status)}</strong>
           `;
-
-          showToast('🎉 টেলিগ্রাম বট সফলভাবে D1-এ কানেক্ট হয়েছে!');
+          showToast('🎉 টেলিগ্রাম বট সফলভাবে কানেক্ট হয়েছে!');
           tokenInput.value = '';
           await fetchSystemSettings();
         } else {
@@ -557,11 +751,11 @@ function initSettingsForm() {
           resultBox.style.background = 'rgba(239, 68, 68, 0.15)';
           resultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
           resultBox.style.color = '#fca5a5';
-          resultBox.innerHTML = `❌ <strong>কানেক্ট করা যায়নি:</strong> ${escapeHtml(data.error || 'Unknown error')}`;
-          showToast(`❌ ত্রুটি: ${data.error || 'Server error'}`);
+          resultBox.innerHTML = `❌ ${escapeHtml(data.error || 'Verification failed')}`;
+          showToast('❌ বট টোকেন সঠিক নয়!');
         }
       } catch (err) {
-        showToast(`❌ কানেকশন ত্রুটি: ${err.message}`);
+        showToast('❌ এরর: ' + err.message);
       } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = '💾 Connect Telegram & Save to D1';
@@ -571,67 +765,13 @@ function initSettingsForm() {
 }
 
 // ========================================================
-// ৮. D1 লগস ভিউ রেন্ডার
-// ========================================================
-async function renderAuditLogs() {
-  const tbody = document.getElementById('logs-table-tbody');
-  if (!tbody) return;
-
-  const refreshBtn = document.getElementById('btn-refresh-logs');
-  if (refreshBtn) {
-    refreshBtn.onclick = () => {
-      renderAuditLogs();
-      showToast('🔄 লগস রিফ্রেশ করা হয়েছে।');
-    };
-  }
-
-  const allMsgs = [];
-  for (const convId of Object.keys(appState.messages)) {
-    const list = appState.messages[convId] || [];
-    for (const m of list) {
-      allMsgs.push(m);
-    }
-  }
-
-  // Sort by created_at DESC
-  allMsgs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-  if (allMsgs.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="4" style="text-align: center; padding: 32px; color: var(--text-dim);">
-          কোনো মেসেজ লগ পাওয়া যায়নি।
-        </td>
-      </tr>
-    `;
-    return;
-  }
-
-  tbody.innerHTML = '';
-  allMsgs.slice(0, 50).forEach(m => {
-    const tr = document.createElement('tr');
-    const senderTag = m.sender_type === 'admin' 
-      ? '<span style="color: var(--primary); font-weight: 700;">Admin (Dashboard)</span>' 
-      : '<span style="color: var(--emerald); font-weight: 700;">Customer (Telegram)</span>';
-
-    tr.innerHTML = `
-      <td><code>${escapeHtml(m.conversation_id || '-')}</code></td>
-      <td>${senderTag}</td>
-      <td>${escapeHtml(m.message_text || '')}</td>
-      <td><small style="color: var(--text-muted);">${formatTime(m.created_at)}</small></td>
-    `;
-    tbody.appendChild(tr);
-  });
-}
-
-// ========================================================
-// ইউটিলিটি ফাংশন
+// ইউটিলিটি
 // ========================================================
 function formatTime(isoStr) {
   if (!isoStr) return '';
   try {
-    const date = new Date(isoStr);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } catch (e) {
     return isoStr;
   }
