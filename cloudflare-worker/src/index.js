@@ -25,6 +25,16 @@ export default {
     const path = url.pathname;
 
     try {
+      // ०. হেলথচেক ও স্ট্যাটাস (Root Ping)
+      if (request.method === "GET" && (path === "/" || path === "/api")) {
+        return jsonResponse({
+          status: "online",
+          service: "SocialAutomate Headless API Worker",
+          ui: "Hosted exclusively on Cloudflare Pages (social-automate.pages.dev)",
+          timestamp: new Date().toISOString()
+        });
+      }
+
       // ==========================================
       // ১. মেটা Webhook Verification (GET Handshake)
       // ==========================================
