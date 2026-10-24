@@ -1,9 +1,10 @@
 /**
  * SocialAutomate - Frontend Application Engine
  * ---------------------------------------------
- * 1. Live Telegram Chat & Handover (Edge Sessions)
- * 2. Cloudflare D1 Business Data Management (Products & Store Policies)
- * 3. 1-Click Telegram Bot Connection & Automatic Webhook Sync
+ * 1. Deep-linking (?chat_id=123) for Instant Admin Escalation from Telegram DM
+ * 2. On-Demand Smart Polling (Zero requests when window is minimized/closed)
+ * 3. 1-Click Zero-Terminal Telegram Webhook Registration
+ * 4. D1 Business Data Management (Products & Store Policies)
  */
 
 function getApiBase() {
@@ -30,6 +31,13 @@ let appState = {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Check for Deep Link (?chat_id=12345 from Telegram Admin Alert)
+  const urlParams = new URLSearchParams(window.location.search);
+  const deepChatId = urlParams.get('chat_id');
+  if (deepChatId) {
+    appState.activeChatId = deepChatId.replace(/^tg_/, '');
+  }
+
   initNavigation();
   initChatReply();
   initHandoverToggle();
@@ -39,8 +47,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   loadInitialData();
 
-  // Polling every 3.5 seconds for live edge chat updates
-  setInterval(pollLiveUpdates, 3500);
+  // 🛡️ ON-DEMAND SMART POLLING:
+  // শুধুমাত্র যখন অ্যাডমিন ড্যাশবোর্ড ট্যাবটি দেখছেন (visible), তখনই প্রতি ৩.৫ সেকেন্ডে পোল হবে।
+  // পেজ বন্ধ বা মিনিমাইজ থাকলে ০ রিকোয়েস্ট খরচ হবে।
+  setInterval(() => {
+    if (document.visibilityState === 'visible') {
+      pollLiveUpdates();
+    }
+  }, 3500);
 });
 
 // ========================================================
@@ -98,6 +112,11 @@ async function loadInitialData() {
   await fetchConversations();
   await fetchProducts();
   await fetchBusinessProfile();
+
+  if (appState.activeChatId) {
+    await fetchMessages(appState.activeChatId);
+    renderActiveChat();
+  }
 }
 
 async function pollLiveUpdates() {
@@ -242,7 +261,7 @@ function renderConversationList() {
 
   appState.conversations.forEach(c => {
     const item = document.createElement('div');
-    const isActive = c.id === appState.activeChatId;
+    const isActive = String(c.id) === String(appState.activeChatId);
     item.className = `conv-item ${isActive ? 'active' : ''}`;
 
     const initial = (c.name || 'U').charAt(0).toUpperCase();
@@ -290,7 +309,7 @@ function renderConversationList() {
 // ৫. চ্যাট ভিউ এবং হ্যান্ডওভার টগল
 // ========================================================
 function renderActiveChat() {
-  const conv = appState.conversations.find(c => c.id === appState.activeChatId);
+  const conv = appState.conversations.find(c => String(c.id) === String(appState.activeChatId));
   const container = document.getElementById('messages-container');
   const badge = document.getElementById('handover-badge');
   const btn = document.getElementById('btn-toggle-handover');
@@ -334,14 +353,14 @@ function updateHandoverUI(conv) {
 
   if (conv.admin_takeover) {
     badge.className = 'handover-status-badge takeover';
-    badge.querySelector('.text').textContent = 'Admin Takeover';
+    badge.querySelector('.text').textContent = 'Admin Takeover (AI Paused)';
     btn.className = 'btn-handover release';
     btn.querySelector('.btn-text').textContent = 'Release to AI';
     btn.querySelector('.icon').textContent = '🤖';
     if (warning) warning.classList.add('hidden');
   } else {
     badge.className = 'handover-status-badge ai';
-    badge.querySelector('.text').textContent = 'AI Active (D1)';
+    badge.querySelector('.text').textContent = 'AI Active (D1 Context)';
     btn.className = 'btn-handover';
     btn.querySelector('.btn-text').textContent = 'Takeover This Chat';
     btn.querySelector('.icon').textContent = '👤';
@@ -354,7 +373,7 @@ function initHandoverToggle() {
   if (!btn) return;
 
   btn.addEventListener('click', async () => {
-    const conv = appState.conversations.find(c => c.id === appState.activeChatId);
+    const conv = appState.conversations.find(c => String(c.id) === String(appState.activeChatId));
     if (!conv) return;
 
     const newStatus = !conv.admin_takeover;
@@ -385,7 +404,7 @@ async function fetchMessages(chatId, isBackground = false) {
       const msgs = await res.json();
       if (Array.isArray(msgs)) {
         appState.messages[chatId] = msgs;
-        if (appState.activeChatId === chatId) {
+        if (String(appState.activeChatId) === String(chatId)) {
           renderMessageBubbles(chatId);
         }
       }
@@ -415,7 +434,6 @@ function renderMessageBubbles(chatId) {
   msgs.forEach(m => {
     const row = document.createElement('div');
     const sender = m.sender_type;
-    const isCustomer = sender === 'customer';
     const isAi = sender === 'assistant' || sender === 'ai';
     const isAdmin = sender === 'admin';
 
@@ -438,7 +456,7 @@ function renderMessageBubbles(chatId) {
 }
 
 // ========================================================
-// ৬. ড্যাশবোর্ড থেকে টেলিগ্রামে রিপ্লাই পাঠানো
+// ৬. ড্যাশবোর্ড থেকে টেলিগ্রামে রিপ্লাই পাঠানো (Admin Outbound)
 // ========================================================
 function initChatReply() {
   const form = document.getElementById('chat-reply-form');
@@ -475,9 +493,9 @@ function initChatReply() {
     renderMessageBubbles(chatId);
     inputEl.value = '';
 
-    // ২. Worker API-তে সেন্ড (Worker টেলিগ্রামে পাঠাবে)
+    // ২. Worker API-তে সেন্ড (POST /api/admin-reply)
     try {
-      const res = await fetch(`${API_BASE}/admin/reply`, {
+      const res = await fetch(`${API_BASE}/admin-reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, message_text: text })
@@ -486,8 +504,7 @@ function initChatReply() {
       const data = await res.json();
       if (res.ok && data.success) {
         showToast('✅ মেসেজটি সরাসরি ইউজারের টেলিগ্রামে পৌঁছে গেছে!');
-        // কনভারসেশনে হ্যান্ডওভার একটিভ করা
-        const conv = appState.conversations.find(c => c.id === chatId);
+        const conv = appState.conversations.find(c => String(c.id) === String(chatId));
         if (conv) {
           conv.admin_takeover = true;
           conv.needs_attention = false;
@@ -675,7 +692,7 @@ function initBusinessDataForms() {
 }
 
 // ========================================================
-// ৮. টেলিগ্রাম বট কানেকশন ফর্ম
+// ৮. টেলিগ্রাম বট কানেকশন ফর্ম (POST /api/setup-telegram)
 // ========================================================
 function initSettingsForm() {
   const form = document.getElementById('tg-connect-form');
@@ -723,10 +740,10 @@ function initSettingsForm() {
       if (!token) return;
 
       submitBtn.disabled = true;
-      submitBtn.textContent = '⏳ Verifying & Connecting...';
+      submitBtn.textContent = '⏳ Verifying & Registering Webhook...';
 
       try {
-        const res = await fetch(`${API_BASE}/settings/telegram`, {
+        const res = await fetch(`${API_BASE}/setup-telegram`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ bot_token: token, admin_chat_id: adminChat })

@@ -1,40 +1,30 @@
 -- ========================================================
 -- Social Automate - Cloudflare D1 Database Schema
--- Dedicated to Business Data, Products & System Settings
+-- Dedicated strictly for Business Data & System Config
+-- (Chat history is kept in Edge Cache, Zero D1 Chat Bloat)
 -- ========================================================
 
--- ১. সিস্টেম সেটিংস ও ক্রেডেনশিয়ালস
-CREATE TABLE IF NOT EXISTS system_settings (
+-- ১. সিস্টেম কনফিগারেশন ও ক্রেডেনশিয়ালস
+CREATE TABLE IF NOT EXISTS system_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- ডিফল্ট সিস্টেম কনফিগ
-INSERT OR IGNORE INTO system_settings (key, value) VALUES 
-('global_ai_mode', '1'),
-('gemini_model', 'gemini-2.0-flash'),
+-- ডিফল্ট কনফিগ
+INSERT OR IGNORE INTO system_config (key, value) VALUES 
+('telegram_bot_token', ''),
 ('admin_telegram_chat_id', ''),
-('telegram_bot_token', '');
-
--- ২. বিজনেস প্রোফাইল ও স্টোর তথ্য (AI কাস্টমারদের উত্তর দিতে এই ডেটা ব্যবহার করবে)
-CREATE TABLE IF NOT EXISTS business_profile (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- ডিফল্ট বিজনেস ইনফো
-INSERT OR IGNORE INTO business_profile (key, value) VALUES 
+('gemini_model', 'gemini-2.0-flash'),
 ('store_name', 'My Online Shop'),
-('about', 'আমরা সারা বাংলাদেশে দ্রুত হোম ডেলিভারি সহ প্রিমিয়াম কোয়ালিটি পণ্য সরবরাহ করি।'),
-('delivery_inside_dhaka', '৬০ টাকা (২৪ থেকে ৪৮ ঘণ্টার মধ্যে ডেলিভারি)'),
-('delivery_outside_dhaka', '১২০ টাকা (২ থেকে ৩ দিনের মধ্যে ডেলিভারি)'),
-('payment_methods', 'ক্যাশ অন ডেলিভারি (পণ্য হাতে পেয়ে টাকা পরিশোধ), বিকাশ, নগদ'),
-('return_policy', 'পণ্য রিসিভ করার সময় চেক করে নিতে পারবেন। কোনো ডিফেক্ট থাকলে ডেলিভারিম্যানের সামনেই রিটার্ন প্রযোজ্য।'),
+('about_store', 'আমরা সারা দেশে হোম ডেলিভারি সহ কোয়ালিটি পণ্য সরবরাহ করি।'),
+('delivery_inside_dhaka', '৬০ টাকা (২৪-৪৮ ঘণ্টার মধ্যে ডেলিভারি)'),
+('delivery_outside_dhaka', '১২০ টাকা (২-৩ দিনের মধ্যে ডেলিভারি)'),
+('payment_methods', 'ক্যাশ অন ডেলিভারি, বিকাশ, নগদ'),
+('return_policy', 'পণ্য ডেলিভারির সময় চেক করে নেওয়া যাবে। ডিফেক্ট থাকলে সাথে সাথে রিটার্ন করা যাবে।'),
 ('contact_phone', '+8801XXXXXXXXX');
 
--- ৩. প্রোডাক্ট ও সার্ভিস ক্যাটালগ (Business Data in D1)
+-- ২. প্রোডাক্ট ও সার্ভিস ক্যাটালগ (Business Data in D1)
 CREATE TABLE IF NOT EXISTS products (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -46,7 +36,7 @@ CREATE TABLE IF NOT EXISTS products (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- ৪. কানেক্টেড সোশ্যাল অ্যাকাউন্টস
+-- ৩. সোশ্যাল অ্যাকাউন্টস মেটাডাটা
 CREATE TABLE IF NOT EXISTS social_accounts (
     id TEXT PRIMARY KEY,
     platform TEXT NOT NULL,
@@ -57,17 +47,5 @@ CREATE TABLE IF NOT EXISTS social_accounts (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- ৫. শিডিউল্ড সোশ্যাল পোস্টস (GitHub Actions দিয়ে পাবলিশিং)
-CREATE TABLE IF NOT EXISTS scheduled_posts (
-    id TEXT PRIMARY KEY,
-    content TEXT NOT NULL,
-    media_urls TEXT,
-    target_platforms TEXT NOT NULL,
-    scheduled_at TIMESTAMP NOT NULL,
-    status TEXT DEFAULT 'pending',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 -- ইনডেক্স
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
-CREATE INDEX IF NOT EXISTS idx_posts_pending ON scheduled_posts(status, scheduled_at ASC);
