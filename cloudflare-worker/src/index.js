@@ -25,12 +25,11 @@ export default {
     const path = url.pathname;
 
     try {
-      // ०. হেলথচেক ও স্ট্যাটাস (Root Ping)
+      // ०. হেলথচেক ও স্ট্যাটাস (Root Ping - Fully Dynamic)
       if (request.method === "GET" && (path === "/" || path === "/api")) {
         return jsonResponse({
           status: "online",
           service: "SocialAutomate Headless API Worker",
-          ui: "Hosted exclusively on Cloudflare Pages (social-automate.pages.dev)",
           timestamp: new Date().toISOString()
         });
       }
@@ -430,34 +429,41 @@ async function callGemini(incomingText, chatHistory = [], env) {
 async function sendAdminTelegramAlert(customerName, platform, incomingMessage, conversationId, reason, env) {
   const botToken = env.ADMIN_TG_BOT_TOKEN;
   const adminChatId = env.ADMIN_TG_CHAT_ID;
-  const dashboardUrl = env.DASHBOARD_URL || "https://your-dashboard.pages.dev";
+  const dashboardUrl = env.DASHBOARD_URL ? env.DASHBOARD_URL.replace(/\/$/, '') : '';
 
   if (!botToken || !adminChatId || botToken === "YOUR_ADMIN_BOT_TOKEN") {
     console.log("[AdminAlert] Telegram Bot Token/Chat ID not configured. Skipping alert.");
     return false;
   }
 
-  const chatLink = `${dashboardUrl}#chat-${conversationId}`;
+  const chatLink = dashboardUrl ? `${dashboardUrl}#chat-${conversationId}` : '';
+  const linkText = chatLink ? `\n\n🔗 [ড্যাশবোর্ডে চ্যাট ওপেন করুন](${chatLink})` : '';
+
   const text = `🚨 *[ADMIN ALERT: জরুরি কাস্টমার]*\n\n` +
                `👤 *কাস্টমার:* ${customerName}\n` +
                `📱 *প্ল্যাটফর্ম:* ${platform}\n` +
                `⚠️ *কারণ:* ${reason || 'Customer inquiry'}\n` +
                `💬 *মেসেজ:* _"${incomingMessage.substring(0, 300)}"_\n\n` +
-               `💡 *নোট:* AI কাস্টমারকে উত্তর দিয়ে চ্যাট চালিয়ে যাচ্ছে। আপনি চাইলে ড্যাশবোর্ড থেকে টেকওভার করতে পারেন।\n` +
-               `🔗 [ড্যাশবোর্ডে চ্যাট ওপেন করুন](${chatLink})`;
+               `💡 *নোট:* AI কাস্টমারকে উত্তর দিয়ে চ্যাট চালিয়ে যাচ্ছে। আপনি চাইলে ড্যাশবোর্ড থেকে টেকওভার করতে পারেন।` +
+               linkText;
+
+  const payload = {
+    chat_id: adminChatId,
+    text: text,
+    parse_mode: "Markdown"
+  };
+
+  if (chatLink) {
+    payload.reply_markup = {
+      inline_keyboard: [[{ text: "🚀 Open in Dashboard", url: chatLink }]]
+    };
+  }
 
   try {
     const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: adminChatId,
-        text: text,
-        parse_mode: "Markdown",
-        reply_markup: {
-          inline_keyboard: [[{ text: "🚀 Open in Dashboard", url: chatLink }]]
-        }
-      })
+      body: JSON.stringify(payload)
     });
     return res.ok;
   } catch (e) {

@@ -363,9 +363,20 @@ function initSandboxSimulator() {
   const copyBtn = document.getElementById('btn-copy-webhook');
   const webhookInput = document.getElementById('tg-webhook-url-input');
 
-  // টেলিগ্রাম ওয়েবমুক কপি বাটন
+  // টেলিগ্রাম ওয়েবমুক কপি বাটন ও ডায়নামিক URL পপুলেশন
+  if (webhookInput) {
+    const savedWorker = localStorage.getItem('social_automate_worker_url');
+    if (savedWorker) {
+      webhookInput.value = `${savedWorker.replace(/\/$/, '')}/webhook/telegram`;
+    }
+  }
+
   if (copyBtn && webhookInput) {
     copyBtn.addEventListener('click', () => {
+      if (!webhookInput.value) {
+        showToast('⚠️ অনুগ্রহ করে প্রথমে Settings থেকে আপনার Worker URL কানেক্ট করুন।');
+        return;
+      }
       navigator.clipboard.writeText(webhookInput.value).then(() => {
         showToast('📋 Webhook URL ক্লিপবোর্ডে কপি হয়েছে!');
       }).catch(() => {
