@@ -25,11 +25,24 @@ export default {
     const path = url.pathname;
 
     try {
-      // ०. হেলথচেক ও স্ট্যাটাস (Root Ping - Fully Dynamic)
-      if (request.method === "GET" && (path === "/" || path === "/api")) {
+      // ०. হেলথচেক ও এনভায়রনমেন্ট স্ট্যাটাস চেক
+      if (request.method === "GET" && (path === "/" || path === "/api" || path === "/status")) {
+        const hasTelegram = Boolean(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_BOT_TOKEN !== "YOUR_CUSTOMER_BOT_TOKEN");
+        const hasGemini = Boolean(env.GEMINI_API_KEY && env.GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY");
+        const hasAdminTg = Boolean(env.ADMIN_TG_BOT_TOKEN && env.ADMIN_TG_CHAT_ID);
+
         return jsonResponse({
           status: "online",
-          service: "SocialAutomate Headless API Worker",
+          service: "Telegram AI Customer Assistant Worker",
+          setup_checklist: {
+            telegram_bot_token: hasTelegram ? "✅ Configured" : "❌ Missing (Set in Cloudflare Variables)",
+            gemini_api_key: hasGemini ? "✅ Configured" : "❌ Missing (Set in Cloudflare Variables)",
+            admin_alert_channel: hasAdminTg ? "✅ Configured" : "⚠️ Optional",
+            webhook_endpoint: `${url.origin}/webhook/telegram`
+          },
+          action_needed: (!hasTelegram || !hasGemini) 
+            ? "Cloudflare Dashboard > Workers > social-automate > Settings > Variables এ গিয়ে TELEGRAM_BOT_TOKEN এবং GEMINI_API_KEY যোগ করুন।"
+            : "All ready! Send message to your Telegram bot to test live AI replies.",
           timestamp: new Date().toISOString()
         });
       }
@@ -49,7 +62,7 @@ export default {
       }
 
       // ==========================================
-      // ২. টেলিগ্রাম বট Webhook (Easiest Test Route)
+      // ২. টেলিগ্রাম বট Webhook (Customer AI Assistant)
       // ==========================================
       if (request.method === "POST" && (path === "/webhook/telegram" || path === "/api/telegram/webhook")) {
         const update = await request.json();
@@ -206,6 +219,23 @@ async function handleTelegramUpdate(update, env) {
   await upsertConversation(env.DB, conversationId, "telegram", senderId, senderName, incomingText);
   await saveMessage(env.DB, conversationId, "customer", incomingText);
 
+  // ১.৫ /start কমান্ডের জন্য ইনস্ট্যান্ট ওয়েলকাম মেসেজ
+  if (incomingText === "/start") {
+    const welcomeReply = env.WELCOME_MESSAGE || 
+      `হ্যালো ${senderName}! 👋 আমাদের সার্ভিসে স্বাগতম। আমি আপনার সার্বক্ষণিক AI কাস্টমার অ্যাসিস্ট্যান্ট।\n\nআমাদের প্রোডাক্ট, মূল্য, অর্ডার বা ডেলিভারি সম্পর্কে যেকোনো তথ্য জানতে নিচে লিখে পাঠান। আমি আপনাকে সাহায্য করতে প্রস্তুত!`;
+    
+    if (env.TELEGRAM_BOT_TOKEN) {
+      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: senderId, text: welcomeReply })
+      });
+    }
+
+    await saveMessage(env.DB, conversationId, "ai", welcomeReply);
+    return jsonResponse({ success: true, ai_reply: welcomeReply });
+  }
+
   // ২. হ্যান্ডওভার স্টেট চেক (Global Mode & Per-Chat Takeover)
   const isGlobalAi = await checkGlobalAiMode(env.DB);
   const isTakeover = await checkChatTakeover(env.DB, conversationId);
@@ -224,9 +254,9 @@ async function handleTelegramUpdate(update, env) {
     await sendAdminTelegramAlert(senderName, "Telegram", incomingText, conversationId, aiResult.alert_reason, env);
   }
 
-  // ৫. টেলিগ্রাম কাস্টমারকে উত্তর পাঠানো
+  // ৫. টেলিগ্রাম কাস্টমারকে সরাসরি AI উত্তর পাঠানো
   if (env.TELEGRAM_BOT_TOKEN) {
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const tgRes = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -234,6 +264,10 @@ async function handleTelegramUpdate(update, env) {
         text: aiResult.reply
       })
     });
+    const tgJson = await tgRes.json();
+    console.log("[Telegram Outbound]", tgJson);
+  } else {
+    console.warn("[Telegram Outbound] TELEGRAM_BOT_TOKEN not configured in environment variables.");
   }
 
   // ৬. AI এর উত্তর D1-এ সেভ করা
@@ -378,10 +412,13 @@ async function callGemini(incomingText, chatHistory = [], env) {
     parts: [{ text: incomingText }]
   });
 
-  const systemInstruction = `You are an intelligent, polite, and enthusiastic customer service representative for our business.
+  const systemInstruction = env.SYSTEM_PROMPT || 
+`You are an intelligent, polite, and enthusiastic customer service AI assistant representing our business on Telegram.
 - Always respond warmly, accurately, and promptly in Bengali or English (Banglish style is welcomed when the customer uses it).
 - Never stop responding. Always provide the best possible help regarding prices, delivery, and products.
-- If a customer asks to speak with the manager or admin, reassure them warmly that the admin has been alerted and will review their chat shortly, while continuing to assist them with any questions they have.`;
+- Answer all customer queries directly and helpfully as the official assistant.
+- If a customer asks to speak with the manager or admin, reassure them warmly that the admin has been alerted and will review their chat shortly, while continuing to assist them with any questions they have.
+${env.BUSINESS_INFO ? `\n\nOfficial Business Information & Pricing:\n${env.BUSINESS_INFO}` : ''}`;
 
   const payload = {
     system_instruction: { parts: [{ text: systemInstruction }] },

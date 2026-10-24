@@ -6,14 +6,15 @@
  * Works seamlessly with Cloudflare Worker API & local interactive preview.
  */
 
-// কনফিগারেশন: ক্লাউডফ্লেয়ার ওয়ার্কার এপিআই এন্ডপয়েন্ট (GitHub Pages বা Custom Domain সাপোর্ট)
+// কনফিগারেশন: ক্লাউডফ্লেয়ার ওয়ার্কার এপিআই এন্ডপয়েন্ট (ডায়নামিক ও ক্রস-ডিভাইস সাপোর্ট)
 function getApiBase() {
   const custom = localStorage.getItem('social_automate_worker_url');
   if (custom) return custom.replace(/\/$/, '') + '/api';
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return 'http://127.0.0.1:8787/api';
   }
-  return '/api';
+  // লাইভ ডিপ্লয়ড ওয়ার্কার ডিফল্ট ফলব্যাক
+  return 'https://social-automate.rifatrabbi104.workers.dev/api';
 }
 const API_BASE = getApiBase();
 
