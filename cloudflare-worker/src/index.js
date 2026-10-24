@@ -121,17 +121,48 @@ export default {
       // ৬. লাইভ সেশন ফেচ (শুধুমাত্র অ্যাডমিন রিফ্রেশ বাটনে চাপলে কল হবে)
       // ==========================================
       if (request.method === "GET" && path === "/api/conversations") {
-        const list = Array.from(memorySessions.values()).map(s => ({
-          id: s.chat_id,
-          sender_id: s.chat_id,
-          name: s.sender_name,
-          platform: s.platform || "meta",
-          last_message: s.last_message,
-          last_message_at: s.last_message_at,
-          admin_takeover: s.admin_takeover ? 1 : 0,
-          needs_attention: s.needs_attention ? 1 : 0,
-          messages_count: s.messages.length
-        })).sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
+        let list = [];
+        if (env.DB) {
+          try {
+            await ensureTables(env.DB);
+            const { results } = await env.DB.prepare(
+              "SELECT chat_id as id, chat_id as sender_id, sender_name as name, platform, last_message, last_message_at, admin_takeover, needs_attention, messages_json FROM live_conversations ORDER BY last_message_at DESC LIMIT 50"
+            ).all();
+            if (results && results.length > 0) {
+              list = results.map(r => {
+                let count = 0;
+                try { count = JSON.parse(r.messages_json || "[]").length; } catch (e) {}
+                return {
+                  id: r.id,
+                  sender_id: r.sender_id,
+                  name: r.name,
+                  platform: r.platform || "facebook",
+                  last_message: r.last_message,
+                  last_message_at: r.last_message_at,
+                  admin_takeover: r.admin_takeover,
+                  needs_attention: r.needs_attention,
+                  messages_count: count
+                };
+              });
+            }
+          } catch (e) {
+            console.warn("Could not read D1 live_conversations:", e);
+          }
+        }
+
+        if (list.length === 0) {
+          list = Array.from(memorySessions.values()).map(s => ({
+            id: s.chat_id,
+            sender_id: s.chat_id,
+            name: s.sender_name,
+            platform: s.platform || "facebook",
+            last_message: s.last_message,
+            last_message_at: s.last_message_at,
+            admin_takeover: s.admin_takeover ? 1 : 0,
+            needs_attention: s.needs_attention ? 1 : 0,
+            messages_count: s.messages ? s.messages.length : 0
+          })).sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
+        }
 
         return jsonResponse(list);
       }
@@ -141,8 +172,23 @@ export default {
         if (!chatId) return jsonResponse({ error: "Missing chat_id parameter" }, 400);
 
         const cleanId = String(chatId).replace(/^(tg_|fb_|wa_)/, '');
-        const session = await getSession(cleanId);
+        const session = await getSession(cleanId, env);
         return jsonResponse(session ? session.messages : []);
+      }
+
+      // টেস্ট ইনকামিং মেসেজ (ড্যাশবোর্ড বা কার্ল দিয়ে সরাসরি টেস্ট করার জন্য)
+      if (request.method === "POST" && path === "/api/test-incoming") {
+        const body = await request.json().catch(() => ({}));
+        const testSenderId = body.sender_id || `fb_user_${Math.floor(Math.random() * 89999 + 10000)}`;
+        const testName = body.sender_name || "Facebook Customer";
+        const testMsg = body.message || "Assalamu alaikum, product er dam koto?";
+        const session = await appendMessageToSession(testSenderId, testName, "customer", testMsg, "facebook", env);
+        return jsonResponse({
+          success: true,
+          message: "Test message stored successfully in D1!",
+          chat_id: testSenderId,
+          last_message: testMsg
+        });
       }
 
       // ==========================================
@@ -274,12 +320,12 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
     const now = Date.now();
     const lastTime = userLastMessageTime.get(senderId) || 0;
     if (now - lastTime < 2500) {
-      await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook");
+      await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env);
       return new Response("EVENT_RECEIVED", { status: 200 });
     }
     userLastMessageTime.set(senderId, now);
 
-    const session = await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook");
+    const session = await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env);
 
     // হ্যান্ডওভার চেক
     if (session.admin_takeover && (session.takeover_until ? session.takeover_until > now : true)) {
@@ -305,7 +351,7 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
           })
         });
       }
-      await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook");
+      await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook", env);
     }
 
     return new Response("EVENT_RECEIVED", { status: 200 });
@@ -457,11 +503,11 @@ async function handleAdminReply(body, env) {
     }
   }
 
-  const session = await appendMessageToSession(cleanId, `User (${cleanId})`, "admin", cleanText, platform || "facebook");
+  const session = await appendMessageToSession(cleanId, `User (${cleanId})`, "admin", cleanText, platform || "facebook", env);
   session.admin_takeover = true;
   session.takeover_until = Date.now() + 30 * 60 * 1000;
   session.needs_attention = false;
-  await saveSession(cleanId, session);
+  await saveSession(cleanId, session, env);
 
   return jsonResponse({
     success: true,
@@ -560,9 +606,9 @@ async function invalidateBusinessCache() {
 }
 
 // ========================================================
-// 🧠 CACHE API & MEMORY SESSION STORE (ZERO D1 CHAT BLOAT)
+// 🧠 CACHE API & D1 LIVE CONVERSATIONS STORE
 // ========================================================
-async function getSession(chatId) {
+async function getSession(chatId, env = null) {
   if (memorySessions.has(chatId)) return memorySessions.get(chatId);
   try {
     const cache = caches.default;
@@ -574,10 +620,34 @@ async function getSession(chatId) {
       return s;
     }
   } catch (e) {}
+
+  if (env && env.DB) {
+    try {
+      await ensureTables(env.DB);
+      const row = await env.DB.prepare("SELECT * FROM live_conversations WHERE chat_id = ?").bind(chatId).first();
+      if (row) {
+        let msgs = [];
+        try { msgs = JSON.parse(row.messages_json || "[]"); } catch (e) {}
+        const s = {
+          chat_id: row.chat_id,
+          sender_name: row.sender_name,
+          platform: row.platform || "facebook",
+          admin_takeover: Boolean(row.admin_takeover),
+          takeover_until: 0,
+          needs_attention: Boolean(row.needs_attention),
+          last_message: row.last_message,
+          last_message_at: row.last_message_at,
+          messages: msgs
+        };
+        memorySessions.set(chatId, s);
+        return s;
+      }
+    } catch (e) {}
+  }
   return null;
 }
 
-async function saveSession(chatId, session) {
+async function saveSession(chatId, session, env = null) {
   memorySessions.set(chatId, session);
   try {
     const cache = caches.default;
@@ -587,10 +657,38 @@ async function saveSession(chatId, session) {
     });
     await cache.put(cacheUrl, res);
   } catch (e) {}
+
+  if (env && env.DB) {
+    try {
+      await ensureTables(env.DB);
+      await env.DB.prepare(`
+        INSERT INTO live_conversations (chat_id, sender_name, platform, last_message, last_message_at, admin_takeover, needs_attention, messages_json)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+        ON CONFLICT(chat_id) DO UPDATE SET
+          sender_name = excluded.sender_name,
+          platform = excluded.platform,
+          last_message = excluded.last_message,
+          last_message_at = CURRENT_TIMESTAMP,
+          admin_takeover = excluded.admin_takeover,
+          needs_attention = excluded.needs_attention,
+          messages_json = excluded.messages_json
+      `).bind(
+        chatId,
+        session.sender_name || `User (${chatId.slice(-4)})`,
+        session.platform || "facebook",
+        session.last_message || "",
+        session.admin_takeover ? 1 : 0,
+        session.needs_attention ? 1 : 0,
+        JSON.stringify(session.messages || [])
+      ).run();
+    } catch (e) {
+      console.warn("Could not save conversation to D1:", e);
+    }
+  }
 }
 
-async function appendMessageToSession(chatId, senderName, senderType, text, platform = "meta") {
-  let session = await getSession(chatId);
+async function appendMessageToSession(chatId, senderName, senderType, text, platform = "meta", env = null) {
+  let session = await getSession(chatId, env);
   const nowStr = new Date().toISOString();
 
   if (!session) {
@@ -618,8 +716,8 @@ async function appendMessageToSession(chatId, senderName, senderType, text, plat
     created_at: nowStr
   });
 
-  if (session.messages.length > 20) session.messages.shift();
-  await saveSession(chatId, session);
+  if (session.messages.length > 30) session.messages.shift();
+  await saveSession(chatId, session, env);
   return session;
 }
 
@@ -696,6 +794,18 @@ async function ensureTables(db) {
           access_token TEXT NOT NULL,
           status TEXT DEFAULT 'active',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS live_conversations (
+          chat_id TEXT PRIMARY KEY,
+          sender_name TEXT NOT NULL,
+          platform TEXT DEFAULT 'facebook',
+          last_message TEXT,
+          last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          admin_takeover INTEGER DEFAULT 0,
+          needs_attention INTEGER DEFAULT 0,
+          messages_json TEXT
         );
       `)
     ]);

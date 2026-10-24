@@ -47,5 +47,18 @@ CREATE TABLE IF NOT EXISTS social_accounts (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ৪. লাইভ কনভার্সেশন ও চ্যাট স্টেট (এডমিন হ্যান্ডওভার ও সিঙ্ক সাপোর্ট)
+CREATE TABLE IF NOT EXISTS live_conversations (
+    chat_id TEXT PRIMARY KEY,
+    sender_name TEXT NOT NULL,
+    platform TEXT DEFAULT 'facebook',
+    last_message TEXT,
+    last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    admin_takeover INTEGER DEFAULT 0,
+    needs_attention INTEGER DEFAULT 0,
+    messages_json TEXT
+);
+
 -- ইনডেক্স
 CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
+CREATE INDEX IF NOT EXISTS idx_conversations_last_msg ON live_conversations(last_message_at);
