@@ -35,5 +35,5 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           projectName: 'social-automate-dashboard'
-          directory: 'frontend'
+          directory: '.'
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
