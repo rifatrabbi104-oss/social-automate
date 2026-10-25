@@ -1,13 +1,20 @@
-name: Scheduled Social Post Publisher
+name: AI Social Post Publisher
 
 on:
   schedule:
-    # প্রতি ১৫ মিনিটে স্বয়ংক্রিয়ভাবে রান হবে (Free GitHub Actions Cron)
-    - cron: '*/15 * * * *'
-  workflow_dispatch: # গিটহাব থেকে ম্যানুয়ালি রান করার বাটন
+    # প্রতিদিন সকাল ১০টা এবং রাত ৮টায় স্বয়ংক্রিয়ভাবে পোস্ট হবে (বাংলাদেশ সময়: UTC 04:00 & 14:00)
+    - cron: '0 4,14 * * *'
+
+  workflow_dispatch:
+    inputs:
+      product_url:
+        description: 'আপনার ওয়েবসাইটের প্রোডাক্ট লিংক (ঐচ্ছিক - দিলে সরাসরি ওই প্রোডাক্টের ছবি ও ডিটেইলস নিয়ে পোস্ট হবে)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
-  publish-posts:
+  publish-ai-post:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -18,13 +25,13 @@ jobs:
         with:
           node-version: 20
 
-      - name: Publish Pending Posts
+      - name: Generate & Publish Social Post
         run: node scripts/publish_posts.js
         env:
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID || '1287050647827199' }}
+          PRODUCT_URL: ${{ inputs.product_url }}
+          WORKER_URL: 'https://social-automate.rifatrabbi104.workers.dev'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
-          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
