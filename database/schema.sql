@@ -31,9 +31,24 @@ CREATE TABLE IF NOT EXISTS products (
     price REAL NOT NULL,
     description TEXT,
     category TEXT DEFAULT 'General',
+    image_url TEXT,
+    product_url TEXT,
+    posting_time TEXT DEFAULT '10:00', -- e.g. "10:00", "15:00", "20:00"
+    daily_auto_post INTEGER DEFAULT 1, -- 1 = active, 0 = off
     stock_status TEXT DEFAULT 'in_stock', -- 'in_stock', 'out_of_stock'
     is_active INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ৫. স্বয়ংক্রিয় পোস্টিং হিস্ট্রি (AI যাতে কখনোই একই পোস্ট রিপিট না করে)
+CREATE TABLE IF NOT EXISTS post_history (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL,
+    platform TEXT DEFAULT 'facebook',
+    caption TEXT,
+    angle TEXT,
+    post_id TEXT,
+    published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ৩. সোশ্যাল অ্যাকাউন্টস মেটাডাটা

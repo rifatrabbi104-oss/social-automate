@@ -207,19 +207,34 @@ export default {
         if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
         await ensureTables(env.DB);
         const body = await request.json();
-        const { id, name, price, description, category, stock_status } = body;
+        const { id, name, price, description, category, image_url, product_url, posting_time, daily_auto_post, stock_status } = body;
 
         const prodId = id || `prod_${Date.now()}`;
         await env.DB.prepare(`
-          INSERT INTO products (id, name, price, description, category, stock_status, is_active)
-          VALUES (?, ?, ?, ?, ?, ?, 1)
+          INSERT INTO products (id, name, price, description, category, image_url, product_url, posting_time, daily_auto_post, stock_status, is_active)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             price = excluded.price,
             description = excluded.description,
             category = excluded.category,
+            image_url = excluded.image_url,
+            product_url = excluded.product_url,
+            posting_time = excluded.posting_time,
+            daily_auto_post = excluded.daily_auto_post,
             stock_status = excluded.stock_status
-        `).bind(prodId, name, parseFloat(price) || 0, description || '', category || 'General', stock_status || 'in_stock').run();
+        `).bind(
+          prodId,
+          name,
+          parseFloat(price) || 0,
+          description || '',
+          category || 'General',
+          image_url || '',
+          product_url || '',
+          posting_time || '10:00',
+          daily_auto_post !== undefined ? Number(daily_auto_post) : 1,
+          stock_status || 'in_stock'
+        ).run();
 
         await invalidateBusinessCache();
         return jsonResponse({ success: true, id: prodId, message: "Product saved to D1" });
@@ -233,6 +248,53 @@ export default {
         await env.DB.prepare("UPDATE products SET is_active = 0 WHERE id = ?").bind(id).run();
         await invalidateBusinessCache();
         return jsonResponse({ success: true, message: "Product deleted" });
+      }
+
+      // ==========================================
+      // ৭.১ অটো-পোস্টিং টাস্ক ও হিস্ট্রি API (GitHub Actions এর জন্য)
+      // ==========================================
+      if (request.method === "GET" && path === "/api/auto-post-task") {
+        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+        await ensureTables(env.DB);
+
+        // অ্যাক্টিভ শিডিউল্ড প্রোডাক্টগুলো নেওয়া
+        const { results: prods } = await env.DB.prepare(
+          "SELECT * FROM products WHERE is_active = 1 AND daily_auto_post = 1 ORDER BY created_at DESC"
+        ).all();
+
+        const tasks = [];
+        for (const p of (prods || [])) {
+          // পূর্বের পোস্ট হিস্ট্রি (যাতে AI রিপিট না করে)
+          const { results: hist } = await env.DB.prepare(
+            "SELECT caption, angle, published_at FROM post_history WHERE product_id = ? ORDER BY published_at DESC LIMIT 3"
+          ).bind(p.id).all();
+
+          tasks.push({
+            ...p,
+            previous_posts: hist || []
+          });
+        }
+
+        return jsonResponse({
+          success: true,
+          count: tasks.length,
+          tasks
+        });
+      }
+
+      if (request.method === "POST" && path === "/api/record-post") {
+        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+        await ensureTables(env.DB);
+        const body = await request.json();
+        const { product_id, platform, caption, angle, post_id } = body;
+
+        const histId = `post_${Date.now()}`;
+        await env.DB.prepare(`
+          INSERT INTO post_history (id, product_id, platform, caption, angle, post_id)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(histId, product_id, platform || 'facebook', caption || '', angle || 'General', post_id || '').run();
+
+        return jsonResponse({ success: true, id: histId, message: "Post history recorded" });
       }
 
       // ==========================================
@@ -807,8 +869,25 @@ async function ensureTables(db) {
           needs_attention INTEGER DEFAULT 0,
           messages_json TEXT
         );
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS post_history (
+          id TEXT PRIMARY KEY,
+          product_id TEXT NOT NULL,
+          platform TEXT DEFAULT 'facebook',
+          caption TEXT,
+          angle TEXT,
+          post_id TEXT,
+          published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
       `)
     ]);
+
+    // মাইগ্রেশন: পূর্বের টেবিলে নতুন কলাম থাকলে অ্যাড করা (safe ignore if exists)
+    try { await db.prepare("ALTER TABLE products ADD COLUMN image_url TEXT").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN product_url TEXT").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN posting_time TEXT DEFAULT '10:00'").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN daily_auto_post INTEGER DEFAULT 1").run(); } catch (e) {}
   } catch (e) {}
 }
 

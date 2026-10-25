@@ -472,9 +472,18 @@ function renderProductsTable() {
   tbody.innerHTML = '';
   appState.products.forEach(p => {
     const tr = document.createElement('tr');
+    const autoBadge = p.daily_auto_post != 0 
+      ? `<span style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">⏰ ${p.posting_time || '10:00'} (🟢 চালু)</span>`
+      : `<span style="background: rgba(255, 255, 255, 0.05); color: var(--text-dim); padding: 2px 6px; border-radius: 4px; font-size: 11px;">⚪ বন্ধ</span>`;
+
+    const productTitle = p.product_url 
+      ? `<a href="${escapeHtml(p.product_url)}" target="_blank" style="color: var(--primary-light); text-decoration: underline;">${escapeHtml(p.name)} 🔗</a>`
+      : `<strong>${escapeHtml(p.name)}</strong>`;
+
     tr.innerHTML = `
-      <td><strong>${escapeHtml(p.name)}</strong></td>
+      <td>${productTitle}</td>
       <td><span style="color: var(--emerald); font-weight: 700;">৳${p.price}</span></td>
+      <td>${autoBadge}</td>
       <td><span class="badge-status ${p.stock_status === 'in_stock' ? 'published' : 'pending'}">${p.stock_status === 'in_stock' ? 'In Stock' : 'Out of Stock'}</span></td>
       <td><button class="btn-refresh" style="color: var(--rose); font-size: 11px;" onclick="deleteProduct('${p.id}')">🗑️</button></td>
     `;
@@ -511,17 +520,32 @@ function initBusinessDataForms() {
       e.preventDefault();
       const name = document.getElementById('prod-name').value.trim();
       const price = document.getElementById('prod-price').value.trim();
+      const url = document.getElementById('prod-url') ? document.getElementById('prod-url').value.trim() : '';
+      const img = document.getElementById('prod-img') ? document.getElementById('prod-img').value.trim() : '';
+      const postTime = document.getElementById('prod-post-time') ? document.getElementById('prod-post-time').value : '10:00';
+      const autoPost = document.getElementById('prod-auto-post') ? Number(document.getElementById('prod-auto-post').value) : 1;
       const stock = document.getElementById('prod-stock').value;
       const desc = document.getElementById('prod-desc').value.trim();
 
       if (!name || !price) return;
 
-      const newProd = { id: 'p_' + Date.now(), name, price, stock_status: stock, description: desc };
+      const newProd = {
+        id: 'p_' + Date.now(),
+        name,
+        price,
+        product_url: url,
+        image_url: img,
+        posting_time: postTime,
+        daily_auto_post: autoPost,
+        stock_status: stock,
+        description: desc
+      };
+
       appState.products.unshift(newProd);
       setLocalCache(CACHE_KEYS.PRODUCTS, appState.products);
       renderProductsTable();
       prodForm.reset();
-      showToast('✅ প্রোডাক্ট সেভ হয়েছে!');
+      showToast('✅ প্রোডাক্ট ও দৈনিক শিডিউল D1-এ সেভ হয়েছে!');
 
       // ব্যাকএন্ড D1-এ সেভ
       try {

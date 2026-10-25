@@ -201,6 +201,34 @@
               </div>
               <div class="form-row">
                 <div class="form-group" style="flex: 1;">
+                  <label>Website Product URL (অর্ডার লিংক)</label>
+                  <input type="url" id="prod-url" placeholder="https://myshop.com/product/wallet">
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label>Product Image URL (ছবি লিংক)</label>
+                  <input type="url" id="prod-img" placeholder="https://.../wallet.jpg">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
+                  <label>⏰ Daily Auto-Post Time</label>
+                  <select id="prod-post-time" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
+                    <option value="10:00">সকাল ১০:০০ টা (10:00 AM)</option>
+                    <option value="15:00">বিকাল ০৩:০০ টা (03:00 PM)</option>
+                    <option value="20:00" selected>রাত ০৮:০০ টা (08:00 PM - পিক টাইম)</option>
+                    <option value="22:00">রাত ১০:০০ টা (10:00 PM)</option>
+                  </select>
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label>🔄 Daily Auto-Post Status</label>
+                  <select id="prod-auto-post" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
+                    <option value="1">🟢 প্রতিদিন অটো-পোস্ট চালু (Active)</option>
+                    <option value="0">⚪ অটো-পোস্ট বন্ধ (Off)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
                   <label>Stock Status</label>
                   <select id="prod-stock" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
                     <option value="in_stock">In Stock (উপলব্ধ)</option>
@@ -208,20 +236,21 @@
                   </select>
                 </div>
                 <div class="form-group" style="flex: 2;">
-                  <label>Description / Details</label>
-                  <input type="text" id="prod-desc" placeholder="কালার: কালো ও বাদামী, ১০০% চামড়া">
+                  <label>Description / Highlights</label>
+                  <input type="text" id="prod-desc" placeholder="কালার: কালো ও বাদামী, ১০০% চামড়া, ১ বছরের ওয়ারেন্টি">
                 </div>
               </div>
-              <button type="submit" class="btn-primary" id="btn-add-product">➕ Save Product to D1</button>
+              <button type="submit" class="btn-primary" id="btn-add-product">➕ Save Product & Daily Schedule to D1</button>
             </form>
 
-            <h4 style="font-size: 14px; margin-bottom: 12px; color: var(--text-main);">D1 প্রোডাক্ট তালিকা:</h4>
+            <h4 style="font-size: 14px; margin-bottom: 12px; color: var(--text-main);">D1 প্রোডাক্ট তালিকা ও দৈনিক শিডিউল:</h4>
             <div class="posts-table-wrapper">
               <table class="data-table">
                 <thead>
                   <tr>
                     <th>Product</th>
                     <th>Price</th>
+                    <th>⏰ Daily Schedule</th>
                     <th>Stock</th>
                     <th>Action</th>
                   </tr>
