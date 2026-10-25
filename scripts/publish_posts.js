@@ -105,7 +105,110 @@ async function getProductToPost() {
   };
 }
 
-// 🤖 ৩. Google AI Studio (Gemini) দিয়ে আকর্ষণীয় বাংলা সেলস পোস্ট তৈরি
+// ⚡ ৩.১ Gemini Multimodal Live WebSocket Engine (Bidi Streaming / High Limit)
+async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "gemini-2.0-flash-exp") {
+  if (typeof WebSocket === "undefined") {
+    return null;
+  }
+
+  return new Promise((resolve) => {
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    let ws;
+    let timeoutId;
+    let accumulatedText = "";
+    let isFinished = false;
+
+    const cleanup = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (ws) {
+        try { ws.close(); } catch (e) {}
+      }
+    };
+
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (err) {
+      console.warn("WebSocket init error:", err.message);
+      return resolve(null);
+    }
+
+    timeoutId = setTimeout(() => {
+      if (!isFinished) {
+        console.log("⏳ Gemini Live WebSocket সময়সীমা শেষ, REST ফলব্যাকে যাচ্ছি...");
+        cleanup();
+        resolve(accumulatedText.trim() || null);
+      }
+    }, 12000);
+
+    ws.onopen = () => {
+      console.log("⚡ Gemini Live WebSocket সংযোগ সফল! হ্যান্ডশেক পাঠানো হচ্ছে...");
+      const cleanModel = modelName.includes("/") ? modelName : `models/${modelName}`;
+      ws.send(JSON.stringify({
+        setup: {
+          model: cleanModel,
+          generationConfig: {
+            responseModalities: ["TEXT"],
+            temperature: 0.7
+          }
+        }
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(typeof event.data === "string" ? event.data : event.data.toString());
+
+        if (data.setupComplete) {
+          console.log("✅ Gemini Live হ্যান্ডশেক সম্পন্ন! সেলস প্রম্পট পাঠানো হচ্ছে...");
+          ws.send(JSON.stringify({
+            clientContent: {
+              turns: [
+                {
+                  role: "user",
+                  parts: [{ text: prompt }]
+                }
+              ],
+              turnComplete: true
+            }
+          }));
+          return;
+        }
+
+        const parts = data.serverContent?.modelTurn?.parts;
+        if (parts && Array.isArray(parts)) {
+          for (const part of parts) {
+            if (part.text) {
+              accumulatedText += part.text;
+            }
+          }
+        }
+
+        if (data.serverContent?.turnComplete) {
+          isFinished = true;
+          cleanup();
+          resolve(accumulatedText.trim());
+        }
+      } catch (err) {
+        console.warn("WS parse error:", err.message);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.warn("Gemini Live WebSocket নোটিশ:", err.message || "Disconnected");
+      cleanup();
+      resolve(accumulatedText.trim() || null);
+    };
+
+    ws.onclose = () => {
+      if (!isFinished) {
+        cleanup();
+        resolve(accumulatedText.trim() || null);
+      }
+    };
+  });
+}
+
+// 🤖 ৩.২ Google AI Studio (Gemini Live / REST) দিয়ে আকর্ষণীয় বাংলা সেলস পোস্ট তৈরি
 async function generatePostContent(product) {
   if (!GEMINI_API_KEY) {
     console.log("⚠️ GEMINI_API_KEY পাওয়া যায়নি, স্ট্যান্ডার্ড টেমপ্লেট ব্যবহার করা হচ্ছে।");
@@ -144,8 +247,22 @@ Requirements for the post:
 8. Return ONLY the plain text ready to post on Facebook (No markdown backticks, no code blocks).
 `;
 
+  // ১. প্রথমে Gemini Live WebSocket ট্রাই করা (High Throughput / Bidi Stream)
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+    const liveText = await callGeminiLiveWebSocket(prompt, GEMINI_API_KEY, GEMINI_MODEL);
+    if (liveText && liveText.length > 50) {
+      console.log("⚡ [Gemini Live WebSocket] সফলভাবে লাইভ স্ট্রিম থেকে পোস্ট জেনারেট সম্পন্ন!");
+      return liveText;
+    }
+  } catch (e) {
+    console.log("Gemini Live WebSocket ট্রাই শেষ, REST ফলব্যাকে যাচ্ছি:", e.message);
+  }
+
+  // ২. ফলব্যাক: Standard Google AI Studio REST generateContent
+  try {
+    console.log(`🌐 Google AI Studio REST API (${GEMINI_MODEL}) দিয়ে পোস্ট তৈরি হচ্ছে...`);
+    const cleanModel = GEMINI_MODEL.replace(/^models\//, '');
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${GEMINI_API_KEY}`;
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -161,7 +278,7 @@ Requirements for the post:
       return candidateText.trim();
     }
   } catch (e) {
-    console.error("Gemini API Error:", e.message);
+    console.error("Gemini REST API Error:", e.message);
   }
 
   return `✨ ${product.name} ✨\nঅর্ডার করতে ভিজিট করুন: ${product.product_url || "ইনবক্স করুন"}`;
