@@ -119,8 +119,9 @@
           <div class="conv-sidebar">
             <div class="conv-header">
               <h3>Social Conversations</h3>
-              <div style="display: flex; gap: 8px; align-items: center;">
-                <button id="btn-quick-test" class="btn-secondary" style="padding: 3px 8px; font-size: 11px; cursor: pointer;">🧪 Test Msg</button>
+              <div style="display: flex; gap: 6px; align-items: center;">
+                <button id="btn-quick-test-wa" class="btn-secondary" style="padding: 3px 8px; font-size: 11px; cursor: pointer; border-color: rgba(16, 185, 129, 0.4); color: var(--emerald);">🟢 Test WA</button>
+                <button id="btn-quick-test" class="btn-secondary" style="padding: 3px 8px; font-size: 11px; cursor: pointer;">🔵 Test FB</button>
                 <span style="font-size: 11px; color: var(--emerald); font-weight: 600;">● Local Cache</span>
               </div>
             </div>
@@ -311,42 +312,113 @@
       <!-- TAB 3: LIFETIME SOCIAL CONNECTION -->
       <section class="tab-pane" id="tab-settings">
         <div class="scheduler-grid">
-          <!-- Meta 1-Time Lifetime Connection -->
+          
+          <!-- 🟢 CARD 1: WhatsApp 1-Time Lifetime Connect (Recommended) -->
           <div class="card">
             <div class="card-header">
-              <h3>🌐 Meta (Facebook Page & WhatsApp) 1-Time Lifetime Connect</h3>
-              <span class="badge-status published">Zero Terminal</span>
+              <h3>🟢 WhatsApp AI Automation & Live Chat</h3>
+              <span class="badge-status published">Primary Channel</span>
             </div>
-            <p class="section-desc">আজীবন একবারের জন্য আপনার ফেসবুক পেজ বা হোয়াটসঅ্যাপ বিজনেস কানেক্ট করুন। পেজে মেসেজ বা কমেন্ট আসলেই ক্লাউডফ্লেয়ার ওয়ার্কার স্বয়ংক্রিয়ভাবে মেসেজ রিসিভ ও AI রিপ্লাই দেবে:</p>
+            <p class="section-desc">হোয়াটসঅ্যাপ বিজনেস বা নম্বর কানেক্ট করুন। কাস্টমার মেসেজ দিলেই AI আপনার D1 প্রোডাক্ট ও ডেলিভারি পলিসি দেখে সাথে সাথে নিখুঁত উত্তর দেবে:</p>
             
-            <form id="meta-connect-form">
-              <div class="form-group">
-                <label>Meta Page Access Token (Permanent / Long-Lived Token)</label>
-                <input type="password" id="input-meta-token" placeholder="যেমন: EAABwzLIX4bkBA..." required>
-                <small class="help-text">মেটা বিজনেস ম্যানেজার বা ডেভেলপার পোর্টাল থেকে পাওয়া Page Access Token দিন।</small>
+            <form id="whatsapp-connect-form">
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
+                  <label>WhatsApp Number</label>
+                  <input type="text" id="input-wa-phone" placeholder="যেমন: 01882346112" required>
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label>Connection Mode</label>
+                  <select id="input-wa-mode" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
+                    <option value="gateway">🌐 WhatsApp Web Gateway (No Meta App Needed)</option>
+                    <option value="cloud_api">☁️ Official WhatsApp Cloud API</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-group" id="group-wa-gateway">
+                <label>Outbound Gateway API URL (ঐচ্ছিক - ড্যাশবোর্ড বা AI অটো-রিপ্লাই পাঠাতে)</label>
+                <input type="url" id="input-wa-gateway-url" placeholder="যেমন: https://my-gateway.com/sendText বা ফাকা রাখুন">
+                <small class="help-text">যেকোনো ফ্রি WhatsApp Web Gateway (Baileys / Evolution API / UltraMsg / GreenAPI) এর সেন্ড এন্ডপয়েন্ট দিতে পারেন।</small>
               </div>
 
               <div class="form-group">
-                <label>Facebook Page ID (Optional)</label>
-                <input type="text" id="input-meta-page-id" placeholder="যেমন: 1029384756">
+                <label>API Key / Token (ঐচ্ছিক)</label>
+                <input type="password" id="input-wa-token" placeholder="Gateway API Key বা Cloud API Token">
               </div>
 
-              <button type="submit" class="btn-primary full-width" id="btn-save-meta">💾 Connect Once for Lifetime</button>
+              <button type="submit" class="btn-primary full-width" id="btn-save-whatsapp">💾 Connect WhatsApp to D1</button>
             </form>
 
-            <div id="meta-setup-result" style="display: none; margin-top: 18px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
+            <div id="wa-setup-result" style="display: none; margin-top: 18px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
 
             <div class="form-group" style="margin-top: 20px;">
-              <label>Your Meta Webhook URL (For Meta App Dashboard)</label>
+              <label>Your WhatsApp Webhook URL (ইনকামিং মেসেজের জন্য)</label>
               <div style="display: flex; gap: 8px;">
-                <input type="text" id="display-webhook-url" value="https://social-automate.rifatrabbi104.workers.dev/webhook/meta" readonly style="flex: 1;">
-                <button type="button" class="btn-refresh" id="btn-copy-webhook" style="padding: 10px 16px;">📋 Copy</button>
+                <input type="text" id="display-wa-webhook-url" value="https://social-automate.rifatrabbi104.workers.dev/webhook/whatsapp" readonly style="flex: 1;">
+                <button type="button" class="btn-refresh" id="btn-copy-wa-webhook" style="padding: 10px 16px;">📋 Copy</button>
               </div>
               <small class="help-text">Verify Token: <code>social_automate_verify_token_2026</code></small>
             </div>
           </div>
 
-          <!-- Optimization Info -->
+          <!-- 🎵 CARD 2: TikTok AI Daily Post Publisher -->
+          <div class="card">
+            <div class="card-header">
+              <h3>🎵 TikTok AI Daily Scheduled Posting</h3>
+              <span class="badge-status published">GitHub Actions Engine</span>
+            </div>
+            <p class="section-desc">TikTok Content Posting API v2 এর মাধ্যমে আপনার প্রোডাক্টের ফটো ও ইউনিক সেলস কপি প্রতিদিন স্বয়ংক্রিয়ভাবে টিকটকে প্রকাশ হবে (১০০% ফ্রি ক্লাউড রানে):</p>
+            
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); padding: 16px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.8; color: var(--text-muted); margin-bottom: 16px;">
+              <strong style="color: var(--text-main);">টিকটকে স্বয়ংক্রিয় পোস্টিং চালু করার সহজ ৩টি ধাপ:</strong>
+              <ol style="padding-left: 20px; margin-top: 8px;">
+                <li><strong>TikTok Developers</strong> পোর্টাল (<a href="https://developers.tiktok.com" target="_blank" style="color: var(--violet); text-decoration: underline;">developers.tiktok.com</a>) থেকে আপনার অ্যাপের <code>TIKTOK_ACCESS_TOKEN</code> সংগ্রহ করুন।</li>
+                <li>আপনার GitHub রিপোজিটরির <strong>Settings → Secrets and variables → Actions</strong>-এ গিয়ে <code>TIKTOK_ACCESS_TOKEN</code> সিক্রেট হিসেবে পেস্ট করুন।</li>
+                <li>ব্যাস! GitHub Actions ক্রন শিডিউলার প্রতিদিন নির্দিষ্ট সময়ে সম্পূর্ণ নতুন মার্কেটিং অ্যাঙ্গেলে টিকটকে পোস্ট করবে।</li>
+              </ol>
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+              <a href="https://github.com/rifatrabbi104-oss/social-automate/actions" target="_blank" class="btn-primary" style="flex: 1; text-align: center; text-decoration: none; padding: 12px 14px;">🚀 Open GitHub Actions Scheduler</a>
+            </div>
+          </div>
+
+          <!-- 🔵 CARD 3: Meta (Facebook Page) Connection (Optional) -->
+          <div class="card">
+            <div class="card-header">
+              <h3>🌐 Meta (Facebook Page) Connect (Optional)</h3>
+              <span class="badge-zero-worker" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa;">Secondary Channel</span>
+            </div>
+            <p class="section-desc">মেটা ফেসবুক পেজ কানেক্ট করতে চাইলে পেজ টোকেন সেভ রাখতে পারেন। পেজে মেসেজ আসলেই AI স্বয়ংক্রিয়ভাবে রিপ্লাই দিতে পারবে:</p>
+            
+            <form id="meta-connect-form">
+              <div class="form-group">
+                <label>Meta Page Access Token (Permanent / Long-Lived Token)</label>
+                <input type="password" id="input-meta-token" placeholder="যেমন: EAABwzLIX4bkBA...">
+                <small class="help-text">মেটা ডেভেলপার একাউন্ট ঠিক হলে এখান থেকে যেকোনো সময় কানেক্ট করতে পারবেন।</small>
+              </div>
+
+              <div class="form-group">
+                <label>Facebook Page ID (Optional)</label>
+                <input type="text" id="input-meta-page-id" placeholder="যেমন: 1287050647827199">
+              </div>
+
+              <button type="submit" class="btn-secondary full-width" id="btn-save-meta">💾 Save Meta Settings</button>
+            </form>
+
+            <div id="meta-setup-result" style="display: none; margin-top: 18px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
+
+            <div class="form-group" style="margin-top: 20px;">
+              <label>Meta Webhook URL</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="display-webhook-url" value="https://social-automate.rifatrabbi104.workers.dev/webhook/meta" readonly style="flex: 1;">
+                <button type="button" class="btn-refresh" id="btn-copy-webhook" style="padding: 10px 16px;">📋 Copy</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ⚡ CARD 4: Optimization Info -->
           <div class="card">
             <div class="card-header">
               <h3>⚡ Worker Quota Protection Strategy</h3>
@@ -357,10 +429,11 @@
               <ul style="padding-left: 20px; margin-top: 8px;">
                 <li><strong>০ ব্যাকগ্রাউন্ড পোলিং:</strong> ড্যাশবোর্ডে কোনো <code>setInterval</code> বা স্বয়ংক্রিয় লুপ নেই। সারাদিন পেজ খোলা থাকলেও ১টিও রিকোয়েস্ট কাটবে না।</li>
                 <li><strong>লোকাল ব্রাউজার ক্যাশ:</strong> কাস্টমার চ্যাট, প্রোডাক্ট তালিকা এবং স্টোর প্রোফাইল ব্রাউজারের <code>localStorage</code>-এ থাকে, ফলে ড্যাশবোর্ড লোড হয় ০ মিলিসেকেন্ডে এবং ০ ওয়ার্কার রিকোয়েস্টে।</li>
-                <li><strong>শুধুমাত্র ইভেন্ট ড্রাইভেন:</strong> কাস্টমার বাইরে থেকে আসল মেসেজ পাঠালে অথবা আপনি ড্যাশবোর্ড থেকে "Send" বা "🔄 Sync" চাপলেই কেবল ওয়ার্কার কল হবে।</li>
+                <li><strong>পোস্টিং রান হয় GitHub Actions-এ:</strong> প্রতিদিনের AI কপি তৈরি ও পোস্টিং ক্লাউডফ্লেয়ারে নয়, বরং GitHub Actions-এর ফ্রি সার্ভারে চলে।</li>
               </ul>
             </div>
           </div>
+
         </div>
       </section>
     </main>

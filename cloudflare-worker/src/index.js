@@ -60,10 +60,9 @@ export default {
       }
 
       // ==========================================
-      // ১. মেটা Webhook Verification (১-বার লাইফটাইম হ্যান্ডশেক)
-      // Facebook Page / Messenger / Instagram / WhatsApp
+      // ১. মেটা ও হোয়াটসঅ্যাপ Webhook Verification (১-বার লাইফটাইম হ্যান্ডশেক)
       // ==========================================
-      if (request.method === "GET" && (path === "/webhook/meta" || path === "/api/meta/webhook")) {
+      if (request.method === "GET" && (path === "/webhook/meta" || path === "/api/meta/webhook" || path === "/webhook/whatsapp" || path === "/api/whatsapp/webhook")) {
         const hubMode = url.searchParams.get("hub.mode");
         const hubToken = url.searchParams.get("hub.verify_token");
         const hubChallenge = url.searchParams.get("hub.challenge");
@@ -85,8 +84,23 @@ export default {
       }
 
       // ==========================================
-      // ২. মেটা Webhook ইভেন্ট রিসিভার (Inbound Message/Comment)
-      // শুধুমাত্র কাস্টমার মেসেজ দিলেই এই কোডটি ট্রিগার হবে
+      // ২. হোয়াটসঅ্যাপ Webhook ইভেন্ট রিসিভার (WhatsApp Web Bridge / Cloud API)
+      // ==========================================
+      if (request.method === "POST" && (path === "/webhook/whatsapp" || path === "/api/whatsapp/webhook")) {
+        const body = await request.json().catch(() => ({}));
+        return await handleWhatsAppUpdate(body, env, ctx, url.origin);
+      }
+
+      // ==========================================
+      // ৩. হোয়াটসঅ্যাপ কানেকশন ও কনফিগ API
+      // ==========================================
+      if (request.method === "POST" && path === "/api/setup-whatsapp") {
+        const body = await request.json();
+        return await handleSetupWhatsApp(body, env);
+      }
+
+      // ==========================================
+      // ৪. মেটা Webhook ইভেন্ট রিসিভার (Inbound Message/Comment)
       // ==========================================
       if (request.method === "POST" && (path === "/webhook/meta" || path === "/api/meta/webhook")) {
         const body = await request.json();
@@ -94,7 +108,7 @@ export default {
       }
 
       // ==========================================
-      // ৩. মেটা ১-টাইম কানেক্ট API (POST /api/setup-meta)
+      // ৫. মেটা ১-টাইম কানেক্ট API (POST /api/setup-meta)
       // ==========================================
       if (request.method === "POST" && path === "/api/setup-meta") {
         const body = await request.json();
@@ -102,7 +116,7 @@ export default {
       }
 
       // ==========================================
-      // ৪. টেলিগ্রাম Webhook (ঐচ্ছিক ব্যাকআপ)
+      // ৬. টেলিগ্রাম Webhook (ঐচ্ছিক ব্যাকআপ)
       // ==========================================
       if (request.method === "POST" && (path === "/webhook/telegram" || path === "/api/telegram/webhook")) {
         const update = await request.json();
@@ -110,7 +124,7 @@ export default {
       }
 
       // ==========================================
-      // ৫. ড্যাশবোর্ড থেকে আউটবাউন্ড অ্যাডমিন রিপ্লাই
+      // ৭. ড্যাশবোর্ড থেকে আউটবাউন্ড অ্যাডমিন রিপ্লাই
       // ==========================================
       if (request.method === "POST" && (path === "/api/admin-reply" || path === "/api/admin/reply")) {
         const body = await request.json();
@@ -179,14 +193,16 @@ export default {
       // টেস্ট ইনকামিং মেসেজ (ড্যাশবোর্ড বা কার্ল দিয়ে সরাসরি টেস্ট করার জন্য)
       if (request.method === "POST" && path === "/api/test-incoming") {
         const body = await request.json().catch(() => ({}));
-        const testSenderId = body.sender_id || `fb_user_${Math.floor(Math.random() * 89999 + 10000)}`;
-        const testName = body.sender_name || "Facebook Customer";
+        const platform = body.platform || "whatsapp";
+        const testSenderId = body.sender_id || (platform === "whatsapp" ? `wa_01882${Math.floor(Math.random() * 899999 + 100000)}` : `fb_user_${Math.floor(Math.random() * 89999 + 10000)}`);
+        const testName = body.sender_name || (platform === "whatsapp" ? "WhatsApp Customer (+88018...)" : "Facebook Customer");
         const testMsg = body.message || "Assalamu alaikum, product er dam koto?";
-        const session = await appendMessageToSession(testSenderId, testName, "customer", testMsg, "facebook", env);
+        const session = await appendMessageToSession(testSenderId, testName, "customer", testMsg, platform, env);
         return jsonResponse({
           success: true,
-          message: "Test message stored successfully in D1!",
+          message: `Test message for ${platform} stored successfully in D1!`,
           chat_id: testSenderId,
+          platform: platform,
           last_message: testMsg
         });
       }
@@ -348,7 +364,9 @@ export default {
           d1_connected: Boolean(env.DB),
           connected_accounts: accounts,
           meta_webhook_url: `${url.origin}/webhook/meta`,
-          meta_verify_token: verifyToken
+          whatsapp_webhook_url: `${url.origin}/webhook/whatsapp`,
+          meta_verify_token: verifyToken,
+          whatsapp_verify_token: verifyToken
         });
       }
 
@@ -362,11 +380,192 @@ export default {
 };
 
 // ========================================================
+// 🟢 WHATSAPP (WEB GATEWAY & CLOUD API) HANDLER
+// ========================================================
+async function handleWhatsAppUpdate(body, env, ctx, workerOrigin) {
+  let senderPhone = null;
+  let senderName = null;
+  let incomingText = null;
+
+  // ১. মেটা অফিসিয়াল ক্লাউড API পেলোড
+  if (body.object === "whatsapp_business_account" || body.entry?.[0]?.changes?.[0]?.value?.messages) {
+    const value = body.entry?.[0]?.changes?.[0]?.value;
+    const msg = value?.messages?.[0];
+    if (msg) {
+      senderPhone = msg.from;
+      senderName = value.contacts?.[0]?.profile?.name || `WhatsApp (+${senderPhone})`;
+      incomingText = msg.text?.body || msg.interactive?.button_reply?.title || "";
+    }
+  }
+  // ২. Baileys / Evolution API পেলোড
+  else if (body.event === "messages.upsert" || body.data?.message) {
+    const data = body.data || body;
+    const msg = data.message || {};
+    const jid = data.key?.remoteJid || body.sender || "";
+    if (!data.key?.fromMe) {
+      senderPhone = jid.replace(/@.*$/, "");
+      senderName = data.pushName || `WhatsApp (+${senderPhone})`;
+      incomingText = msg.conversation || msg.extendedTextMessage?.text || "";
+    }
+  }
+  // ৩. জেনেরিক বা কাস্টম ব্রিজ পেলোড ({ phone, message, name } অথবা { from, body, senderName })
+  else if (body.phone || body.from || body.number) {
+    senderPhone = String(body.phone || body.from || body.number).replace(/[^0-9]/g, "");
+    senderName = body.name || body.senderName || body.pushName || `WhatsApp (+${senderPhone})`;
+    incomingText = body.message || body.body || body.text || "";
+  }
+
+  if (!senderPhone || !incomingText || !incomingText.trim()) {
+    return jsonResponse({ status: "ignored", reason: "No valid message text or from self" });
+  }
+
+  senderPhone = senderPhone.trim();
+  incomingText = incomingText.trim();
+  const chatId = `wa_${senderPhone}`;
+
+  // অ্যান্টি-স্প্যাম ডিবাউন্স
+  const now = Date.now();
+  const lastTime = userLastMessageTime.get(chatId) || 0;
+  if (now - lastTime < 2500) {
+    await appendMessageToSession(chatId, senderName, "customer", incomingText, "whatsapp", env);
+    return jsonResponse({ status: "debounced" });
+  }
+  userLastMessageTime.set(chatId, now);
+
+  const session = await appendMessageToSession(chatId, senderName, "customer", incomingText, "whatsapp", env);
+
+  // হ্যান্ডওভার চেক (এডমিন টেকওভার চালু থাকলে AI উত্তর দেবে না)
+  if (session.admin_takeover && (session.takeover_until ? session.takeover_until > now : true)) {
+    return jsonResponse({ status: "admin_takeover_active" });
+  }
+
+  // D1 বিজনেস ডেটা রিড
+  const businessContext = await getCachedBusinessContext(env.DB);
+
+  // Gemini AI কল (Structured Response)
+  const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-6), businessContext, env);
+
+  if (aiDecision.reply) {
+    // হোয়াটসঅ্যাপে অটো-রিপ্লাই পাঠানো
+    await sendWhatsAppMessage(senderPhone, aiDecision.reply, env);
+    await appendMessageToSession(chatId, senderName, "assistant", aiDecision.reply, "whatsapp", env);
+  }
+
+  return jsonResponse({ status: "success", reply_sent: Boolean(aiDecision.reply) });
+}
+
+// 📤 হোয়াটসঅ্যাপ মেসেজ সেন্ডার (Gateway / Cloud API)
+async function sendWhatsAppMessage(recipientPhone, messageText, env) {
+  if (!recipientPhone || !messageText) return { success: false, reason: "Missing phone or text" };
+  const cleanPhone = String(recipientPhone).replace(/[^0-9]/g, '');
+
+  // ১. চেক: WhatsApp Web Gateway (Baileys / Evolution API / UltraMsg / Green API)
+  let gatewayUrl = env.WHATSAPP_GATEWAY_URL;
+  let gatewayToken = env.WHATSAPP_GATEWAY_TOKEN;
+
+  if (env.DB) {
+    const dbUrl = await getConfigValue(env.DB, "whatsapp_gateway_url", null);
+    const dbToken = await getConfigValue(env.DB, "whatsapp_gateway_token", null);
+    if (dbUrl) gatewayUrl = dbUrl;
+    if (dbToken) gatewayToken = dbToken;
+  }
+
+  if (gatewayUrl) {
+    try {
+      const res = await fetch(gatewayUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(gatewayToken ? { "apikey": gatewayToken, "Authorization": `Bearer ${gatewayToken}` } : {})
+        },
+        body: JSON.stringify({
+          number: cleanPhone,
+          to: cleanPhone,
+          text: messageText,
+          message: messageText
+        })
+      });
+      return { success: res.ok, mode: "gateway" };
+    } catch (e) {
+      console.error("WhatsApp Gateway send failed:", e);
+    }
+  }
+
+  // ২. চেক: Official Meta WhatsApp Cloud API
+  let cloudToken = env.WHATSAPP_ACCESS_TOKEN || env.META_PAGE_ACCESS_TOKEN;
+  let phoneId = env.WHATSAPP_PHONE_ID;
+
+  if (env.DB) {
+    const dbToken = await getConfigValue(env.DB, "whatsapp_access_token", null);
+    const dbPhoneId = await getConfigValue(env.DB, "whatsapp_phone_id", null);
+    if (dbToken) cloudToken = dbToken;
+    if (dbPhoneId) phoneId = dbPhoneId;
+  }
+
+  if (cloudToken && phoneId) {
+    try {
+      const res = await fetch(`https://graph.facebook.com/v19.0/${phoneId}/messages`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${cloudToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: cleanPhone,
+          type: "text",
+          text: { preview_url: false, body: messageText }
+        })
+      });
+      return { success: res.ok, mode: "cloud_api" };
+    } catch (e) {
+      console.error("WhatsApp Cloud API send failed:", e);
+    }
+  }
+
+  return { success: false, reason: "No WhatsApp credentials configured" };
+}
+
+// ⚙️ হোয়াটসঅ্যাপ কানেকশন ও কনফিগ সেভ API
+async function handleSetupWhatsApp(body, env) {
+  const { mode, gateway_url, gateway_token, phone_number_id, access_token, phone } = body;
+  if (env.DB) {
+    await ensureTables(env.DB);
+    if (mode) await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('whatsapp_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(mode).run();
+    if (gateway_url) await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('whatsapp_gateway_url', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(gateway_url.trim()).run();
+    if (gateway_token) await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('whatsapp_gateway_token', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(gateway_token.trim()).run();
+    if (phone_number_id) await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('whatsapp_phone_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(phone_number_id.trim()).run();
+    if (access_token) await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('whatsapp_access_token', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(access_token.trim()).run();
+    if (phone) await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('whatsapp_phone', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(phone.trim()).run();
+
+    await env.DB.prepare(`
+      INSERT INTO social_accounts (id, platform, account_name, account_id, access_token, status)
+      VALUES (?, 'whatsapp', ?, ?, ?, 'active')
+      ON CONFLICT(id) DO UPDATE SET
+        account_name = excluded.account_name,
+        access_token = excluded.access_token,
+        status = 'active'
+    `).bind('whatsapp_primary', `WhatsApp (${phone || 'Business'})`, phone || 'wa_main', gateway_token || access_token || 'connected').run();
+  }
+
+  return jsonResponse({
+    success: true,
+    message: "হোয়াটসঅ্যাপ সেটিংস D1 ডেটাবেসে সফলভাবে সেভ হয়েছে!"
+  });
+}
+
+// ========================================================
 // 🔵 META (FACEBOOK / INSTAGRAM / WHATSAPP) HANDLER
 // ========================================================
 async function handleMetaUpdate(body, env, ctx, workerOrigin) {
+  // হোয়াটসঅ্যাপ বিজনেস অ্যাকাউন্ট হলে সরাসরি হোয়াটসঅ্যাপ হ্যান্ডলারে পাঠানো
+  if (body.object === "whatsapp_business_account") {
+    return await handleWhatsAppUpdate(body, env, ctx, workerOrigin);
+  }
+
   // মেটা ইভেন্ট ভ্যালিডেশন
-  if (body.object !== "page" && body.object !== "whatsapp_business_account" && body.object !== "instagram") {
+  if (body.object !== "page" && body.object !== "instagram") {
     return new Response("EVENT_RECEIVED", { status: 200 });
   }
 
@@ -550,8 +749,8 @@ async function handleAdminReply(body, env) {
   const cleanText = message_text.trim();
   const cleanId = String(chat_id).replace(/^(tg_|fb_|wa_)/, '');
 
-  // মেটা পেজে রিপ্লাই
-  if (platform === "facebook" || platform === "meta" || !platform) {
+  // ১. মেটা পেজে রিপ্লাই
+  if (platform === "facebook" || platform === "meta") {
     const token = await getMetaPageToken(env);
     if (token) {
       await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
@@ -563,6 +762,9 @@ async function handleAdminReply(body, env) {
         })
       });
     }
+  } else if (platform === "whatsapp" || String(chat_id).startsWith("wa_")) {
+    // ২. হোয়াটসঅ্যাপে রিপ্লাই পাঠানো (Gateway বা Cloud API দিয়ে)
+    await sendWhatsAppMessage(cleanId, cleanText, env);
   }
 
   const session = await appendMessageToSession(cleanId, `User (${cleanId})`, "admin", cleanText, platform || "facebook", env);

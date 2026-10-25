@@ -12,6 +12,16 @@ on:
         required: false
         type: string
         default: ''
+      target_platform:
+        description: 'পোস্ট করার প্ল্যাটফর্ম (tiktok / all / facebook / telegram)'
+        required: false
+        type: choice
+        options:
+          - all
+          - tiktok
+          - facebook
+          - telegram
+        default: all
 
 jobs:
   publish-ai-post:
@@ -30,8 +40,11 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-2.0-flash-exp' }}
+          TIKTOK_ACCESS_TOKEN: ${{ secrets.TIKTOK_ACCESS_TOKEN }}
+          TIKTOK_CREATOR_ID: ${{ secrets.TIKTOK_CREATOR_ID }}
           META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
           META_PAGE_ID: ${{ secrets.META_PAGE_ID || '1287050647827199' }}
+          TARGET_PLATFORM: ${{ inputs.target_platform || 'all' }}
           PRODUCT_URL: ${{ inputs.product_url }}
           WORKER_URL: 'https://social-automate.rifatrabbi104.workers.dev'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

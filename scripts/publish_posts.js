@@ -16,8 +16,13 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp";
 const META_PAGE_ACCESS_TOKEN = process.env.META_PAGE_ACCESS_TOKEN;
 const META_PAGE_ID = process.env.META_PAGE_ID || "1287050647827199";
 
+const TIKTOK_ACCESS_TOKEN = process.env.TIKTOK_ACCESS_TOKEN;
+const TIKTOK_CREATOR_ID = process.env.TIKTOK_CREATOR_ID || process.env.TIKTOK_OPEN_ID;
+
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHANNEL_ID = process.env.TELEGRAM_CHANNEL_ID;
+
+const TARGET_PLATFORM = (process.env.TARGET_PLATFORM || "all").toLowerCase();
 
 const WORKER_URL = (process.env.WORKER_URL || "https://social-automate.rifatrabbi104.workers.dev").replace(/\/$/, "");
 const TARGET_PRODUCT_URL = (process.env.PRODUCT_URL || "").trim();
@@ -317,10 +322,66 @@ Formatting Requirements:
   return `✨ ${product.name} ✨\nঅর্ডার করতে ভিজিট করুন: ${product.product_url || "ইনবক্স করুন"}`;
 }
 
-// 📤 ৪. Facebook Page-এ ফটো সহ পোস্ট পাবলিশ (Meta Graph API)
+// 🎵 ৪. TikTok Content Posting API v2-এ পোস্ট পাবলিশ (Direct Post)
+async function publishToTikTok(caption, imageUrl) {
+  if (!TIKTOK_ACCESS_TOKEN) {
+    console.log("⚪ [TikTok Skipped] TIKTOK_ACCESS_TOKEN সিক্রেট সেট করা নেই (ঐচ্ছিক)।");
+    return { success: false, reason: "Missing credentials" };
+  }
+
+  console.log("📤 TikTok Content Posting API v2-এ পোস্ট তৈরি করা হচ্ছে...");
+
+  try {
+    let payload;
+    if (imageUrl && imageUrl.startsWith("http")) {
+      console.log(`📸 TikTok ফটো লিংক: ${imageUrl}`);
+      payload = {
+        post_info: {
+          title: caption.substring(0, 2200),
+          privacy_level: "PUBLIC_TO_EVERYONE",
+          disable_duet: false,
+          disable_comment: false,
+          disable_stitch: false
+        },
+        source_info: {
+          source: "PULL_FROM_URL",
+          photo_cover_index: 1,
+          photo_images: [imageUrl]
+        },
+        post_mode: "DIRECT_POST",
+        media_type: "PHOTO"
+      };
+    } else {
+      console.log("⚠️ TikTok পোস্টের জন্য প্রোডাক্টের ইমেজ URL আবশ্যক।");
+      return { success: false, reason: "TikTok requires a product image URL" };
+    }
+
+    const res = await fetch("https://open.tiktokapis.com/v2/post/publish/content/init/", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${TIKTOK_ACCESS_TOKEN}`,
+        "Content-Type": "application/json; charset=UTF-8"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    if (res.ok && data?.data?.publish_id) {
+      console.log(`🎉 [TikTok Post Success] Publish ID: ${data.data.publish_id}`);
+      return { success: true, id: data.data.publish_id };
+    } else {
+      console.error("❌ [TikTok Post Failed]:", JSON.stringify(data, null, 2));
+      return { success: false, error: data };
+    }
+  } catch (e) {
+    console.error("❌ TikTok API Call Error:", e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+// 📤 ৫. Facebook Page-এ ফটো সহ পোস্ট পাবলিশ (Meta Graph API)
 async function publishToFacebook(caption, imageUrl) {
   if (!META_PAGE_ACCESS_TOKEN || !META_PAGE_ID) {
-    console.log("❌ [Facebook] META_PAGE_ACCESS_TOKEN অথবা META_PAGE_ID অনুপস্থিত।");
     return { success: false, reason: "Missing credentials" };
   }
 
@@ -370,7 +431,7 @@ async function publishToFacebook(caption, imageUrl) {
   }
 }
 
-// 💬 ৫. Telegram চ্যানেলে পোস্ট পাবলিশ (ঐচ্ছিক)
+// 💬 ৬. Telegram চ্যানেলে পোস্ট পাবলিশ (ঐচ্ছিক)
 async function publishToTelegram(caption, imageUrl) {
   if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHANNEL_ID) {
     return { success: false, reason: "Telegram not configured" };
@@ -405,27 +466,27 @@ async function publishToTelegram(caption, imageUrl) {
   }
 }
 
-// 📝 ৬. D1-এ পোস্ট হিস্ট্রি সেভ করা (যাতে কালকের পোস্ট ভিন্ন হয়)
-async function recordPostHistory(productId, caption, angle, postId) {
+// 📝 ৭. D1-এ পোস্ট হিস্ট্রি সেভ করা (যাতে কালকের পোস্ট ভিন্ন হয়)
+async function recordPostHistory(productId, caption, angle, postId, platform = "tiktok") {
   try {
     await fetch(`${WORKER_URL}/api/record-post`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         product_id: productId,
-        platform: "facebook",
+        platform: platform,
         caption: caption,
         angle: angle,
         post_id: postId
       })
     });
-    console.log("💾 [D1 History] পোস্টের কপি এবং অ্যাঙ্গেল D1 ডেটাবেসে সফলভাবে রেকর্ড হয়েছে।");
+    console.log(`💾 [D1 History] (${platform}) পোস্টের কপি এবং অ্যাঙ্গেল D1 ডেটাবেসে সফলভাবে রেকর্ড হয়েছে।`);
   } catch (e) {
     console.warn("Could not record post history to D1:", e.message);
   }
 }
 
-// 🚀 ৭. প্রধান এক্সিকিউশন
+// 🚀 ৮. প্রধান এক্সিকিউশন
 async function main() {
   console.log("=================================================");
   console.log("🤖 [SocialAutomate] Daily Unique AI Post Engine");
@@ -461,34 +522,63 @@ async function main() {
   console.log(postCaption);
   console.log("--------------------------------\n");
 
-  const fbResult = await publishToFacebook(postCaption, selectedProduct.image_url);
-  const tgResult = await publishToTelegram(postCaption, selectedProduct.image_url);
+  let ttResult = { success: false, reason: "Skipped" };
+  let fbResult = { success: false, reason: "Skipped" };
+  let tgResult = { success: false, reason: "Skipped" };
 
-  if (fbResult.success && selectedProduct.id) {
-    await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, fbResult.id);
+  // ১. TikTok পাবলিশ
+  if (TARGET_PLATFORM === "all" || TARGET_PLATFORM === "tiktok") {
+    ttResult = await publishToTikTok(postCaption, selectedProduct.image_url);
+    if (ttResult.success && selectedProduct.id) {
+      await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, ttResult.id, "tiktok");
+    }
+  }
+
+  // ২. Facebook পাবলিশ (ঐচ্ছিক - টোকেন থাকলে রান হবে)
+  if (TARGET_PLATFORM === "all" || TARGET_PLATFORM === "facebook") {
+    if (META_PAGE_ACCESS_TOKEN) {
+      fbResult = await publishToFacebook(postCaption, selectedProduct.image_url);
+      if (fbResult.success && selectedProduct.id) {
+        await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, fbResult.id, "facebook");
+      }
+    } else {
+      fbResult = { success: false, reason: "Facebook skipped (Token not provided)" };
+      console.log("ℹ️ Facebook পাবলিশিং বাইপাস করা হয়েছে (টোকেন না থাকায়)। টিকটক ও টেলিগ্রাম সচল রয়েছে।");
+    }
+  }
+
+  // ৩. Telegram পাবলিশ
+  if (TARGET_PLATFORM === "all" || TARGET_PLATFORM === "telegram") {
+    tgResult = await publishToTelegram(postCaption, selectedProduct.image_url);
+    if (tgResult.success && selectedProduct.id) {
+      await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, "tg_" + Date.now(), "telegram");
+    }
   }
 
   console.log("\n📊 [RESULTS SUMMARY]:");
-  console.log(`- Facebook Status: ${fbResult.success ? "✅ Published" : "❌ Failed / Skipped"}`);
-  console.log(`- Telegram Status: ${tgResult.success ? "✅ Published" : "⚪ Not Configured"}`);
+  console.log(`- TikTok Status: ${ttResult.success ? "✅ Published" : (ttResult.reason ? "⚪ " + ttResult.reason : "❌ Failed")}`);
+  console.log(`- Facebook Status: ${fbResult.success ? "✅ Published" : (fbResult.reason ? "⚪ " + fbResult.reason : "❌ Failed")}`);
+  console.log(`- Telegram Status: ${tgResult.success ? "✅ Published" : (tgResult.reason ? "⚪ " + tgResult.reason : "❌ Failed")}`);
   console.log("🏁 Daily Unique Post Job Finished.");
 
-  if (!fbResult.success) {
-    console.error("\n❌❌ Facebook পেজে পোস্ট পাবলিশ সম্পন্ন হয়নি!");
-    if (fbResult.reason === "Missing credentials") {
-      console.error("👉 কারণ: GitHub Secrets-এ 'META_PAGE_ACCESS_TOKEN' বা 'META_PAGE_ID' সিক্রেট যোগ করা হয়নি।");
-    } else if (fbResult.error) {
-      console.error("👉 ফেসবুক থেকে আসা ইরর:", JSON.stringify(fbResult.error, null, 2));
-      if (fbResult.error.code === 200 || fbResult.error.message?.includes("permission") || fbResult.error.message?.includes("pages_manage_posts")) {
-        console.error("👉 মূল কারণ: আপনার টোকেনটিতে ফেসবুক পেজে পোস্ট করার পারমিশন (pages_manage_posts) নেই!");
-        console.error("👉 সমাধান: Graph API Explorer থেকে 'pages_manage_posts' সহ পেজ টোকেন জেনারেট করে সিক্রেটে দিন।");
-      }
+  const anySuccess = ttResult.success || fbResult.success || tgResult.success;
+  if (!anySuccess) {
+    if (!TIKTOK_ACCESS_TOKEN && !META_PAGE_ACCESS_TOKEN && !TELEGRAM_BOT_TOKEN) {
+      console.error("\n❌ কোনো সোশ্যাল প্ল্যাটফর্মের ক্রেডেনশিয়াল সেট করা নেই!");
+      console.error("👉 টিকটকে পোস্ট করার জন্য GitHub Secrets-এ 'TIKTOK_ACCESS_TOKEN' যোগ করুন।");
+      process.exitCode = 1;
+      return;
     }
-    process.exit(1);
+
+    if (ttResult.error) {
+      console.error("\n❌ TikTok পাবলিশিং ইরর:", JSON.stringify(ttResult.error, null, 2));
+      process.exitCode = 1;
+      return;
+    }
   }
 }
 
 main().catch(err => {
   console.error("Fatal Error:", err);
-  process.exit(1);
+  process.exitCode = 1;
 });

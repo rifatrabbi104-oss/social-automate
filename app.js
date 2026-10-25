@@ -87,7 +87,7 @@ function initNavigation() {
     },
     'settings': {
       title: 'Lifetime Social Connection & Webhook',
-      sub: 'মেটা ফেসবুক পেজ / হোয়াটসঅ্যাপের লাইফটাইম Webhook ও ১-ক্লিক ভেরিফিকেশন।'
+      sub: 'হোয়াটসঅ্যাপ এআই মেসেজিং ও টিকটক ডেইলি অটো-পোস্টিং কানেকশন।'
     }
   };
 
@@ -123,6 +123,38 @@ function initManualSync() {
     });
   }
 
+  const testWaBtn = document.getElementById('btn-quick-test-wa');
+  if (testWaBtn) {
+    testWaBtn.addEventListener('click', async () => {
+      testWaBtn.disabled = true;
+      testWaBtn.textContent = '⏳ Sending...';
+      try {
+        const res = await fetch(`${API_BASE}/test-incoming`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            platform: 'whatsapp',
+            sender_name: 'WhatsApp Buyer (+88018...)',
+            message: 'আসসালামু আলাইকুম ভাইয়া, পণ্যটি কি স্টকে আছে? ঢাকা সিটিতে ডেলিভারি কত দিনে পাবো?'
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('✅ WhatsApp টেস্ট মেসেজ ক্লাউড D1-এ তৈরি হয়েছে!');
+          await syncWithBackend();
+          if (data.chat_id) {
+            openConversation(data.chat_id);
+          }
+        }
+      } catch (e) {
+        showToast('❌ টেস্ট মেসেজ পাঠানো যায়নি: ' + e.message);
+      } finally {
+        testWaBtn.disabled = false;
+        testWaBtn.textContent = '🟢 Test WA';
+      }
+    });
+  }
+
   const testBtn = document.getElementById('btn-quick-test');
   if (testBtn) {
     testBtn.addEventListener('click', async () => {
@@ -133,13 +165,14 @@ function initManualSync() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            platform: 'facebook',
             sender_name: 'Mr. Rafiq (Test Customer)',
             message: 'আসসালামু আলাইকুম, আপনাদের এই প্রোডাক্টের ডেলিভারি চার্জ কত?'
           })
         });
         const data = await res.json();
         if (data.success) {
-          showToast('✅ টেস্ট মেসেজ ক্লাউড D1-এ তৈরি হয়েছে!');
+          showToast('✅ Facebook টেস্ট মেসেজ ক্লাউড D1-এ তৈরি হয়েছে!');
           await syncWithBackend();
           if (data.chat_id) {
             openConversation(data.chat_id);
@@ -149,7 +182,7 @@ function initManualSync() {
         showToast('❌ টেস্ট মেসেজ পাঠানো যায়নি: ' + e.message);
       } finally {
         testBtn.disabled = false;
-        testBtn.textContent = '🧪 Test Msg';
+        testBtn.textContent = '🔵 Test FB';
       }
     });
   }
@@ -588,9 +621,90 @@ function initBusinessDataForms() {
 }
 
 // ========================================================
-// ৬. ১-টাইম লাইফটাইম সোশ্যাল কানেকশন (Meta / Webhook)
+// ৬. ১-টাইম লাইফটাইম সোশ্যাল কানেকশন (WhatsApp / TikTok / Meta)
 // ========================================================
 function initSettingsForm() {
+  // ১. WhatsApp Connect Form
+  const waForm = document.getElementById('whatsapp-connect-form');
+  const waPhoneInput = document.getElementById('input-wa-phone');
+  const waModeInput = document.getElementById('input-wa-mode');
+  const waGatewayUrlInput = document.getElementById('input-wa-gateway-url');
+  const waTokenInput = document.getElementById('input-wa-token');
+  const waSubmitBtn = document.getElementById('btn-save-whatsapp');
+  const waResultBox = document.getElementById('wa-setup-result');
+  const waCopyBtn = document.getElementById('btn-copy-wa-webhook');
+  const waWebhookInput = document.getElementById('display-wa-webhook-url');
+
+  if (waCopyBtn && waWebhookInput) {
+    waCopyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(waWebhookInput.value).then(() => {
+        showToast('📋 WhatsApp Webhook URL কপি হয়েছে!');
+      });
+    });
+  }
+
+  if (waForm) {
+    waForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const phone = waPhoneInput ? waPhoneInput.value.trim() : '';
+      const mode = waModeInput ? waModeInput.value : 'gateway';
+      const gatewayUrl = waGatewayUrlInput ? waGatewayUrlInput.value.trim() : '';
+      const token = waTokenInput ? waTokenInput.value.trim() : '';
+
+      if (waSubmitBtn) {
+        waSubmitBtn.disabled = true;
+        waSubmitBtn.textContent = '⏳ Saving WhatsApp to D1...';
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/setup-whatsapp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone: phone,
+            mode: mode,
+            gateway_url: gatewayUrl,
+            gateway_token: token,
+            access_token: token
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (waResultBox) {
+            waResultBox.style.display = 'block';
+            waResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            waResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            waResultBox.style.color = '#a7f3d0';
+            waResultBox.innerHTML = `
+              <strong>✅ WhatsApp সফলভাবে সংযুক্ত হয়েছে!</strong><br>
+              নম্বর: <strong>${escapeHtml(phone)}</strong> (মোড: ${mode === 'gateway' ? '🌐 Web Gateway' : '☁️ Cloud API'})<br>
+              স্ট্যাটাস: এখন থেকে কোনো কাস্টমার মেসেজ দিলে AI স্বয়ংক্রিয়ভাবে উত্তর দেবে।
+            `;
+          }
+          showToast('🎉 WhatsApp সেটিংস D1-এ সেভ হয়েছে!');
+        } else {
+          if (waResultBox) {
+            waResultBox.style.display = 'block';
+            waResultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+            waResultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+            waResultBox.style.color = '#fca5a5';
+            waResultBox.innerHTML = `❌ ${escapeHtml(data.error || 'Failed to save WhatsApp config')}`;
+          }
+          showToast('❌ সেভ করতে ব্যর্থ হয়েছে।');
+        }
+      } catch (err) {
+        showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
+      } finally {
+        if (waSubmitBtn) {
+          waSubmitBtn.disabled = false;
+          waSubmitBtn.textContent = '💾 Connect WhatsApp to D1';
+        }
+      }
+    });
+  }
+
+  // ২. Meta (Facebook) Form (Optional)
   const form = document.getElementById('meta-connect-form');
   const tokenInput = document.getElementById('input-meta-token');
   const pageIdInput = document.getElementById('input-meta-page-id');
@@ -616,7 +730,7 @@ function initSettingsForm() {
       if (!token) return;
 
       submitBtn.disabled = true;
-      submitBtn.textContent = '⏳ Verifying 1-Time Lifetime Connection...';
+      submitBtn.textContent = '⏳ Saving Meta Settings...';
 
       try {
         const res = await fetch(`${API_BASE}/setup-meta`, {
@@ -632,25 +746,23 @@ function initSettingsForm() {
           resultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
           resultBox.style.color = '#a7f3d0';
           resultBox.innerHTML = `
-            <strong>✅ লাইফটাইম কানেকশন সম্পন্ন!</strong><br>
-            সংযুক্ত পেজ: <strong>${escapeHtml(data.account.name)}</strong> (ID: ${escapeHtml(data.account.id)})<br>
-            স্ট্যাটাস: Webhook সাবস্ক্রিপশন আজীবনের জন্য অ্যাক্টিভ হয়েছে।
+            <strong>✅ মেটা সেটিংস সেভ হয়েছে!</strong><br>
+            সংযুক্ত পেজ: <strong>${escapeHtml(data.account.name)}</strong> (ID: ${escapeHtml(data.account.id)})
           `;
-          showToast('🎉 পেজ সফলভাবে লাইফটাইম কানেক্ট হয়েছে!');
-          tokenInput.value = '';
+          showToast('🎉 মেটা সেটিংস সফলভাবে সেভ হয়েছে!');
         } else {
           resultBox.style.display = 'block';
           resultBox.style.background = 'rgba(239, 68, 68, 0.15)';
           resultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
           resultBox.style.color = '#fca5a5';
           resultBox.innerHTML = `❌ ${escapeHtml(data.error || 'Connection failed')}`;
-          showToast('❌ কানেকশন ব্যর্থ হয়েছে।');
+          showToast('❌ সেভ ব্যর্থ হয়েছে।');
         }
       } catch (err) {
         showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
       } finally {
         submitBtn.disabled = false;
-        submitBtn.textContent = '💾 Connect Once for Lifetime';
+        submitBtn.textContent = '💾 Save Meta Settings';
       }
     });
   }
@@ -660,6 +772,10 @@ function updateSettingsUI(settings) {
   const webhookInput = document.getElementById('display-webhook-url');
   if (webhookInput && settings.meta_webhook_url) {
     webhookInput.value = settings.meta_webhook_url;
+  }
+  const waWebhookInput = document.getElementById('display-wa-webhook-url');
+  if (waWebhookInput && settings.whatsapp_webhook_url) {
+    waWebhookInput.value = settings.whatsapp_webhook_url;
   }
 }
 
