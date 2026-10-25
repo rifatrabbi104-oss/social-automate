@@ -120,36 +120,42 @@ async function fetchProductFromWebUrl(url) {
 
 // 📦 ২. D1 ডেটাবেস থেকে অটো-পোস্টিং টাস্ক ও হিস্ট্রি রিড করা
 async function getAutoPostTasks() {
+  let credentials = {};
   if (TARGET_PRODUCT_URL) {
     const webProduct = await fetchProductFromWebUrl(TARGET_PRODUCT_URL);
-    if (webProduct) return [webProduct];
+    if (webProduct) return { tasks: [webProduct], credentials: {} };
   }
 
   try {
     const res = await fetch(`${WORKER_URL}/api/auto-post-task`);
     if (res.ok) {
       const data = await res.json();
+      credentials = data.credentials || {};
       if (data.success && Array.isArray(data.tasks) && data.tasks.length > 0) {
         console.log(`📦 D1 থেকে ${data.tasks.length}টি শিডিউল্ড প্রোডাক্ট পাওয়া গেছে।`);
-        return data.tasks;
+        return { tasks: data.tasks, credentials };
       }
     }
   } catch (e) {
     console.log("Worker auto-post API unavailable:", e.message);
   }
 
-  return [
-    {
-      id: "demo_watch_1",
-      name: "প্রিমিয়াম কোয়ালিটি মেনস ফ্যাশন ওয়াচ",
-      price: 1450,
-      description: "ওয়াটারপ্রুফ, স্টেইনলেস স্টিল চেইন, ১ বছরের ওয়ারেন্টি সহ আকর্ষণীয় লুক।",
-      category: "ফ্যাশন",
-      image_url: "https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=1000&q=80",
-      product_url: "",
-      previous_posts: []
-    }
-  ];
+  return {
+    tasks: [
+      {
+        id: "demo_watch_1",
+        name: "প্রিমিয়াম কোয়ালিটি মেনস ফ্যাশন ওয়াচ",
+        price: 1450,
+        description: "ওয়াটারপ্রুফ, স্টেইনলেস স্টিল চেইন, ১ বছরের ওয়ারেন্টি সহ আকর্ষণীয় লুক।",
+        category: "ফ্যাশন",
+        image_url: "https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=1000&q=80",
+        product_url: "",
+        target_platform: "tiktok",
+        previous_posts: []
+      }
+    ],
+    credentials
+  };
 }
 
 // ⚡ ৩.১ Gemini Multimodal Live WebSocket Engine
@@ -323,9 +329,10 @@ Formatting Requirements:
 }
 
 // 🎵 ৪. TikTok Content Posting API v2-এ পোস্ট পাবলিশ (Direct Post)
-async function publishToTikTok(caption, imageUrl) {
-  if (!TIKTOK_ACCESS_TOKEN) {
-    console.log("⚪ [TikTok Skipped] TIKTOK_ACCESS_TOKEN সিক্রেট সেট করা নেই (ঐচ্ছিক)।");
+async function publishToTikTok(caption, imageUrl, token = null) {
+  const activeToken = token || TIKTOK_ACCESS_TOKEN;
+  if (!activeToken) {
+    console.log("⚪ [TikTok Skipped] ড্যাশবোর্ড বা GitHub Secrets-এ কোনো TikTok টোকেন নেই (ঐচ্ছিক)।");
     return { success: false, reason: "Missing credentials" };
   }
 
@@ -359,7 +366,7 @@ async function publishToTikTok(caption, imageUrl) {
     const res = await fetch("https://open.tiktokapis.com/v2/post/publish/content/init/", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${TIKTOK_ACCESS_TOKEN}`,
+        "Authorization": `Bearer ${activeToken}`,
         "Content-Type": "application/json; charset=UTF-8"
       },
       body: JSON.stringify(payload)
@@ -380,24 +387,26 @@ async function publishToTikTok(caption, imageUrl) {
 }
 
 // 📤 ৫. Facebook Page-এ ফটো সহ পোস্ট পাবলিশ (Meta Graph API)
-async function publishToFacebook(caption, imageUrl) {
-  if (!META_PAGE_ACCESS_TOKEN || !META_PAGE_ID) {
+async function publishToFacebook(caption, imageUrl, token = null, pageId = null) {
+  const activeToken = token || META_PAGE_ACCESS_TOKEN;
+  const activePageId = pageId || META_PAGE_ID;
+  if (!activeToken || !activePageId) {
     return { success: false, reason: "Missing credentials" };
   }
 
-  console.log(`📤 Facebook Page (${META_PAGE_ID})-এ পোস্ট পাবলিশ করা হচ্ছে...`);
+  console.log(`📤 Facebook Page (${activePageId})-এ পোস্ট পাবলিশ করা হচ্ছে...`);
 
   // ছবির লিংক থাকলে /photos এন্ডপয়েন্টে পোস্ট
   if (imageUrl && imageUrl.startsWith("http")) {
     console.log(`📸 ছবির লিংক: ${imageUrl}`);
-    const photoUrl = `https://graph.facebook.com/v19.0/${META_PAGE_ID}/photos`;
+    const photoUrl = `https://graph.facebook.com/v19.0/${activePageId}/photos`;
     const res = await fetch(photoUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: imageUrl,
         caption: caption,
-        access_token: META_PAGE_ACCESS_TOKEN
+        access_token: activeToken
       })
     });
 
@@ -411,13 +420,13 @@ async function publishToFacebook(caption, imageUrl) {
   }
 
   // ছবি ছাড়া টেক্সট পোস্ট (/feed)
-  const feedUrl = `https://graph.facebook.com/v19.0/${META_PAGE_ID}/feed`;
+  const feedUrl = `https://graph.facebook.com/v19.0/${activePageId}/feed`;
   const res = await fetch(feedUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       message: caption,
-      access_token: META_PAGE_ACCESS_TOKEN
+      access_token: activeToken
     })
   });
 

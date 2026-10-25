@@ -38,12 +38,15 @@ let appState = {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Deep link check (?chat_id=123)
+  // Deep link check (?chat_id=123 or ?tab=settings or ?tiktok_connected=1)
   const urlParams = new URLSearchParams(window.location.search);
   const deepChatId = urlParams.get('chat_id');
   if (deepChatId) {
     appState.activeChatId = deepChatId.replace(/^(tg_|fb_|wa_)/, '');
   }
+
+  const tabParam = urlParams.get('tab');
+  const tiktokConnected = urlParams.get('tiktok_connected');
 
   initNavigation();
   initChatReply();
@@ -59,6 +62,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (appState.activeChatId) {
     renderActiveChat();
+  }
+
+  if (tabParam === 'settings' || tiktokConnected === '1') {
+    const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
+    if (settingsNav) settingsNav.click();
+    if (tiktokConnected === '1') {
+      showToast('🎉 TikTok অ্যাকাউন্ট সফলভাবে সংযুক্ত হয়েছে!');
+      const tkResult = document.getElementById('tiktok-setup-result');
+      if (tkResult) {
+        tkResult.style.display = 'block';
+        tkResult.style.background = 'rgba(16, 185, 129, 0.15)';
+        tkResult.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+        tkResult.style.color = '#a7f3d0';
+        tkResult.innerHTML = '<strong>✅ TikTok অ্যাকাউন্ট সফলভাবে সংযুক্ত হয়েছে!</strong><br>Access Token আপনার ক্লাউড D1 ডেটাবেসে সুরক্ষিত রয়েছে। এখন থেকে প্রোডাক্ট শিডিউলে টিকটকে অটো-পোস্ট হবে।';
+      }
+    }
   }
 
   // Only if local storage is completely empty, trigger a silent 1-time fetch
@@ -498,7 +517,7 @@ function renderProductsTable() {
   if (!tbody) return;
 
   if (appState.products.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; padding: 24px; color: var(--text-dim);">কোনো প্রোডাক্ট নেই। উপরে অ্যাড করুন বা 🔄 Sync চাপুন।</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 24px; color: var(--text-dim);">কোনো প্রোডাক্ট নেই। উপরে অ্যাড করুন বা 🔄 Sync চাপুন।</td></tr>`;
     return;
   }
 
@@ -513,9 +532,16 @@ function renderProductsTable() {
       ? `<a href="${escapeHtml(p.product_url)}" target="_blank" style="color: var(--primary-light); text-decoration: underline;">${escapeHtml(p.name)} 🔗</a>`
       : `<strong>${escapeHtml(p.name)}</strong>`;
 
+    const platformBadge = p.target_platform === 'facebook'
+      ? `<span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🔵 FB</span>`
+      : (p.target_platform === 'all'
+        ? `<span style="background: rgba(139, 92, 246, 0.15); color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🌐 All</span>`
+        : `<span style="background: rgba(254, 44, 85, 0.15); color: #fe2c55; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🎵 TikTok</span>`);
+
     tr.innerHTML = `
       <td>${productTitle}</td>
       <td><span style="color: var(--emerald); font-weight: 700;">৳${p.price}</span></td>
+      <td>${platformBadge}</td>
       <td>${autoBadge}</td>
       <td><span class="badge-status ${p.stock_status === 'in_stock' ? 'published' : 'pending'}">${p.stock_status === 'in_stock' ? 'In Stock' : 'Out of Stock'}</span></td>
       <td><button class="btn-refresh" style="color: var(--rose); font-size: 11px;" onclick="deleteProduct('${p.id}')">🗑️</button></td>
@@ -556,6 +582,7 @@ function initBusinessDataForms() {
       const url = document.getElementById('prod-url') ? document.getElementById('prod-url').value.trim() : '';
       const img = document.getElementById('prod-img') ? document.getElementById('prod-img').value.trim() : '';
       const postTime = document.getElementById('prod-post-time') ? document.getElementById('prod-post-time').value : '10:00';
+      const targetPlatform = document.getElementById('prod-target-platform') ? document.getElementById('prod-target-platform').value : 'tiktok';
       const autoPost = document.getElementById('prod-auto-post') ? Number(document.getElementById('prod-auto-post').value) : 1;
       const stock = document.getElementById('prod-stock').value;
       const desc = document.getElementById('prod-desc').value.trim();
@@ -569,6 +596,7 @@ function initBusinessDataForms() {
         product_url: url,
         image_url: img,
         posting_time: postTime,
+        target_platform: targetPlatform,
         daily_auto_post: autoPost,
         stock_status: stock,
         description: desc
@@ -704,7 +732,111 @@ function initSettingsForm() {
     });
   }
 
-  // ২. Meta (Facebook) Form (Optional)
+  // ২. TikTok Connect Form, 1-Click OAuth & On-Demand Test Post
+  const tkForm = document.getElementById('tiktok-connect-form');
+  const tkKeyInput = document.getElementById('input-tiktok-client-key');
+  const tkSecretInput = document.getElementById('input-tiktok-client-secret');
+  const tkTokenInput = document.getElementById('input-tiktok-access-token');
+  const tkSubmitBtn = document.getElementById('btn-save-tiktok');
+  const tkOAuthBtn = document.getElementById('btn-tiktok-oauth');
+  const tkResultBox = document.getElementById('tiktok-setup-result');
+  const tkCopyUriBtn = document.getElementById('btn-copy-tiktok-uri');
+  const tkUriInput = document.getElementById('display-tiktok-redirect-uri');
+  const tkTestPostBtn = document.getElementById('btn-test-post-tiktok');
+
+  if (tkCopyUriBtn && tkUriInput) {
+    tkCopyUriBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(tkUriInput.value).then(() => {
+        showToast('📋 TikTok Redirect URI কপি হয়েছে!');
+      });
+    });
+  }
+
+  if (tkOAuthBtn) {
+    tkOAuthBtn.addEventListener('click', () => {
+      const key = tkKeyInput ? tkKeyInput.value.trim() : '';
+      if (!key) {
+        showToast('⚠️ অনুগ্রহ করে প্রথমে TikTok Client Key বসান!');
+        return;
+      }
+      showToast('🚀 TikTok Authorize পেজে নিয়ে যাওয়া হচ্ছে...');
+      window.location.href = `${API_BASE}/auth/tiktok/login?client_key=${encodeURIComponent(key)}`;
+    });
+  }
+
+  if (tkForm) {
+    tkForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const key = tkKeyInput ? tkKeyInput.value.trim() : '';
+      const secret = tkSecretInput ? tkSecretInput.value.trim() : '';
+      const token = tkTokenInput ? tkTokenInput.value.trim() : '';
+
+      if (tkSubmitBtn) {
+        tkSubmitBtn.disabled = true;
+        tkSubmitBtn.textContent = '⏳ Saving TikTok to D1...';
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/setup-tiktok`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_key: key,
+            client_secret: secret,
+            access_token: token
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (tkResultBox) {
+            tkResultBox.style.display = 'block';
+            tkResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            tkResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            tkResultBox.style.color = '#a7f3d0';
+            tkResultBox.innerHTML = `
+              <strong>✅ TikTok সেটিংস D1 ডেটাবেসে সেভ হয়েছে!</strong><br>
+              Client Key: <strong>${escapeHtml(key)}</strong><br>
+              এখন আপনি <strong>🔗 1-Click Authorize TikTok</strong> চাপলে সরাসরি টিকটকের সাথে কানেক্ট হয়ে যাবে।
+            `;
+          }
+          showToast('🎉 TikTok ক্রেডেনশিয়ালস D1-এ সেভ হয়েছে!');
+        } else {
+          showToast('❌ সেভ ব্যর্থ: ' + (data.error || 'Server error'));
+        }
+      } catch (err) {
+        showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
+      } finally {
+        if (tkSubmitBtn) {
+          tkSubmitBtn.disabled = false;
+          tkSubmitBtn.textContent = '💾 Save TikTok Keys to D1';
+        }
+      }
+    });
+  }
+
+  if (tkTestPostBtn) {
+    tkTestPostBtn.addEventListener('click', async () => {
+      tkTestPostBtn.disabled = true;
+      tkTestPostBtn.textContent = '⏳ Triggering Post...';
+      try {
+        const res = await fetch(`${API_BASE}/trigger-post`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_platform: 'tiktok' })
+        });
+        const data = await res.json();
+        showToast(data.message || 'পোস্টিং টাস্ক ট্রিগার হয়েছে!');
+      } catch (e) {
+        showToast('❌ ট্রিগার এরর: ' + e.message);
+      } finally {
+        tkTestPostBtn.disabled = false;
+        tkTestPostBtn.textContent = '🚀 1-Click Test Post Now';
+      }
+    });
+  }
+
+  // ৩. Meta (Facebook) Form (Optional)
   const form = document.getElementById('meta-connect-form');
   const tokenInput = document.getElementById('input-meta-token');
   const pageIdInput = document.getElementById('input-meta-page-id');

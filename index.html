@@ -221,6 +221,14 @@
                   </select>
                 </div>
                 <div class="form-group" style="flex: 1;">
+                  <label>🎯 Target Social Platform</label>
+                  <select id="prod-target-platform" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
+                    <option value="tiktok" selected>🎵 TikTok (Primary Auto-Post)</option>
+                    <option value="facebook">🔵 Facebook Page</option>
+                    <option value="all">🌐 All Channels</option>
+                  </select>
+                </div>
+                <div class="form-group" style="flex: 1;">
                   <label>🔄 Daily Auto-Post Status</label>
                   <select id="prod-auto-post" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
                     <option value="1">🟢 প্রতিদিন অটো-পোস্ট চালু (Active)</option>
@@ -251,6 +259,7 @@
                   <tr>
                     <th>Product</th>
                     <th>Price</th>
+                    <th>Platform</th>
                     <th>⏰ Daily Schedule</th>
                     <th>Stock</th>
                     <th>Action</th>
@@ -362,25 +371,51 @@
             </div>
           </div>
 
-          <!-- 🎵 CARD 2: TikTok AI Daily Post Publisher -->
+          <!-- 🎵 CARD 2: TikTok AI Daily Post Publisher & 1-Click Connection -->
           <div class="card">
             <div class="card-header">
-              <h3>🎵 TikTok AI Daily Scheduled Posting</h3>
-              <span class="badge-status published">GitHub Actions Engine</span>
+              <h3>🎵 TikTok AI Scheduled Posting & Connection</h3>
+              <span class="badge-status published">Primary Posting Channel</span>
             </div>
-            <p class="section-desc">TikTok Content Posting API v2 এর মাধ্যমে আপনার প্রোডাক্টের ফটো ও ইউনিক সেলস কপি প্রতিদিন স্বয়ংক্রিয়ভাবে টিকটকে প্রকাশ হবে (১০০% ফ্রি ক্লাউড রানে):</p>
+            <p class="section-desc">TikTok Content Posting API এর মাধ্যমে ড্যাশবোর্ড থেকে প্রোডাক্ট শিডিউল অনুযায়ী প্রতিদিন অটো-পোস্ট হবে:</p>
             
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); padding: 16px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.8; color: var(--text-muted); margin-bottom: 16px;">
-              <strong style="color: var(--text-main);">টিকটকে স্বয়ংক্রিয় পোস্টিং চালু করার সহজ ৩টি ধাপ:</strong>
-              <ol style="padding-left: 20px; margin-top: 8px;">
-                <li><strong>TikTok Developers</strong> পোর্টাল (<a href="https://developers.tiktok.com" target="_blank" style="color: var(--violet); text-decoration: underline;">developers.tiktok.com</a>) থেকে আপনার অ্যাপের <code>TIKTOK_ACCESS_TOKEN</code> সংগ্রহ করুন।</li>
-                <li>আপনার GitHub রিপোজিটরির <strong>Settings → Secrets and variables → Actions</strong>-এ গিয়ে <code>TIKTOK_ACCESS_TOKEN</code> সিক্রেট হিসেবে পেস্ট করুন।</li>
-                <li>ব্যাস! GitHub Actions ক্রন শিডিউলার প্রতিদিন নির্দিষ্ট সময়ে সম্পূর্ণ নতুন মার্কেটিং অ্যাঙ্গেলে টিকটকে পোস্ট করবে।</li>
-              </ol>
+            <form id="tiktok-connect-form">
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
+                  <label>TikTok Client Key</label>
+                  <input type="text" id="input-tiktok-client-key" value="awq5kzk0rv01o6z0" placeholder="awq5kzk0rv01o6z0" required>
+                </div>
+                <div class="form-group" style="flex: 1;">
+                  <label>TikTok Client Secret</label>
+                  <input type="password" id="input-tiktok-client-secret" value="qPS7nDAWsOnVHlQfpCupniBZQ19E96pb" placeholder="Client secret" required>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Direct Access Token (OAuth না করতে চাইলে সরাসরি টোকেন বসাতে পারেন - ঐচ্ছিক)</label>
+                <input type="password" id="input-tiktok-access-token" placeholder="act.example_access_token...">
+              </div>
+
+              <div style="display: flex; gap: 10px; margin-bottom: 14px;">
+                <button type="submit" class="btn-secondary" id="btn-save-tiktok" style="flex: 1;">💾 Save TikTok Keys to D1</button>
+                <button type="button" class="btn-primary" id="btn-tiktok-oauth" style="flex: 1.2; background: linear-gradient(135deg, #fe2c55, #25f4ee); border: none; font-weight: 700; color: #fff;">🔗 1-Click Authorize TikTok</button>
+              </div>
+            </form>
+
+            <div id="tiktok-setup-result" style="display: none; margin-bottom: 16px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
+
+            <div class="form-group">
+              <label>TikTok Redirect URI (টিকটক ডেভেলপার পোর্টালে এই লিংকটি বসান)</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="display-tiktok-redirect-uri" value="https://social-automate.rifatrabbi104.workers.dev/api/auth/tiktok/callback" readonly style="flex: 1;">
+                <button type="button" class="btn-refresh" id="btn-copy-tiktok-uri" style="padding: 10px 16px;">📋 Copy</button>
+              </div>
+              <small class="help-text">টিকটক পোর্টালের <strong>Products ➜ Login Kit</strong>-এ এই Redirect URI টি পেস্ট করবেন।</small>
             </div>
 
-            <div style="display: flex; gap: 10px;">
-              <a href="https://github.com/rifatrabbi104-oss/social-automate/actions" target="_blank" class="btn-primary" style="flex: 1; text-align: center; text-decoration: none; padding: 12px 14px;">🚀 Open GitHub Actions Scheduler</a>
+            <div style="display: flex; gap: 10px; margin-top: 16px;">
+              <button type="button" class="btn-secondary" id="btn-test-post-tiktok" style="flex: 1; padding: 12px 14px; font-weight: 600;">🚀 1-Click Test Post Now</button>
+              <a href="https://github.com/rifatrabbi104-oss/social-automate/actions" target="_blank" class="btn-refresh" style="text-align: center; text-decoration: none; padding: 12px 14px;">📊 View Post Logs</a>
             </div>
           </div>
 

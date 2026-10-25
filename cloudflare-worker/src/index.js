@@ -100,6 +100,33 @@ export default {
       }
 
       // ==========================================
+      // ৩.১ টিকটক ড্যাশবোর্ড কানেকশন ও কনফিগ API
+      // ==========================================
+      if (request.method === "POST" && path === "/api/setup-tiktok") {
+        const body = await request.json();
+        return await handleSetupTikTok(body, env);
+      }
+
+      // ==========================================
+      // ৩.২ টিকটক অফিসিয়াল OAuth ১-ক্লিক লগইন ও কলব্যাক
+      // ==========================================
+      if (request.method === "GET" && path === "/api/auth/tiktok/login") {
+        return await handleTikTokOAuthLogin(url, env);
+      }
+
+      if (request.method === "GET" && path === "/api/auth/tiktok/callback") {
+        return await handleTikTokOAuthCallback(url, env);
+      }
+
+      // ==========================================
+      // ৩.৩ ড্যাশবোর্ড থেকে ১-ক্লিক ইনস্ট্যান্ট পোস্ট ট্রিগার
+      // ==========================================
+      if (request.method === "POST" && path === "/api/trigger-post") {
+        const body = await request.json().catch(() => ({}));
+        return await handleTriggerPost(body, env);
+      }
+
+      // ==========================================
       // ৪. মেটা Webhook ইভেন্ট রিসিভার (Inbound Message/Comment)
       // ==========================================
       if (request.method === "POST" && (path === "/webhook/meta" || path === "/api/meta/webhook")) {
@@ -223,12 +250,12 @@ export default {
         if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
         await ensureTables(env.DB);
         const body = await request.json();
-        const { id, name, price, description, category, image_url, product_url, posting_time, daily_auto_post, stock_status } = body;
+        const { id, name, price, description, category, image_url, product_url, posting_time, daily_auto_post, stock_status, target_platform } = body;
 
         const prodId = id || `prod_${Date.now()}`;
         await env.DB.prepare(`
-          INSERT INTO products (id, name, price, description, category, image_url, product_url, posting_time, daily_auto_post, stock_status, is_active)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          INSERT INTO products (id, name, price, description, category, image_url, product_url, posting_time, daily_auto_post, stock_status, target_platform, is_active)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             price = excluded.price,
@@ -238,7 +265,8 @@ export default {
             product_url = excluded.product_url,
             posting_time = excluded.posting_time,
             daily_auto_post = excluded.daily_auto_post,
-            stock_status = excluded.stock_status
+            stock_status = excluded.stock_status,
+            target_platform = excluded.target_platform
         `).bind(
           prodId,
           name,
@@ -249,7 +277,8 @@ export default {
           product_url || '',
           posting_time || '10:00',
           daily_auto_post !== undefined ? Number(daily_auto_post) : 1,
-          stock_status || 'in_stock'
+          stock_status || 'in_stock',
+          target_platform || 'tiktok'
         ).run();
 
         await invalidateBusinessCache();
@@ -273,7 +302,7 @@ export default {
         if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
         await ensureTables(env.DB);
 
-        // অ্যাক্টিভ শিডিউল্ড প্রোডাক্টগুলো নেওয়া
+        // ১. অ্যাক্টিভ শিডিউল্ড প্রোডাক্টগুলো নেওয়া
         const { results: prods } = await env.DB.prepare(
           "SELECT * FROM products WHERE is_active = 1 AND daily_auto_post = 1 ORDER BY created_at DESC"
         ).all();
@@ -282,19 +311,35 @@ export default {
         for (const p of (prods || [])) {
           // পূর্বের পোস্ট হিস্ট্রি (যাতে AI রিপিট না করে)
           const { results: hist } = await env.DB.prepare(
-            "SELECT caption, angle, published_at FROM post_history WHERE product_id = ? ORDER BY published_at DESC LIMIT 3"
+            "SELECT caption, angle, platform, published_at FROM post_history WHERE product_id = ? ORDER BY published_at DESC LIMIT 3"
           ).bind(p.id).all();
 
           tasks.push({
             ...p,
+            target_platform: p.target_platform || "tiktok",
             previous_posts: hist || []
           });
+        }
+
+        // ২. D1 থেকে সোশ্যাল অ্যাকাউন্ট ক্রেডেনশিয়ালস নেওয়া (TikTok, Facebook, etc.)
+        const { results: accs } = await env.DB.prepare(
+          "SELECT platform, account_name, account_id, access_token FROM social_accounts WHERE status = 'active'"
+        ).all();
+
+        const credentials = {};
+        for (const a of (accs || [])) {
+          credentials[a.platform] = {
+            name: a.account_name,
+            id: a.account_id,
+            token: a.access_token
+          };
         }
 
         return jsonResponse({
           success: true,
           count: tasks.length,
-          tasks
+          tasks,
+          credentials
         });
       }
 
@@ -552,6 +597,153 @@ async function handleSetupWhatsApp(body, env) {
   return jsonResponse({
     success: true,
     message: "হোয়াটসঅ্যাপ সেটিংস D1 ডেটাবেসে সফলভাবে সেভ হয়েছে!"
+  });
+}
+
+// ========================================================
+// 🎵 TIKTOK OFFICIAL OAUTH & SETUP HANDLERS
+// ========================================================
+async function handleSetupTikTok(body, env) {
+  if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+  await ensureTables(env.DB);
+  const { access_token, client_key, client_secret, account_name } = body;
+
+  if (client_key) {
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('tiktok_client_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(client_key.trim()).run();
+  }
+  if (client_secret) {
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('tiktok_client_secret', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(client_secret.trim()).run();
+  }
+
+  if (access_token && access_token.trim()) {
+    const cleanToken = access_token.trim();
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('tiktok_access_token', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(cleanToken).run();
+    await env.DB.prepare(`
+      INSERT INTO social_accounts (id, platform, account_name, account_id, access_token, status)
+      VALUES ('tiktok_primary', 'tiktok', ?, 'tiktok_main', ?, 'active')
+      ON CONFLICT(id) DO UPDATE SET
+        account_name = excluded.account_name,
+        access_token = excluded.access_token,
+        status = 'active'
+    `).bind(account_name || 'TikTok Creator Account', cleanToken).run();
+  }
+
+  return jsonResponse({
+    success: true,
+    message: "TikTok অ্যাকাউন্ট সেটিংস D1 ডেটাবেসে সফলভাবে সেভ হয়েছে!"
+  });
+}
+
+async function handleTikTokOAuthLogin(url, env) {
+  let clientKey = url.searchParams.get("client_key");
+  if (!clientKey && env.DB) {
+    clientKey = await getConfigValue(env.DB, "tiktok_client_key", null);
+  }
+  if (!clientKey && env.TIKTOK_CLIENT_KEY) {
+    clientKey = env.TIKTOK_CLIENT_KEY;
+  }
+  if (!clientKey) {
+    return jsonResponse({ error: "Missing TikTok client_key. অনুগ্রহ করে প্রথমে ড্যাশবোর্ডে TikTok Client Key সেভ করুন।" }, 400);
+  }
+
+  const redirectUri = encodeURIComponent(`${url.origin}/api/auth/tiktok/callback`);
+  const state = Math.random().toString(36).substring(7);
+  const tiktokAuthUrl = `https://www.tiktok.com/v2/auth/authorize/?client_key=${clientKey}&scope=user.info.basic,video.publish,video.upload&response_type=code&redirect_uri=${redirectUri}&state=${state}`;
+  return Response.redirect(tiktokAuthUrl, 302);
+}
+
+async function handleTikTokOAuthCallback(url, env) {
+  const code = url.searchParams.get("code");
+  const error = url.searchParams.get("error");
+  if (error || !code) {
+    return new Response(`TikTok কানেকশন ব্যর্থ হয়েছে: ${error || "Code পাওয়া যায়নি"}`, { status: 400 });
+  }
+
+  let clientKey = (env.DB ? await getConfigValue(env.DB, "tiktok_client_key", null) : null) || env.TIKTOK_CLIENT_KEY;
+  let clientSecret = (env.DB ? await getConfigValue(env.DB, "tiktok_client_secret", null) : null) || env.TIKTOK_CLIENT_SECRET;
+
+  if (!clientKey || !clientSecret) {
+    return new Response("Missing TikTok Client Key বা Secret in D1। অনুগ্রহ করে ড্যাশবোর্ডে সেট করুন।", { status: 400 });
+  }
+
+  const redirectUri = `${url.origin}/api/auth/tiktok/callback`;
+  const tokenRes = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_key: clientKey,
+      client_secret: clientSecret,
+      code: code,
+      grant_type: "authorization_code",
+      redirect_uri: redirectUri
+    })
+  });
+
+  const tokenData = await tokenRes.json();
+  if (tokenData && tokenData.data && tokenData.data.access_token) {
+    const accessToken = tokenData.data.access_token;
+    const openId = tokenData.data.open_id || "tiktok_creator";
+    
+    if (env.DB) {
+      await ensureTables(env.DB);
+      await env.DB.prepare(`
+        INSERT INTO social_accounts (id, platform, account_name, account_id, access_token, status)
+        VALUES ('tiktok_primary', 'tiktok', 'TikTok Creator Account', ?, ?, 'active')
+        ON CONFLICT(id) DO UPDATE SET
+          account_id = excluded.account_id,
+          access_token = excluded.access_token,
+          status = 'active'
+      `).bind(openId, accessToken).run();
+
+      await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('tiktok_access_token', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(accessToken).run();
+    }
+
+    return Response.redirect("https://social-automate.pages.dev/?tab=settings&tiktok_connected=1", 302);
+  } else {
+    return new Response(`Failed to exchange TikTok code for token: ${JSON.stringify(tokenData)}`, { status: 400 });
+  }
+}
+
+async function handleTriggerPost(body, env) {
+  let ghToken = env.GITHUB_TOKEN;
+  let ghRepo = env.GITHUB_REPOSITORY || "rifatrabbi104-oss/social-automate";
+  if (env.DB) {
+    const dbToken = await getConfigValue(env.DB, "github_token", null);
+    const dbRepo = await getConfigValue(env.DB, "github_repo", null);
+    if (dbToken) ghToken = dbToken;
+    if (dbRepo) ghRepo = dbRepo;
+  }
+
+  if (ghToken) {
+    try {
+      const dispatchRes = await fetch(`https://api.github.com/repos/${ghRepo}/actions/workflows/post_publisher.yml/dispatches`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${ghToken}`,
+          "Accept": "application/vnd.github.v3+json",
+          "User-Agent": "SocialAutomate-Worker"
+        },
+        body: JSON.stringify({
+          ref: "main",
+          inputs: {
+            product_url: body.product_url || "",
+            target_platform: body.target_platform || "tiktok"
+          }
+        })
+      });
+      return jsonResponse({
+        success: dispatchRes.ok,
+        message: dispatchRes.ok ? "🚀 GitHub Actions ক্রন পোস্টিং শুরু হয়েছে!" : "GitHub dispatch call failed",
+        status: dispatchRes.status
+      });
+    } catch (e) {
+      return jsonResponse({ error: e.message }, 500);
+    }
+  }
+
+  return jsonResponse({
+    success: true,
+    message: "✅ পোস্টিং টাস্ক শিডিউল্ড আছে। ক্রন শিডিউল অনুযায়ী GitHub Actions স্বয়ংক্রিয়ভাবে D1 থেকে ডেটা নিয়ে পোস্ট করবে।"
   });
 }
 
@@ -1090,6 +1282,7 @@ async function ensureTables(db) {
     try { await db.prepare("ALTER TABLE products ADD COLUMN product_url TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN posting_time TEXT DEFAULT '10:00'").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN daily_auto_post INTEGER DEFAULT 1").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN target_platform TEXT DEFAULT 'tiktok'").run(); } catch (e) {}
   } catch (e) {}
 }
 
