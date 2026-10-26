@@ -714,7 +714,7 @@ async function handleTikTokOAuthCallback(url, env) {
       await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('tiktok_access_token', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(accessToken).run();
     }
 
-    return Response.redirect("https://social-automate.pages.dev/?tab=settings&tiktok_connected=1", 302);
+    return Response.redirect("https://automate.ranonex.shop/?tab=settings&tiktok_connected=1", 302);
   } else {
     return new Response(`Failed to exchange TikTok code for token: ${JSON.stringify(tokenData)}`, { status: 400 });
   }
