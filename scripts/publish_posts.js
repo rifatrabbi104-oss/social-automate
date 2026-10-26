@@ -328,51 +328,92 @@ Formatting Requirements:
   return `✨ ${product.name} ✨\nঅর্ডার করতে ভিজিট করুন: ${product.product_url || "ইনবক্স করুন"}`;
 }
 
-// 🎵 ৪. TikTok Content Posting API v2-এ পোস্ট পাবলিশ (Direct Post)
-async function publishToTikTok(caption, imageUrl, token = null) {
+// 🎵 ৪. TikTok Content Posting API v2-এ পোস্ট পাবলিশ (Direct Post + Unaudited Self/Draft Fallback)
+async function publishToTikTok(caption, mediaUrl, token = null) {
   const activeToken = token || TIKTOK_ACCESS_TOKEN;
   if (!activeToken) {
-    console.log("⚪ [TikTok Skipped] ড্যাশবোর্ড বা GitHub Secrets-এ কোনো TikTok টোকেন নেই (ঐচ্ছিক)।");
+    console.log("⚪ [TikTok Skipped] ড্যাশবোর্ড বা D1 ডেটাবেসে কোনো TikTok টোকেন নেই।");
     return { success: false, reason: "Missing credentials" };
   }
 
   console.log("📤 TikTok Content Posting API v2-এ পোস্ট তৈরি করা হচ্ছে...");
 
   try {
-    let payload;
-    if (imageUrl && imageUrl.startsWith("http")) {
-      console.log(`📸 TikTok ফটো লিংক: ${imageUrl}`);
-      payload = {
-        post_info: {
-          title: caption.substring(0, 2200),
-          privacy_level: "PUBLIC_TO_EVERYONE",
-          disable_duet: false,
-          disable_comment: false,
-          disable_stitch: false
-        },
-        source_info: {
-          source: "PULL_FROM_URL",
-          photo_cover_index: 1,
-          photo_images: [imageUrl]
-        },
-        post_mode: "DIRECT_POST",
-        media_type: "PHOTO"
-      };
-    } else {
-      console.log("⚠️ TikTok পোস্টের জন্য প্রোডাক্টের ইমেজ URL আবশ্যক।");
-      return { success: false, reason: "TikTok requires a product image URL" };
+    const isVideo = mediaUrl && (mediaUrl.includes(".mp4") || mediaUrl.includes(".mov") || mediaUrl.includes(".webm") || mediaUrl.includes("/video"));
+
+    const createPayload = (privacyLevel) => {
+      if (isVideo) {
+        return {
+          post_info: {
+            title: caption.substring(0, 2200),
+            privacy_level: privacyLevel,
+            disable_duet: false,
+            disable_comment: false,
+            disable_stitch: false
+          },
+          source_info: {
+            source: "PULL_FROM_URL",
+            video_url: mediaUrl
+          },
+          post_mode: "DIRECT_POST",
+          media_type: "VIDEO"
+        };
+      } else {
+        return {
+          post_info: {
+            title: caption.substring(0, 2200),
+            privacy_level: privacyLevel,
+            disable_duet: false,
+            disable_comment: false,
+            disable_stitch: false
+          },
+          source_info: {
+            source: "PULL_FROM_URL",
+            photo_cover_index: 1,
+            photo_images: [mediaUrl]
+          },
+          post_mode: "DIRECT_POST",
+          media_type: "PHOTO"
+        };
+      }
+    };
+
+    if (!mediaUrl || !mediaUrl.startsWith("http")) {
+      console.log("⚠️ TikTok পোস্টের জন্য প্রোডাক্টের ইমেজ বা ভিডিও URL আবশ্যক।");
+      return { success: false, reason: "TikTok requires a product image or video URL" };
     }
 
-    const res = await fetch("https://open.tiktokapis.com/v2/post/publish/content/init/", {
+    console.log(`🎬 মিডিয়া টাইপ: ${isVideo ? "ভিডিও (VIDEO)" : "ছবি (PHOTO)"} -> ${mediaUrl}`);
+
+    // ১. প্রথমে পাবলিক ফিডে ট্রাই করা
+    let res = await fetch("https://open.tiktokapis.com/v2/post/publish/content/init/", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${activeToken}`,
         "Content-Type": "application/json; charset=UTF-8"
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(createPayload("PUBLIC_TO_EVERYONE"))
     });
 
-    const data = await res.json();
+    let data = await res.json();
+
+    // ২. যদি আন-রিভিউড অ্যাপের কারণে পাবলিক পোস্ট না হয় (unaudited_client) -> স্বয়ংক্রিয়ভাবে SELF_ONLY (Private/Tester Mode) এ ট্রাই
+    const errMsg = JSON.stringify(data || {});
+    if (!res.ok || data?.error?.code !== "ok") {
+      if (errMsg.includes("unaudited_client") || errMsg.includes("privacy_level") || errMsg.includes("scope_not_authorized")) {
+        console.log("ℹ️ [Unaudited Sandbox Mode] অ্যাপটি এখনো আন-রিভিউড থাকায় SELF_ONLY (প্রাইভেট/টেস্টার মোডে) পাবলিশ করা হচ্ছে...");
+        res = await fetch("https://open.tiktokapis.com/v2/post/publish/content/init/", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${activeToken}`,
+            "Content-Type": "application/json; charset=UTF-8"
+          },
+          body: JSON.stringify(createPayload("SELF_ONLY"))
+        });
+        data = await res.json();
+      }
+    }
+
     if (res.ok && data?.data?.publish_id) {
       console.log(`🎉 [TikTok Post Success] Publish ID: ${data.data.publish_id}`);
       return { success: true, id: data.data.publish_id };
@@ -502,7 +543,10 @@ async function main() {
   console.log(`⏰ Time: ${new Date().toISOString()}`);
   console.log("=================================================");
 
-  const tasks = await getAutoPostTasks();
+  const autoData = await getAutoPostTasks();
+  const tasks = Array.isArray(autoData) ? autoData : (autoData.tasks || []);
+  const credentials = autoData.credentials || {};
+
   if (!tasks || tasks.length === 0) {
     console.log("কোনো শিডিউল্ড প্রোডাক্ট পাওয়া যায়নি।");
     return;
@@ -535,18 +579,24 @@ async function main() {
   let fbResult = { success: false, reason: "Skipped" };
   let tgResult = { success: false, reason: "Skipped" };
 
+  const activeTikTokToken = credentials.tiktok?.token || TIKTOK_ACCESS_TOKEN;
+  const activeFbToken = credentials.facebook?.token || META_PAGE_ACCESS_TOKEN;
+  const activeFbPageId = credentials.facebook?.id || META_PAGE_ID;
+
+  const targetPlatform = selectedProduct.target_platform || TARGET_PLATFORM || "tiktok";
+
   // ১. TikTok পাবলিশ
-  if (TARGET_PLATFORM === "all" || TARGET_PLATFORM === "tiktok") {
-    ttResult = await publishToTikTok(postCaption, selectedProduct.image_url);
+  if (targetPlatform === "all" || targetPlatform === "tiktok") {
+    ttResult = await publishToTikTok(postCaption, selectedProduct.image_url, activeTikTokToken);
     if (ttResult.success && selectedProduct.id) {
       await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, ttResult.id, "tiktok");
     }
   }
 
   // ২. Facebook পাবলিশ (ঐচ্ছিক - টোকেন থাকলে রান হবে)
-  if (TARGET_PLATFORM === "all" || TARGET_PLATFORM === "facebook") {
-    if (META_PAGE_ACCESS_TOKEN) {
-      fbResult = await publishToFacebook(postCaption, selectedProduct.image_url);
+  if (targetPlatform === "all" || targetPlatform === "facebook") {
+    if (activeFbToken) {
+      fbResult = await publishToFacebook(postCaption, selectedProduct.image_url, activeFbToken, activeFbPageId);
       if (fbResult.success && selectedProduct.id) {
         await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, fbResult.id, "facebook");
       }
@@ -557,7 +607,7 @@ async function main() {
   }
 
   // ৩. Telegram পাবলিশ
-  if (TARGET_PLATFORM === "all" || TARGET_PLATFORM === "telegram") {
+  if (targetPlatform === "all" || targetPlatform === "telegram") {
     tgResult = await publishToTelegram(postCaption, selectedProduct.image_url);
     if (tgResult.success && selectedProduct.id) {
       await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, "tg_" + Date.now(), "telegram");
@@ -572,7 +622,7 @@ async function main() {
 
   const anySuccess = ttResult.success || fbResult.success || tgResult.success;
   if (!anySuccess) {
-    if (!TIKTOK_ACCESS_TOKEN && !META_PAGE_ACCESS_TOKEN && !TELEGRAM_BOT_TOKEN) {
+    if (!activeTikTokToken && !activeFbToken && !TELEGRAM_BOT_TOKEN) {
       console.error("\n❌ কোনো সোশ্যাল প্ল্যাটফর্মের ক্রেডেনশিয়াল সেট করা নেই!");
       console.error("👉 টিকটকে পোস্ট করার জন্য GitHub Secrets-এ 'TIKTOK_ACCESS_TOKEN' যোগ করুন।");
       process.exitCode = 1;
