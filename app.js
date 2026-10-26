@@ -517,20 +517,37 @@ function renderProductsTable() {
   if (!tbody) return;
 
   if (appState.products.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 24px; color: var(--text-dim);">কোনো প্রোডাক্ট নেই। উপরে অ্যাড করুন বা 🔄 Sync চাপুন।</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 28px; color: var(--text-dim);">কোনো প্রোডাক্ট নেই। উপরে ওয়েবসাইট লিংক পেস্ট করে Auto-Fetch চাপুন অথবা 🔄 Sync করুন।</td></tr>`;
     return;
   }
 
   tbody.innerHTML = '';
   appState.products.forEach(p => {
     const tr = document.createElement('tr');
-    const autoBadge = p.daily_auto_post != 0 
-      ? `<span style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">⏰ ${p.posting_time || '10:00'} (🟢 চালু)</span>`
-      : `<span style="background: rgba(255, 255, 255, 0.05); color: var(--text-dim); padding: 2px 6px; border-radius: 4px; font-size: 11px;">⚪ বন্ধ</span>`;
+
+    // ফটো থাম্বনেইল
+    const imgThumb = p.image_url 
+      ? `<img src="${escapeHtml(p.image_url)}" alt="${escapeHtml(p.name)}" style="width: 40px; height: 40px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15); flex-shrink: 0;" onerror="this.style.display='none'">`
+      : `<div style="width: 40px; height: 40px; background: rgba(255,255,255,0.06); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">📦</div>`;
 
     const productTitle = p.product_url 
-      ? `<a href="${escapeHtml(p.product_url)}" target="_blank" style="color: var(--primary-light); text-decoration: underline;">${escapeHtml(p.name)} 🔗</a>`
+      ? `<a href="${escapeHtml(p.product_url)}" target="_blank" style="color: var(--primary-light); text-decoration: underline; font-weight: 600;">${escapeHtml(p.name)} 🔗</a>`
       : `<strong>${escapeHtml(p.name)}</strong>`;
+
+    // শিডিউল টেক্সট
+    let schedText = p.posting_time || '10:00';
+    if (p.posting_time && p.posting_time.startsWith('interval_')) {
+      const h = p.posting_time.replace('interval_', '');
+      schedText = `⏱️ প্রতি ${h} ঘণ্টা পর পর`;
+    } else if (p.schedule_type === 'interval') {
+      schedText = `⏱️ প্রতি ${p.interval_hours || 4} ঘণ্টা পর পর`;
+    } else {
+      schedText = `⏰ ${p.posting_time || '10:00'}`;
+    }
+
+    const autoBadge = p.daily_auto_post != 0 
+      ? `<span style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">${schedText} (🟢 চালু)</span>`
+      : `<span style="background: rgba(255, 255, 255, 0.05); color: var(--text-dim); padding: 4px 8px; border-radius: 4px; font-size: 11px;">⚪ বন্ধ</span>`;
 
     const platformBadge = p.target_platform === 'facebook'
       ? `<span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🔵 FB</span>`
@@ -539,16 +556,72 @@ function renderProductsTable() {
         : `<span style="background: rgba(254, 44, 85, 0.15); color: #fe2c55; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🎵 TikTok</span>`);
 
     tr.innerHTML = `
-      <td>${productTitle}</td>
-      <td><span style="color: var(--emerald); font-weight: 700;">৳${p.price}</span></td>
+      <td>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          ${imgThumb}
+          <div>
+            ${productTitle}
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(p.description || '').substring(0, 45)}...</div>
+          </div>
+        </div>
+      </td>
+      <td><span style="color: var(--emerald); font-weight: 700; font-size: 14px;">৳${p.price}</span></td>
       <td>${platformBadge}</td>
       <td>${autoBadge}</td>
       <td><span class="badge-status ${p.stock_status === 'in_stock' ? 'published' : 'pending'}">${p.stock_status === 'in_stock' ? 'In Stock' : 'Out of Stock'}</span></td>
-      <td><button class="btn-refresh" style="color: var(--rose); font-size: 11px;" onclick="deleteProduct('${p.id}')">🗑️</button></td>
+      <td style="white-space: nowrap;">
+        <button class="btn-primary" style="padding: 6px 12px; font-size: 11px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 6px; cursor: pointer; color: #fff; margin-right: 6px;" onclick="publishProductNow('${p.id}', this)" title="এই প্রোডাক্টটি ফেসবুক পেজে পোস্ট করুন">
+          🚀 Post Now
+        </button>
+        <button class="btn-refresh" style="color: var(--rose); font-size: 11px; padding: 6px 8px;" onclick="deleteProduct('${p.id}')">🗑️</button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
 }
+
+// 🚀 ১-ক্লিক ডাইরেক্ট প্রোডাক্ট পোস্ট (Worker Engine)
+window.publishProductNow = async function(id, btn) {
+  const origText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '⏳ Posting...';
+
+  try {
+    const res = await fetch(`${API_BASE}/publish-product-now`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ product_id: id, platform: 'facebook' })
+    });
+
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast('🎉 ফেসবুকে পোস্ট সফলভাবে পাবলিশ হয়েছে!');
+      btn.innerHTML = '✅ Posted!';
+      btn.style.background = '#059669';
+      
+      if (data.post_url) {
+        setTimeout(() => {
+          if (confirm(`🎉 ফেসবুক পেজে পোস্ট সফল হয়েছে!\n\nঅ্যাঙ্গেল: ${data.angle}\n\nআপনি কি পেজে গিয়ে পোস্টটি দেখতে চান?`)) {
+            window.open(data.post_url, '_blank');
+          }
+        }, 500);
+      }
+    } else {
+      showToast('❌ পোস্ট ব্যর্থ: ' + (data.error || 'Unknown error'));
+      alert(`পোস্ট ব্যর্থ হয়েছে:\n${data.error || 'Server error'}`);
+      btn.innerHTML = origText;
+    }
+  } catch (err) {
+    showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
+    btn.innerHTML = origText;
+  } finally {
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.innerHTML = '🚀 Post Now';
+      btn.style.background = '';
+    }, 4000);
+  }
+};
 
 window.deleteProduct = async function(id) {
   appState.products = appState.products.filter(p => p.id !== id);
@@ -572,7 +645,86 @@ function populateBusinessProfileUI() {
 }
 
 function initBusinessDataForms() {
-  // Add Product Form
+  // ⚡ পদ্ধতি ১: ওয়েবসাইট প্রোডাক্ট লিংক দিয়ে অটো-ফেচ
+  const quickFetchBtn = document.getElementById('btn-quick-fetch-prod');
+  const quickFetchInput = document.getElementById('input-quick-fetch-url');
+  const previewBox = document.getElementById('fetch-preview-box');
+  const previewImg = document.getElementById('fetch-preview-img');
+  const previewTitle = document.getElementById('fetch-preview-title');
+  const previewPrice = document.getElementById('fetch-preview-price');
+  const prodImgInput = document.getElementById('prod-img');
+  const prodImgPreview = document.getElementById('prod-img-preview');
+
+  if (prodImgInput && prodImgPreview) {
+    prodImgInput.addEventListener('input', () => {
+      const val = prodImgInput.value.trim();
+      if (val && val.startsWith('http')) {
+        prodImgPreview.src = val;
+        prodImgPreview.style.display = 'block';
+      } else {
+        prodImgPreview.style.display = 'none';
+      }
+    });
+  }
+
+  if (quickFetchBtn && quickFetchInput) {
+    quickFetchBtn.addEventListener('click', async () => {
+      const url = quickFetchInput.value.trim();
+      if (!url) {
+        showToast('⚠️ অনুগ্রহ করে একটি প্রোডাক্ট লিংক পেস্ট করুন!');
+        quickFetchInput.focus();
+        return;
+      }
+
+      quickFetchBtn.disabled = true;
+      quickFetchBtn.textContent = '⏳ Auto-Fetching...';
+
+      try {
+        const res = await fetch(`${API_BASE}/extract-product`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success && data.product) {
+          const p = data.product;
+          // ফর্মে অটো-ফিল করা
+          document.getElementById('prod-name').value = p.name || '';
+          document.getElementById('prod-price').value = p.price || '';
+          if (document.getElementById('prod-url')) document.getElementById('prod-url').value = p.product_url || url;
+          if (prodImgInput) {
+            prodImgInput.value = p.image_url || '';
+            if (p.image_url) {
+              prodImgPreview.src = p.image_url;
+              prodImgPreview.style.display = 'block';
+            }
+          }
+          if (document.getElementById('prod-desc')) document.getElementById('prod-desc').value = p.description || '';
+
+          // প্রিভিউ কার্ড দেখানো
+          if (previewBox) {
+            previewBox.style.display = 'flex';
+            if (previewImg) previewImg.src = p.image_url || 'https://via.placeholder.com/50';
+            if (previewTitle) previewTitle.textContent = p.name;
+            if (previewPrice) previewPrice.textContent = `৳${p.price} BDT`;
+          }
+
+          showToast(`✅ "${p.name}" এর তথ্য ও R2 ইমেজ সফলভাবে ফেচ হয়েছে!`);
+        } else {
+          showToast(`❌ ফেচ ব্যর্থ: ${data.error || 'Product not found'}`);
+          alert(`ফেচ ব্যর্থ হয়েছে:\n${data.error || 'প্রোডাক্টের তথ্য খুঁজে পাওয়া যায়নি। অনুগ্রহ করে ম্যানুয়ালি লিখুন।'}`);
+        }
+      } catch (err) {
+        showToast(`❌ নেটওয়ার্ক এরর: ${err.message}`);
+      } finally {
+        quickFetchBtn.disabled = false;
+        quickFetchBtn.textContent = '⚡ Auto-Fetch Product Info';
+      }
+    });
+  }
+
+  // পদ্ধতি ২: Add Product Form সেভ হ্যান্ডলার
   const prodForm = document.getElementById('add-product-form');
   if (prodForm) {
     prodForm.addEventListener('submit', async (e) => {
@@ -581,21 +733,26 @@ function initBusinessDataForms() {
       const price = document.getElementById('prod-price').value.trim();
       const url = document.getElementById('prod-url') ? document.getElementById('prod-url').value.trim() : '';
       const img = document.getElementById('prod-img') ? document.getElementById('prod-img').value.trim() : '';
-      const postTime = document.getElementById('prod-post-time') ? document.getElementById('prod-post-time').value : '10:00';
-      const targetPlatform = document.getElementById('prod-target-platform') ? document.getElementById('prod-target-platform').value : 'tiktok';
+      const postTime = document.getElementById('prod-post-time') ? document.getElementById('prod-post-time').value : 'interval_4';
+      const targetPlatform = document.getElementById('prod-target-platform') ? document.getElementById('prod-target-platform').value : 'facebook';
       const autoPost = document.getElementById('prod-auto-post') ? Number(document.getElementById('prod-auto-post').value) : 1;
       const stock = document.getElementById('prod-stock').value;
       const desc = document.getElementById('prod-desc').value.trim();
 
       if (!name || !price) return;
 
+      const isInterval = postTime.startsWith('interval_');
+      const intervalHours = isInterval ? (parseInt(postTime.replace('interval_', '')) || 4) : 4;
+
       const newProd = {
         id: 'p_' + Date.now(),
         name,
-        price,
+        price: parseFloat(price) || 0,
         product_url: url,
         image_url: img,
         posting_time: postTime,
+        schedule_type: isInterval ? 'interval' : 'daily',
+        interval_hours: intervalHours,
         target_platform: targetPlatform,
         daily_auto_post: autoPost,
         stock_status: stock,
@@ -606,7 +763,9 @@ function initBusinessDataForms() {
       setLocalCache(CACHE_KEYS.PRODUCTS, appState.products);
       renderProductsTable();
       prodForm.reset();
-      showToast('✅ প্রোডাক্ট ও দৈনিক শিডিউল D1-এ সেভ হয়েছে!');
+      if (prodImgPreview) prodImgPreview.style.display = 'none';
+      if (previewBox) previewBox.style.display = 'none';
+      showToast('✅ প্রোডাক্ট ও শিডিউল D1-এ সেভ হয়েছে!');
 
       // ব্যাকএন্ড D1-এ সেভ
       try {

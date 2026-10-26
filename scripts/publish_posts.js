@@ -66,10 +66,77 @@ const MARKETING_ANGLES = [
   }
 ];
 
-// 🌐 ১. ওয়েবসাইট প্রোডাক্ট পেজ থেকে তথ্য ও ছবি এক্সট্র্যাক্ট করা
+// 🌐 ১. ওয়েবসাইট প্রোডাক্ট পেজ থেকে তথ্য ও ছবি এক্সট্র্যাক্ট করা (API + R2 Image Aware)
 async function fetchProductFromWebUrl(url) {
   console.log(`🌐 প্রোডাক্টের ওয়েবসাইট লিংক থেকে ডেটা রিড করা হচ্ছে: ${url}`);
   try {
+    const parsedUrl = new URL(url);
+    const origin = parsedUrl.origin;
+    const productId = parsedUrl.searchParams.get("id");
+
+    // ১. ইউজার সাইটের API ও public_data.json প্রোব করা
+    if (productId) {
+      const endpoints = [
+        `${origin}/api/public-data?product_id=${encodeURIComponent(productId)}`,
+        `${origin}/public_data.json`,
+        `${origin}/api/get-single-product?id=${encodeURIComponent(productId)}`
+      ];
+
+      for (const ep of endpoints) {
+        try {
+          const apiRes = await fetch(ep, {
+            headers: {
+              "Accept": "application/json",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SocialAutomate-Bot"
+            }
+          });
+          if (apiRes.ok) {
+            const json = await apiRes.json();
+            let p = null;
+            if (json.product) p = json.product;
+            else if (json.data) {
+              p = Array.isArray(json.data) ? json.data.find(x => String(x.id) === String(productId)) : json.data;
+            } else if (json.products && Array.isArray(json.products)) {
+              p = json.products.find(x => String(x.id) === String(productId));
+            }
+
+            if (p) {
+              let gallery = [];
+              try { gallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []); } catch(e) {}
+              let variants = [];
+              try { variants = typeof p.variants === 'string' ? JSON.parse(p.variants) : (p.variants || []); } catch(e) {}
+
+              let r2Img = "";
+              if (gallery.length > 0 && typeof gallery[0] === 'string' && gallery[0].startsWith('http')) r2Img = gallery[0];
+              else if (variants.length > 0 && variants[0]?.imageUrl && variants[0].imageUrl.startsWith('http')) r2Img = variants[0].imageUrl;
+              else {
+                for (const g of gallery) { if (typeof g === 'string' && g.startsWith('http')) { r2Img = g; break; } }
+              }
+
+              const basePrice = parseFloat(p.base_price || p.price || 0);
+              const flashDiscount = parseFloat(p.flash_sale_price || 0);
+              const finalPrice = (flashDiscount > 0 && flashDiscount < basePrice) ? (basePrice - flashDiscount) : basePrice;
+              const cleanDesc = (p.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 600);
+
+              console.log(`✅ API থেকে সফলভাবে পাওয়া গেছে: ${p.name} | মূল্য: ৳${finalPrice} | R2 Image: ${r2Img ? 'Yes' : 'No'}`);
+              return {
+                id: `web_${p.id || Date.now()}`,
+                name: p.name || "ওয়েবসাইট প্রোডাক্ট",
+                price: finalPrice,
+                original_price: basePrice,
+                description: cleanDesc,
+                raw_page_content: cleanDesc,
+                image_url: r2Img,
+                product_url: url,
+                previous_posts: []
+              };
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
+    // ২. ফলব্যাক: সাধারণ HTML ও OpenGraph
     const res = await fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -92,7 +159,6 @@ async function fetchProductFromWebUrl(url) {
     let ogImage = html.match(/<meta\s+property=["']og:image["']\s+content=["'](.*?)["']/i)?.[1] || "";
 
     if (ogImage && !ogImage.startsWith("http")) {
-      const parsedUrl = new URL(url);
       ogImage = new URL(ogImage, parsedUrl.origin).toString();
     }
 
@@ -105,7 +171,7 @@ async function fetchProductFromWebUrl(url) {
 
     return {
       id: `web_${Date.now()}`,
-      name: ogTitle.trim() || "ওয়েবসাইট প্রোডাক্ট",
+      name: ogTitle.replace(/Product Details/gi, '').trim() || "ওয়েবসাইট প্রোডাক্ট",
       description: ogDesc.trim() || cleanBody.substring(0, 500),
       raw_page_content: cleanBody,
       image_url: ogImage,

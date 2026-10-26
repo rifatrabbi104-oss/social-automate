@@ -275,12 +275,20 @@ export default {
         if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
         await ensureTables(env.DB);
         const body = await request.json();
-        const { id, name, price, description, category, image_url, product_url, posting_time, daily_auto_post, stock_status, target_platform } = body;
+        const {
+          id, name, price, description, category, image_url, product_url,
+          posting_time, daily_auto_post, stock_status, target_platform,
+          schedule_type, interval_hours
+        } = body;
 
         const prodId = id || `prod_${Date.now()}`;
         await env.DB.prepare(`
-          INSERT INTO products (id, name, price, description, category, image_url, product_url, posting_time, daily_auto_post, stock_status, target_platform, is_active)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          INSERT INTO products (
+            id, name, price, description, category, image_url, product_url,
+            posting_time, daily_auto_post, stock_status, target_platform,
+            schedule_type, interval_hours, is_active
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
           ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             price = excluded.price,
@@ -291,7 +299,9 @@ export default {
             posting_time = excluded.posting_time,
             daily_auto_post = excluded.daily_auto_post,
             stock_status = excluded.stock_status,
-            target_platform = excluded.target_platform
+            target_platform = excluded.target_platform,
+            schedule_type = excluded.schedule_type,
+            interval_hours = excluded.interval_hours
         `).bind(
           prodId,
           name,
@@ -303,7 +313,9 @@ export default {
           posting_time || '10:00',
           daily_auto_post !== undefined ? Number(daily_auto_post) : 1,
           stock_status || 'in_stock',
-          target_platform || 'tiktok'
+          target_platform || 'facebook',
+          schedule_type || 'daily',
+          interval_hours ? Number(interval_hours) : 4
         ).run();
 
         await invalidateBusinessCache();
@@ -321,7 +333,26 @@ export default {
       }
 
       // ==========================================
-      // ৭.১ অটো-পোস্টিং টাস্ক ও হিস্ট্রি API (GitHub Actions এর জন্য)
+      // ৭.১ ওয়েবসাইট লিংক থেকে স্বয়ংক্রিয় প্রোডাক্ট ও R2 ছবি ফেচ API
+      // ==========================================
+      if (request.method === "POST" && path === "/api/extract-product") {
+        const body = await request.json().catch(() => ({}));
+        const targetUrl = body.url || body.product_url;
+        if (!targetUrl) return jsonResponse({ error: "Missing product url" }, 400);
+        const extracted = await extractProductFromUrl(targetUrl);
+        return jsonResponse(extracted, extracted.success ? 200 : 400);
+      }
+
+      // ==========================================
+      // ৭.২ ড্যাশবোর্ড থেকে ১-ক্লিক ডাইরেক্ট টেস্ট পোস্ট (Worker Engine)
+      // ==========================================
+      if (request.method === "POST" && path === "/api/publish-product-now") {
+        const body = await request.json().catch(() => ({}));
+        return await handlePublishProductNow(body, env);
+      }
+
+      // ==========================================
+      // ৭.৩ অটো-পোস্টিং টাস্ক ও হিস্ট্রি API (GitHub Actions এর জন্য)
       // ==========================================
       if (request.method === "GET" && path === "/api/auto-post-task") {
         if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
@@ -448,10 +479,10 @@ export default {
     }
   },
 
-  // ⏰ ক্রন শিডিউল: নির্দিষ্ট সময়ে মাত্র ১ বার ওয়ার্কার রান হয়ে GitHub Actions-কে ট্রিগার করবে
+  // ⏰ ক্রন শিডিউল: নির্দিষ্ট সময়ে স্বয়ংক্রিয়ভাবে D1 প্রোডাক্ট ও শিডিউল চেক করে ফেসবুক/সোশ্যালে পোস্ট করবে (Ultra-Low CPU)
   async scheduled(event, env, ctx) {
-    console.log("⏰ [Cron Triggered] Scheduled time reached -> Triggering GitHub Actions Post Publisher");
-    ctx.waitUntil(handleTriggerPost({ target_platform: "all" }, env));
+    console.log("⏰ [Cron Triggered] Scheduled check starting...");
+    ctx.waitUntil(handleScheduledAutoPosting(env));
   }
 };
 
@@ -1408,7 +1439,11 @@ async function ensureTables(db) {
     try { await db.prepare("ALTER TABLE products ADD COLUMN product_url TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN posting_time TEXT DEFAULT '10:00'").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN daily_auto_post INTEGER DEFAULT 1").run(); } catch (e) {}
-    try { await db.prepare("ALTER TABLE products ADD COLUMN target_platform TEXT DEFAULT 'tiktok'").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN target_platform TEXT DEFAULT 'facebook'").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN schedule_type TEXT DEFAULT 'daily'").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN interval_hours INTEGER DEFAULT 4").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN last_posted_at TIMESTAMP").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE post_history ADD COLUMN image_url TEXT").run(); } catch (e) {}
   } catch (e) {}
 }
 
@@ -1418,3 +1453,564 @@ function jsonResponse(data, status = 200) {
     headers: { "Content-Type": "application/json", ...CORS_HEADERS }
   });
 }
+
+// ========================================================
+// 🌐 স্মার্ট ওয়েবসাইট প্রোডাক্ট ও পাবলিক R2 ফটো এক্সট্র্যাক্টর
+// ========================================================
+async function extractProductFromUrl(targetUrl) {
+  if (!targetUrl || !targetUrl.trim()) {
+    return { success: false, error: "প্রোডাক্ট লিংকটি খালি। অনুগ্রহ করে সঠিক URL দিন।" };
+  }
+  const cleanUrl = targetUrl.trim();
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(cleanUrl);
+  } catch (e) {
+    return { success: false, error: "ভুল URL ফরম্যাট! সঠিক লিংক (যেমন: https://ranonex.shop/product.html?id=...) দিন।" };
+  }
+
+  const origin = parsedUrl.origin;
+  const productId = parsedUrl.searchParams.get("id");
+
+  // ১. ইউজার সাইটের API ও public_data.json থেকে ডাইরেক্ট প্রোডাক্ট ফেচ (100% accurate for CSR app)
+  if (productId) {
+    const endpoints = [
+      `${origin}/api/public-data?product_id=${encodeURIComponent(productId)}`,
+      `${origin}/public_data.json`,
+      `${origin}/api/get-single-product?id=${encodeURIComponent(productId)}`,
+      `${origin}/api/appwrite-get-single-product?id=${encodeURIComponent(productId)}`
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(ep, {
+          headers: {
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SocialAutomate-Bot"
+          }
+        });
+        if (res.ok) {
+          const json = await res.json();
+          let p = null;
+          if (json.product) {
+            p = json.product;
+          } else if (json.data) {
+            if (Array.isArray(json.data)) {
+              p = json.data.find(x => String(x.id) === String(productId));
+            } else if (json.data && String(json.data.id) === String(productId)) {
+              p = json.data;
+            }
+          } else if (json.products && Array.isArray(json.products)) {
+            p = json.products.find(x => String(x.id) === String(productId));
+          } else if (json.product_chunks && Array.isArray(json.product_chunks)) {
+            for (const chunk of json.product_chunks) {
+              if (chunk.products) {
+                const found = chunk.products.find(x => String(x.id) === String(productId));
+                if (found) { p = found; break; }
+              }
+            }
+          }
+
+          if (p) {
+            return formatExtractedProduct(p, cleanUrl);
+          }
+        }
+      } catch (e) {
+        console.warn(`Extraction probe failed for ${ep}:`, e.message);
+      }
+    }
+  }
+
+  // ২. ফলব্যাক: সাধারণ HTML ফেচ ও OpenGraph / Meta / JSON-LD স্ক্র্যাপ
+  try {
+    const res = await fetch(cleanUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+      }
+    });
+
+    if (res.ok) {
+      const html = await res.text();
+      
+      // JSON-LD চেক
+      const ldMatch = html.match(/<script\s+type=["']application\/ld\+json["']>([\s\S]*?)<\/script>/i);
+      if (ldMatch) {
+        try {
+          const ldData = JSON.parse(ldMatch[1]);
+          const item = ldData["@type"] === "Product" ? ldData : (Array.isArray(ldData) ? ldData.find(x => x["@type"] === "Product") : null);
+          if (item) {
+            return {
+              success: true,
+              product: {
+                name: item.name || "",
+                price: parseFloat(item.offers?.price || item.price || 0),
+                original_price: parseFloat(item.offers?.highPrice || item.price || 0),
+                description: item.description || "",
+                image_url: Array.isArray(item.image) ? item.image[0] : (item.image || ""),
+                product_url: cleanUrl,
+                category: item.category || "General"
+              }
+            };
+          }
+        } catch (e) {}
+      }
+
+      // OpenGraph ও Meta
+      const ogTitle = html.match(/<meta\s+(?:property|name)=["'](?:og:title|twitter:title|title)["']\s+content=["'](.*?)["']/i)?.[1] ||
+                      html.match(/<title>(.*?)<\/title>/i)?.[1] || "";
+      const ogDesc = html.match(/<meta\s+(?:property|name)=["'](?:og:description|twitter:description|description)["']\s+content=["'](.*?)["']/i)?.[1] || "";
+      let ogImg = html.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](.*?)["']/i)?.[1] || "";
+
+      // R2 বা CDN ইমেজ থাকলে খুঁজে বের করা
+      if (!ogImg) {
+        const imgMatch = html.match(/(https?:\/\/[^\s"']+\.(?:png|jpg|jpeg|webp)(?:\?[^\s"']*)?)/i);
+        if (imgMatch) ogImg = imgMatch[1];
+      }
+
+      if (ogImg && !ogImg.startsWith("http")) {
+        ogImg = new URL(ogImg, origin).toString();
+      }
+
+      const cleanTitle = ogTitle.replace(/Product Details|Home\s*\/\s*Shop/gi, '').trim();
+
+      return {
+        success: true,
+        product: {
+          name: cleanTitle || "পণ্য",
+          price: 0,
+          original_price: 0,
+          description: ogDesc.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+          image_url: ogImg,
+          product_url: cleanUrl,
+          category: "General"
+        }
+      };
+    }
+  } catch (e) {
+    return { success: false, error: `ওয়েবসাইট ফেচ ব্যর্থ: ${e.message}` };
+  }
+
+  return { success: false, error: "প্রোডাক্টের বিবরণ পাওয়া যায়নি। অনুগ্রহ করে তথ্য ম্যানুয়ালি দিন।" };
+}
+
+function formatExtractedProduct(p, url) {
+  let gallery = [];
+  try {
+    gallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []);
+  } catch(e) {}
+
+  let variants = [];
+  try {
+    variants = typeof p.variants === 'string' ? JSON.parse(p.variants) : (p.variants || []);
+  } catch(e) {}
+
+  // পাবলিক R2 ফটো নির্ধারণ
+  let r2Image = "";
+  if (gallery.length > 0 && typeof gallery[0] === 'string' && gallery[0].startsWith('http')) {
+    r2Image = gallery[0];
+  } else if (variants.length > 0 && variants[0]?.imageUrl && variants[0].imageUrl.startsWith('http')) {
+    r2Image = variants[0].imageUrl;
+  } else {
+    for (const img of gallery) {
+      if (typeof img === 'string' && img.startsWith('http')) { r2Image = img; break; }
+    }
+    if (!r2Image) {
+      for (const v of variants) {
+        if (v && v.imageUrl && v.imageUrl.startsWith('http')) { r2Image = v.imageUrl; break; }
+      }
+    }
+  }
+
+  const basePrice = parseFloat(p.base_price || p.price || 0);
+  const flashSale = parseFloat(p.flash_sale_price || 0);
+  const finalPrice = (flashSale > 0 && flashSale < basePrice) ? (basePrice - flashSale) : basePrice;
+
+  // ডেসক্রিপশন থেকে এইচটিএমএল ট্যাগ ও অতিরিক্ত স্পেস পরিষ্কার করা
+  const rawDesc = p.description || p.details || "";
+  const cleanDesc = rawDesc.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 600);
+
+  return {
+    success: true,
+    product: {
+      name: p.name || p.title || "প্রোডাক্ট",
+      price: finalPrice,
+      original_price: basePrice,
+      discount: flashSale,
+      description: cleanDesc,
+      image_url: r2Image,
+      product_url: url,
+      category: p.category || "General",
+      variants_count: variants.length
+    }
+  };
+}
+
+// ========================================================
+// 🎯 ৮টি সাইকোলজিক্যাল মার্কেটিং আর্কেটাইপ (অ্যান্টি-রিপিট AI ইঞ্জিন)
+// ========================================================
+const MARKETING_ANGLES = [
+  {
+    key: "problem_solution",
+    name: "সমস্যা ও সমাধান (Problem-Solution)",
+    hook_starters: [
+      "আপনি কি প্রতিদিন এই ছোট্ট সমস্যাটি নিয়ে বিরক্ত?",
+      "একটি জিনিসের অভাব আপনার দৈনন্দিন জীবনকে কতটা জটিল করে তোলে খেয়াল করেছেন?",
+      "সবার জীবনেই এমন কিছু মুহূর্ত আসে যখন এই গ্যাজেটটি ছাড়া চলা অসম্ভব!"
+    ],
+    instruction: "কাস্টমারের দৈনন্দিন জীবনের একটি বাস্তব অসুবিধার কথা তুলে ধরুন এবং এই প্রোডাক্টটি কীভাবে নিমিষেই সেই সমস্যার স্থায়ী সমাধান করে তা স্পষ্ট করে বলুন।"
+  },
+  {
+    key: "honest_review",
+    name: "খোলামেলা অভিজ্ঞতা ও রিভিউ (Honest Review)",
+    hook_starters: [
+      "অনেকে ভাবেন অনলাইনে অর্ডার করলে হয়তো ছবি আর প্রোডাক্ট এক হবে না!",
+      "সরাসরি সত্যি কথা বলতে গেলে—এই প্রোডাক্টটি হাতে পাওয়ার পর আমি যা দেখলাম...",
+      "বিজ্ঞাপনের মিষ্টি কথা নয়, এবার জানুন আসল বাস্তবতা!"
+    ],
+    instruction: "একজন সাধারণ ক্রেতার দৃষ্টিকোণ থেকে সৎ ও নিখুঁত অভিজ্ঞতার সুরে লিখুন। কোয়ালিটি ও ফিনিশিং নিয়ে কাস্টমারদের পজিটিভ ফিডব্যাক তুলে ধরুন।"
+  },
+  {
+    key: "authentic_vs_fake",
+    name: "আসল বনাম সস্তা ক্লোন (Authentic vs Fake)",
+    hook_starters: [
+      "মার্কেটে এখন একই রকম দেখতে অনেক সস্তা কপি পাওয়া যাচ্ছে—সাবধান!",
+      "১০০-২০০ টাকা বাঁচাতে গিয়ে নকল পণ্য কিনে ঠকবেন না!",
+      "কী দেখে বুঝবেন কোনটি অরিজিনাল আর কোনটি সস্তা ক্লোন?"
+    ],
+    instruction: "বাজারের নকল বা নিম্নমানের পণ্যের সাথে তুলনা করে এই প্রোডাক্টের অরিজিনাল কোয়ালিটি, স্থায়িত্ব এবং বিল্ডের আভিজাত্য ফুটিয়ে তুলুন।"
+  },
+  {
+    key: "lifestyle_upgrade",
+    name: "লাইফস্টাইল ও স্মার্ট সংযোজন (Lifestyle Upgrade)",
+    hook_starters: [
+      "নিজের জন্য বা পছন্দের মানুষকে স্পেশাল কিছু উপহার দেওয়ার চেয়ে সেরা আর কী হতে পারে?",
+      "একটি নিখুঁত জিনিস আপনার পারসোনালিটি এবং স্টাইলকে দ্বিগুণ বাড়িয়ে দেয়!",
+      "প্রতিদিনের একঘেয়েমি দূর করতে এই স্মার্ট সংযোজনটি সেরা।"
+    ],
+    instruction: "এই পণ্যটি ব্যবহার করলে কাস্টমারের জীবনধারা, কনফিডেন্স ও আধুনিকতা কতটা বেড়ে যাবে সেই সুন্দর চিত্রটি তুলে ধরুন।"
+  },
+  {
+    key: "urgency_fomo",
+    name: "লিমিটেড স্টক ও সুযোগ (Urgency FOMO)",
+    hook_starters: [
+      "আমাদের স্টক কিন্তু খুব দ্রুত শেষ হয়ে আসছে!",
+      "মিস করার পর আফসোস করার চেয়ে এখনই নিজের জন্য বুক করে নেওয়া বুদ্ধিমানের কাজ!",
+      "সীমিত সংখ্যক পিস বাকি আছে, আজকের অফারে হাতছাড়া করবেন না!"
+    ],
+    instruction: "অর্ডার করার তীব্র তাগিদ তৈরি করুন। স্টক ফুরিয়ে যাওয়ার কথা জানিয়ে এখনই অর্ডার কনফার্ম করতে উৎসাহ দিন।"
+  },
+  {
+    key: "feature_specs",
+    name: "স্পেসিফিকেশন ও নিখুঁত ফিনিশিং (Feature Deep-Dive)",
+    hook_starters: [
+      "এর ডিজাইন ও নিখুঁত কারিগরি দেখলে যে কেউ মুগ্ধ হতে বাধ্য!",
+      "প্রথম দেখাতেই নজর কাড়ার মতো প্রিমিয়াম ফিনিশিং ও কোয়ালিটি।",
+      "যেসব কারণে এটি বাজারের সেরা পছন্দের তালিকায় সবার উপরে—"
+    ],
+    instruction: "প্রোডাক্টের উপাদান, টেকসই ডিজাইন, স্পেসিফিকেশন এবং প্রিমিয়াম ফিনিশিং নিয়ে পয়েন্ট আকারে হাইলাইট করুন।"
+  },
+  {
+    key: "zero_risk_delivery",
+    name: "১০০% ঝুঁকিমুক্ত কেনাকাটা (Zero-Risk Delivery)",
+    hook_starters: [
+      "অগ্রিম কোনো টাকা দিতে হবে না—আগে প্রোডাক্ট দেখুন, তারপর টাকা দিন!",
+      "অনলাইন শপিংয়ে ১০০% নিশ্চিন্ত থাকার গ্যারান্টি!",
+      "হাতে পেয়ে চেক করে নেওয়ার সুযোগ থাকলে কোনো দ্বিধা থাকে কি?"
+    ],
+    instruction: "সারা দেশে ক্যাশ অন ডেলিভারি, ডেলিভারিম্যানের সামনে প্যাকেট খুলে চেক করে টাকা দেওয়ার সুবিধার ওপর জোর দিয়ে আস্থা অর্জন করুন।"
+  },
+  {
+    key: "curiosity_hook",
+    name: "চমকপ্রদ তথ্য ও কিউরিওসিটি (Curiosity Hook)",
+    hook_starters: [
+      "এই ছোট্ট গ্যাজেটটির ভেতরে যে এমন চমক আছে তা অনেকেই জানেন না!",
+      "একবার এটি ব্যবহার করলে আগের নিয়মে আর ফিরে যেতে ইচ্ছে করবে না!",
+      "আপনি কি জানেন এটি কেন এত দ্রুত সবার পছন্দের শীর্ষে উঠে এলো?"
+    ],
+    instruction: "প্রথম লাইনেই কাস্টমারের চোখ আটকে ফেলার মতো কৌতূহল তৈরি করুন। পণ্যের সেরা আকর্ষণীয় দিকটি রহস্যের মতো উন্মোচন করুন।"
+  }
+];
+
+// ========================================================
+// ✍️ AI সেলস কপিরাইটার (ইউনিক ও কনটেক্সট-ইন্ডিপেন্ডেন্ট)
+// ========================================================
+async function generateAIPostCaption(product, angleObj, env) {
+  const apiKey = env.GEMINI_API_KEY;
+  const model = env.GEMINI_MODEL || "gemini-2.0-flash";
+
+  // র‍্যান্ডম হুক সিলেক্টর
+  const randomHook = angleObj.hook_starters[Math.floor(Math.random() * angleObj.hook_starters.length)];
+  const storeContext = await getCachedBusinessContext(env.DB);
+
+  const prompt = `
+You are an elite Bangladeshi e-commerce copywriter with mastery in high-converting, viral social media posts.
+Write an authentic, irresistible Facebook post for this product in natural Bengali.
+
+=== PRODUCT INFORMATION ===
+Name: ${product.name}
+Price: ৳${product.price} ${product.original_price && product.original_price > product.price ? `(Regular Price: ৳${product.original_price})` : ''}
+Details / Features: ${product.description || 'Premium quality durable product'}
+Category: ${product.category || 'General'}
+Website Order Link: ${product.product_url || 'https://ranonex.shop'}
+
+=== STORE POLICIES (FROM D1) ===
+${storeContext}
+
+=== TODAY'S MARKETING ANGLE ===
+Angle Name: ${angleObj.name}
+Angle Directive: ${angleObj.instruction}
+Opening Inspiration: "${randomHook}"
+
+=== STRICT ANTI-REPETITION RULES ===
+1. ABSOLUTELY BANNED CLICHÉS (DO NOT USE ANY OF THESE):
+   - "🔥 আকর্ষণীয় অফার"
+   - "সুসংবাদ সুসংবাদ"
+   - "আপনি কি একটি ভালো... খুঁজছেন?"
+   - "দেরি না করে এখনই অর্ডার করুন"
+   - "আসসালামু আলাইকুম ভিউয়ার্স"
+2. Start with an eye-catching, relatable human opening line matching the chosen angle.
+3. Keep the language natural, conversational, and persuasive (Bangladeshi tone).
+4. Highlight why this product is truly worth buying, its build and practical benefits.
+5. Mention the price clearly (৳${product.price}) and nationwide Cash on Delivery (হাতে পেয়ে চেক করে নেওয়ার সুবিধা).
+6. Give a clear Call-to-Action with the website order link: ${product.product_url || 'ইনবক্স করুন বা ওয়েবসাইটে গিয়ে অর্ডার করুন'}.
+7. Include 3-4 natural hashtags at the very end.
+8. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
+`;
+
+  if (apiKey && apiKey !== "YOUR_GEMINI_API_KEY") {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.95,
+            topP: 0.95,
+            maxOutputTokens: 800
+          }
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text && text.trim().length > 40) {
+          return text.trim();
+        }
+      }
+    } catch (e) {
+      console.warn("Gemini Post Generation Error:", e.message);
+    }
+  }
+
+  // ফলব্যাক কপিরাইটিং
+  return generateFallbackCaption(product, angleObj, randomHook);
+}
+
+function generateFallbackCaption(p, angle, hook) {
+  const origPriceText = (p.original_price && p.original_price > p.price) ? ` (আগের দাম: ৳${p.original_price})` : '';
+  const orderLink = p.product_url ? `\n🛒 সরাসরি ওয়েবসাইট থেকে অর্ডার করুন:\n👉 ${p.product_url}\n` : `\n📩 সরাসরি অর্ডার করতে আমাদের পেজে ইনবক্স করুন!\n`;
+
+  return `${hook}
+
+✨ ${p.name}
+${p.description ? `\n📌 বিশেষত্ব ও বিবরণ:\n${p.description}\n` : ''}
+💎 কেন এটি আপনার জন্য সেরা পছন্দ?
+✅ প্রিমিয়াম বিল্ড কোয়ালিটি ও দীর্ঘস্থায়িত্ব
+✅ ১০০% অরিজিনাল প্রোডাক্টের নিশ্চয়তা
+✅ সারা বাংলাদেশে দ্রুত ক্যাশ অন ডেলিভারি (হাতে পেয়ে চেক করে মূল্য পরিশোধের সুযোগ)
+
+💰 আজকের বিশেষ মূল্য: মাত্র ৳${p.price}${origPriceText}
+${orderLink}
+🚚 ডেলিভারি চার্জ: ঢাকা সিটির ভেতরে ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা।
+📞 যেকোনো তথ্যের জন্য ইনবক্স করুন অথবা কল করুন।
+
+#${p.category ? p.category.replace(/\s+/g, '_') : 'OnlineShopping'} #TrendingProducts #SmartShopping #Bangladesh`;
+}
+
+// ========================================================
+// 🔵 ফেসবুক পেজে পোস্ট সেন্ডার (পাবলিক R2 ছবি সহ)
+// ========================================================
+async function publishToFacebookPage(product, caption, env) {
+  const token = await getMetaPageToken(env);
+  let pageId = env.META_PAGE_ID || "1287050647827199";
+  if (env.DB) {
+    const dbPageId = await getConfigValue(env.DB, "meta_page_id", null);
+    if (dbPageId) pageId = dbPageId;
+  }
+
+  if (!token) {
+    throw new Error("Facebook Page Access Token D1 বা Worker-এ পাওয়া যায়নি। ড্যাশবোর্ডে টোকেন সেভ করুন।");
+  }
+
+  // ১. পাবলিক R2 ছবি থাকলে /photos এন্ডপয়েন্টে ছবি + ক্যাপশন পোস্ট
+  if (product.image_url && product.image_url.startsWith("http")) {
+    console.log(`📸 Posting Photo to Facebook Page (${pageId}): ${product.image_url}`);
+    try {
+      const photoRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/photos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: product.image_url,
+          caption: caption,
+          access_token: token
+        })
+      });
+
+      const photoData = await photoRes.json();
+      if (photoRes.ok && (photoData.id || photoData.post_id)) {
+        const postId = photoData.post_id || photoData.id;
+        return {
+          success: true,
+          mode: "photo",
+          post_id: postId,
+          post_url: `https://facebook.com/${postId}`
+        };
+      } else {
+        console.warn("Facebook photo post failed, trying feed post fallback:", photoData);
+      }
+    } catch (e) {
+      console.warn("Photo upload exception:", e.message);
+    }
+  }
+
+  // ২. ফলব্যাক: /feed টেক্সট পোস্ট
+  console.log(`📝 Posting Feed to Facebook Page (${pageId})`);
+  const feedRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/feed`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      message: caption,
+      access_token: token
+    })
+  });
+
+  const feedData = await feedRes.json();
+  if (feedRes.ok && feedData.id) {
+    return {
+      success: true,
+      mode: "feed",
+      post_id: feedData.id,
+      post_url: `https://facebook.com/${feedData.id}`
+    };
+  } else {
+    throw new Error(`Facebook API Error (${feedRes.status}): ${JSON.stringify(feedData)}`);
+  }
+}
+
+// ========================================================
+// 🚀 ড্যাশবোর্ড থেকে ১-ক্লিক ডাইরেক্ট পোস্ট হ্যান্ডলার
+// ========================================================
+async function handlePublishProductNow(body, env) {
+  if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+  await ensureTables(env.DB);
+
+  const { product_id, platform } = body;
+  if (!product_id) return jsonResponse({ error: "Missing product_id" }, 400);
+
+  // D1 থেকে প্রোডাক্ট রিড
+  const product = await env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(product_id).first();
+  if (!product) return jsonResponse({ error: "Product not found in D1" }, 404);
+
+  // ১. বিগত পোস্টের অ্যাঙ্গেলগুলো চেক করা
+  let recentAngles = [];
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT angle FROM post_history WHERE product_id = ? ORDER BY published_at DESC LIMIT 4"
+    ).bind(product.id).all();
+    recentAngles = (results || []).map(r => r.angle);
+  } catch (e) {}
+
+  // ২. সম্প্রতি ব্যবহার না হওয়া অ্যাঙ্গেল বাছাই
+  const available = MARKETING_ANGLES.filter(a => !recentAngles.includes(a.name) && !recentAngles.includes(a.key));
+  const chosenAngle = (available.length > 0)
+    ? available[Math.floor(Math.random() * available.length)]
+    : MARKETING_ANGLES[Math.floor(Math.random() * MARKETING_ANGLES.length)];
+
+  // ৩. AI দিয়ে ক্যাপশন তৈরি
+  const caption = await generateAIPostCaption(product, chosenAngle, env);
+
+  // ৪. ফেসবুক পেজে পোস্ট পাবলিশ (পাবলিক R2 ছবি সহ)
+  const pubResult = await publishToFacebookPage(product, caption, env);
+
+  // ৫. D1 post_history তে সেভ ও products.last_posted_at আপডেট
+  const histId = `post_${Date.now()}`;
+  await env.DB.prepare(`
+    INSERT INTO post_history (id, product_id, platform, caption, angle, post_id, image_url, published_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).bind(histId, product.id, platform || 'facebook', caption, chosenAngle.name, pubResult.post_id || '', product.image_url || '').run();
+
+  await env.DB.prepare("UPDATE products SET last_posted_at = CURRENT_TIMESTAMP WHERE id = ?").bind(product.id).run();
+
+  return jsonResponse({
+    success: true,
+    message: `🎉 Facebook পেজে সফলভাবে পোস্ট পাবলিশ হয়েছে!`,
+    post_id: pubResult.post_id,
+    post_url: pubResult.post_url,
+    angle: chosenAngle.name,
+    caption: caption,
+    image_url: product.image_url || null
+  });
+}
+
+// ========================================================
+// ⏰ শিডিউল্ড অটো-পোস্টিং এক্সিকিউটর (Ultra-Low CPU)
+// ========================================================
+async function handleScheduledAutoPosting(env) {
+  if (!env.DB) return;
+  await ensureTables(env.DB);
+
+  // ১. সক্রিয় অটো-পোস্ট প্রোডাক্টগুলো নেওয়া
+  const { results: prods } = await env.DB.prepare(
+    "SELECT * FROM products WHERE is_active = 1 AND daily_auto_post = 1"
+  ).all();
+
+  if (!prods || prods.length === 0) return;
+
+  const now = Date.now();
+  // বাংলাদেশ সময় (UTC+6)
+  const bdtDate = new Date(now + 6 * 3600 * 1000);
+  const currentHour = bdtDate.getUTCHours();
+
+  for (const p of prods) {
+    let isDue = false;
+
+    // ১. ইন্টারভ্যাল বেসিস (যেমন প্রতি ২, ৪, ৬, ৮, ১২, ২৪ ঘণ্টা পর পর)
+    if (p.schedule_type === 'interval' || (p.posting_time && p.posting_time.startsWith('interval_'))) {
+      let hours = p.interval_hours || 4;
+      if (p.posting_time && p.posting_time.startsWith('interval_')) {
+        hours = parseInt(p.posting_time.replace('interval_', '')) || 4;
+      }
+      const lastPosted = p.last_posted_at ? new Date(p.last_posted_at).getTime() : 0;
+      if (now - lastPosted >= hours * 3600 * 1000) {
+        isDue = true;
+      }
+    } 
+    // ২. নির্দিষ্ট দৈনিক সময় বেসিস (যেমন "10:00", "20:00")
+    else {
+      const times = (p.posting_time || '10:00').split(',').map(t => t.trim());
+      const lastPosted = p.last_posted_at ? new Date(p.last_posted_at).getTime() : 0;
+      const hoursSinceLast = (now - lastPosted) / (3600 * 1000);
+      if (hoursSinceLast >= 3.5) {
+        for (const t of times) {
+          const [tHour] = t.split(':').map(Number);
+          if (tHour === currentHour) {
+            isDue = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if (isDue) {
+      console.log(`🚀 [Auto-Post Due] Publishing product: ${p.name} (ID: ${p.id})`);
+      try {
+        await handlePublishProductNow({ product_id: p.id, platform: p.target_platform || 'facebook' }, env);
+      } catch (err) {
+        console.error(`Auto-post failed for product ${p.id}:`, err.message);
+      }
+    }
+  }
+}
+

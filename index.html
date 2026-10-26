@@ -189,50 +189,88 @@
             </div>
             <p class="section-desc">প্রোডাক্ট যোগ করুন। কাস্টমার দাম বা বিবরণ জানতে চাইলে AI সরাসরি এই D1 টেবিল থেকে উত্তর দেবে:</p>
             
+            <!-- ⚡ পদ্ধতি ১: ওয়েবসাইট লিংক দিয়ে ১-ক্লিকে অটো-ফেচ -->
+            <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: var(--radius-md); padding: 18px; margin-bottom: 24px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <h4 style="margin: 0; font-size: 14px; color: #93c5fd; display: flex; align-items: center; gap: 8px;">
+                  <span>⚡</span> পদ্ধতি ১: ওয়েবসাইট প্রোডাক্ট লিংক দিয়ে অটো-ফেচ (Auto-Fetch)
+                </h4>
+                <span class="badge-status published" style="font-size: 11px;">100% Automatic</span>
+              </div>
+              <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">
+                আপনার শপের যেকোনো প্রোডাক্ট পেজের লিংক এখানে পেস্ট করে <strong>Auto-Fetch</strong> বাটনে চাপুন। Worker সাইটে গিয়ে নাম, মূল্য, বিবরণ ও <strong>পাবলিক R2 ইমেজ URL</strong> স্বয়ংক্রিয়ভাবে নিচে ফর্মে সাজিয়ে দেবে:
+              </p>
+              <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <input type="url" id="input-quick-fetch-url" placeholder="যেমন: https://ranonex.shop/product.html?id=123" style="flex: 1; min-width: 250px; padding: 12px 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: var(--radius-md); color: var(--text-main); font-family: inherit;">
+                <button type="button" class="btn-primary" id="btn-quick-fetch-prod" style="padding: 12px 20px; font-weight: 700; white-space: nowrap; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; border: none; border-radius: var(--radius-md); cursor: pointer;">
+                  ⚡ Auto-Fetch Product Info
+                </button>
+              </div>
+              <div id="fetch-preview-box" style="display: none; margin-top: 14px; padding: 12px; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: var(--radius-sm); font-size: 12px; color: #a7f3d0; align-items: center; gap: 14px;">
+                <img id="fetch-preview-img" src="" style="width: 50px; height: 50px; object-fit: cover; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">
+                <div style="flex: 1;">
+                  <strong id="fetch-preview-title" style="font-size: 13px; color: #fff;"></strong><br>
+                  মূল্য: <span id="fetch-preview-price" style="font-weight: 700; color: #34d399;"></span> &nbsp;|&nbsp; 
+                  <span id="fetch-preview-status" style="color: #6ee7b7;">✅ পাবলিক R2 ইমেজ ডিটেক্ট হয়েছে</span>
+                </div>
+              </div>
+            </div>
+
+            <h4 style="font-size: 14px; margin-bottom: 12px; color: var(--text-main);">পদ্ধতি ২: প্রোডাক্ট বিবরণ ম্যানুয়ালি এডিট বা নতুন যোগ করুন:</h4>
             <form id="add-product-form" style="margin-bottom: 24px;">
               <div class="form-row">
                 <div class="form-group" style="flex: 2;">
                   <label>Product Name</label>
-                  <input type="text" id="prod-name" placeholder="যেমন: Premium Leather Wallet" required>
+                  <input type="text" id="prod-name" placeholder="যেমন: Retro Video Game Console" required>
                 </div>
                 <div class="form-group" style="flex: 1;">
                   <label>Price (৳ BDT)</label>
-                  <input type="number" id="prod-price" placeholder="950" required>
+                  <input type="number" id="prod-price" placeholder="1450" required>
                 </div>
               </div>
               <div class="form-row">
                 <div class="form-group" style="flex: 1;">
                   <label>Website Product URL (অর্ডার লিংক)</label>
-                  <input type="url" id="prod-url" placeholder="https://myshop.com/product/wallet">
+                  <input type="url" id="prod-url" placeholder="https://ranonex.shop/product.html?id=...">
                 </div>
                 <div class="form-group" style="flex: 1;">
-                  <label>Product Image URL (ছবি লিংক)</label>
-                  <input type="url" id="prod-img" placeholder="https://.../wallet.jpg">
+                  <label>Product Image URL (পাবলিক R2 ফটো লিংক)</label>
+                  <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="url" id="prod-img" placeholder="https://pub-...r2.dev/game_console.jpg" style="flex: 1;">
+                    <img id="prod-img-preview" src="" style="display: none; width: 42px; height: 42px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-color);">
+                  </div>
                 </div>
               </div>
               <div class="form-row">
-                <div class="form-group" style="flex: 1;">
-                  <label>⏰ Daily Auto-Post Time</label>
+                <div class="form-group" style="flex: 1.2;">
+                  <label>⏰ Auto-Post Schedule (নির্দিষ্ট সময় বা ঘণ্টা পর পর)</label>
                   <select id="prod-post-time" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
-                    <option value="10:00">সকাল ১০:০০ টা (10:00 AM)</option>
-                    <option value="15:00">বিকাল ০৩:০০ টা (03:00 PM)</option>
-                    <option value="20:00" selected>রাত ০৮:০০ টা (08:00 PM - পিক টাইম)</option>
-                    <option value="22:00">রাত ১০:০০ টা (10:00 PM)</option>
+                    <option value="interval_2">⏱️ প্রতি ২ ঘণ্টা পর পর (Every 2 Hours)</option>
+                    <option value="interval_4" selected>⏱️ প্রতি ৪ ঘণ্টা পর পর (Every 4 Hours - প্রস্তাবিত)</option>
+                    <option value="interval_6">⏱️ প্রতি ৬ ঘণ্টা পর পর (Every 6 Hours)</option>
+                    <option value="interval_8">⏱️ প্রতি ৮ ঘণ্টা পর পর (Every 8 Hours)</option>
+                    <option value="interval_12">⏱️ প্রতি ১২ ঘণ্টা পর পর (Every 12 Hours)</option>
+                    <option value="interval_24">⏱️ প্রতি ২৪ ঘণ্টা পর পর (Once a Day)</option>
+                    <option value="10:00">⏰ প্রতিদিন সকাল ১০:০০ টা (10:00 AM)</option>
+                    <option value="15:00">⏰ প্রতিদিন বিকাল ০৩:০০ টা (03:00 PM)</option>
+                    <option value="20:00">⏰ প্রতিদিন রাত ০৮:০০ টা (08:00 PM - পিক টাইম)</option>
+                    <option value="22:00">⏰ প্রতিদিন রাত ১০:০০ টা (10:00 PM)</option>
+                    <option value="10:00, 20:00">⏰ দিনে ২ বার: সকাল ১০:০০ টা ও রাত ০৮:০০ টা</option>
                   </select>
                 </div>
                 <div class="form-group" style="flex: 1;">
                   <label>🎯 Target Social Platform</label>
                   <select id="prod-target-platform" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
-                    <option value="tiktok" selected>🎵 TikTok (Primary Auto-Post)</option>
-                    <option value="facebook">🔵 Facebook Page</option>
+                    <option value="facebook" selected>🔵 Facebook Page (Ranonex)</option>
+                    <option value="tiktok">🎵 TikTok Creator</option>
                     <option value="all">🌐 All Channels</option>
                   </select>
                 </div>
-                <div class="form-group" style="flex: 1;">
-                  <label>🔄 Daily Auto-Post Status</label>
+                <div class="form-group" style="flex: 0.8;">
+                  <label>🔄 Auto-Post Status</label>
                   <select id="prod-auto-post" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
-                    <option value="1">🟢 প্রতিদিন অটো-পোস্ট চালু (Active)</option>
-                    <option value="0">⚪ অটো-পোস্ট বন্ধ (Off)</option>
+                    <option value="1">🟢 চালু (Active)</option>
+                    <option value="0">⚪ বন্ধ (Off)</option>
                   </select>
                 </div>
               </div>
@@ -246,23 +284,23 @@
                 </div>
                 <div class="form-group" style="flex: 2;">
                   <label>Description / Highlights</label>
-                  <input type="text" id="prod-desc" placeholder="কালার: কালো ও বাদামী, ১০০% চামড়া, ১ বছরের ওয়ারেন্টি">
+                  <input type="text" id="prod-desc" placeholder="বিল্ট-ইন ১০,০০০+ রেট্রো গেমস, ৪K HDMI আউটপুট, ২ টি ওয়্যারলেস কন্ট্রোলার">
                 </div>
               </div>
-              <button type="submit" class="btn-primary" id="btn-add-product">➕ Save Product & Daily Schedule to D1</button>
+              <button type="submit" class="btn-primary" id="btn-add-product">💾 Save Product & Schedule to D1</button>
             </form>
 
-            <h4 style="font-size: 14px; margin-bottom: 12px; color: var(--text-main);">D1 প্রোডাক্ট তালিকা ও দৈনিক শিডিউল:</h4>
+            <h4 style="font-size: 14px; margin-bottom: 12px; color: var(--text-main);">D1 প্রোডাক্ট তালিকা ও ১-ক্লিক পোস্ট কন্ট্রোল:</h4>
             <div class="posts-table-wrapper">
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Product</th>
+                    <th>Product & Photo</th>
                     <th>Price</th>
                     <th>Platform</th>
-                    <th>⏰ Daily Schedule</th>
+                    <th>⏰ Auto Schedule</th>
                     <th>Stock</th>
-                    <th>Action</th>
+                    <th style="min-width: 130px;">Action & Test</th>
                   </tr>
                 </thead>
                 <tbody id="products-table-tbody">
