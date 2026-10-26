@@ -129,11 +129,26 @@ export default {
       }
 
       // ==========================================
-      // ৩.৩ ড্যাশবোর্ড থেকে ১-ক্লিক ইনস্ট্যান্ট পোস্ট ট্রিগার
+      // ৩.৩ ড্যাশবোর্ড থেকে ১-ক্লিক ইনস্ট্যান্ট পোস্ট ট্রিগার (GitHub Actions Engine)
       // ==========================================
       if (request.method === "POST" && path === "/api/trigger-post") {
         const body = await request.json().catch(() => ({}));
         return await handleTriggerPost(body, env);
+      }
+
+      // ==========================================
+      // ৩.৪ ড্যাশবোর্ড সেটিংস ও কানেক্টেড অ্যাকাউন্ট লোড API
+      // ==========================================
+      if (request.method === "GET" && path === "/api/settings") {
+        return await handleGetSettings(env);
+      }
+
+      // ==========================================
+      // ৩.৫ গিটহাব অ্যাকশনস ক্রেডেনশিয়াল সেভ API
+      // ==========================================
+      if (request.method === "POST" && path === "/api/setup-github") {
+        const body = await request.json().catch(() => ({}));
+        return await handleSetupGitHub(body, env);
       }
 
       // ==========================================
@@ -150,14 +165,6 @@ export default {
       if (request.method === "POST" && path === "/api/setup-meta") {
         const body = await request.json();
         return await handleSetupMeta(body, env);
-      }
-
-      // ==========================================
-      // ৫.১ মেটা ফেসবুক পেজে ১-ক্লিক টেস্ট পোস্ট (Caption Only)
-      // ==========================================
-      if (request.method === "POST" && path === "/api/test-post-facebook") {
-        const body = await request.json().catch(() => ({}));
-        return await handleTestPostFacebook(body, env);
       }
 
       // ==========================================
@@ -737,6 +744,12 @@ async function handleTriggerPost(body, env) {
     if (dbToken) ghToken = dbToken;
     if (dbRepo) ghRepo = dbRepo;
   }
+  if (body.github_token) ghToken = body.github_token.trim();
+  if (body.github_repo) ghRepo = body.github_repo.trim();
+
+  const targetPlatform = body.target_platform || "facebook";
+  const postType = body.post_type || "caption_only";
+  const productUrl = body.product_url || "";
 
   if (ghToken) {
     try {
@@ -750,24 +763,113 @@ async function handleTriggerPost(body, env) {
         body: JSON.stringify({
           ref: "main",
           inputs: {
-            product_url: body.product_url || "",
-            target_platform: body.target_platform || "tiktok"
+            target_platform: targetPlatform,
+            post_type: postType,
+            product_url: productUrl
           }
         })
       });
-      return jsonResponse({
-        success: dispatchRes.ok,
-        message: dispatchRes.ok ? "🚀 GitHub Actions ক্রন পোস্টিং শুরু হয়েছে!" : "GitHub dispatch call failed",
-        status: dispatchRes.status
-      });
+
+      if (dispatchRes.ok) {
+        return jsonResponse({
+          success: true,
+          message: `🚀 GitHub Actions-এ ${targetPlatform.toUpperCase()} পোস্ট (${postType === 'caption_only' ? 'ক্যাপশন-অনলি' : 'ছবি সহ'}) সফলভাবে ট্রিগার হয়েছে!`,
+          run_url: `https://github.com/${ghRepo}/actions`
+        });
+      } else {
+        const errText = await dispatchRes.text();
+        return jsonResponse({
+          success: false,
+          error: `GitHub Dispatch ব্যর্থ হয়েছে (${dispatchRes.status}): ${errText}`,
+          run_url: `https://github.com/${ghRepo}/actions/workflows/post_publisher.yml`
+        }, 400);
+      }
     } catch (e) {
       return jsonResponse({ error: e.message }, 500);
     }
   }
 
   return jsonResponse({
+    success: false,
+    missing_token: true,
+    message: "GitHub Personal Access Token সেভ করা নেই। আপনি সরাসরি GitHub Actions পেজ থেকে ১-ক্লিকে 'Run workflow' চালাতে পারেন অথবা ড্যাশবোর্ডে GitHub টোকেন সেভ করুন।",
+    workflow_url: `https://github.com/${ghRepo}/actions/workflows/post_publisher.yml`
+  });
+}
+
+// ⚙️ ড্যাশবোর্ড সেটিংস ও ক্রেডেনশিয়াল ফেচ API (রিফ্রেশ মারলে ফর্ম পূরণ রাখার জন্য)
+async function handleGetSettings(env) {
+  const settings = {
+    facebook: { connected: false, account_name: '', account_id: '', access_token: '' },
+    tiktok: { connected: false, account_name: '', account_id: '', access_token: '', client_key: 'awq5kzk0rv01o6z0', client_secret: '' },
+    whatsapp: { connected: false, phone: '', mode: 'gateway', gateway_url: '', gateway_token: '' },
+    github: { connected: false, repo: 'rifatrabbi104-oss/social-automate', token: '' }
+  };
+
+  if (env.DB) {
+    try {
+      await ensureTables(env.DB);
+      const { results: accs } = await env.DB.prepare(
+        "SELECT platform, account_name, account_id, access_token, status FROM social_accounts WHERE status = 'active'"
+      ).all();
+
+      for (const a of (accs || [])) {
+        if (a.platform === 'facebook') {
+          settings.facebook = {
+            connected: true,
+            account_name: a.account_name || 'Ranonex',
+            account_id: a.account_id || '',
+            access_token: a.access_token || ''
+          };
+        } else if (a.platform === 'tiktok') {
+          settings.tiktok.connected = true;
+          settings.tiktok.account_name = a.account_name || 'TikTok Account';
+          settings.tiktok.account_id = a.account_id || '';
+          settings.tiktok.access_token = a.access_token || '';
+        } else if (a.platform === 'whatsapp') {
+          settings.whatsapp.connected = true;
+          settings.whatsapp.phone = a.account_id || '';
+          settings.whatsapp.gateway_token = a.access_token || '';
+        }
+      }
+
+      const { results: configs } = await env.DB.prepare("SELECT key, value FROM system_config").all();
+      for (const c of (configs || [])) {
+        if (c.key === 'tiktok_client_key') settings.tiktok.client_key = c.value;
+        if (c.key === 'tiktok_client_secret') settings.tiktok.client_secret = c.value;
+        if (c.key === 'tiktok_access_token' && !settings.tiktok.access_token) settings.tiktok.access_token = c.value;
+        if (c.key === 'whatsapp_mode') settings.whatsapp.mode = c.value;
+        if (c.key === 'whatsapp_phone') settings.whatsapp.phone = c.value;
+        if (c.key === 'whatsapp_gateway_url') settings.whatsapp.gateway_url = c.value;
+        if (c.key === 'whatsapp_gateway_token') settings.whatsapp.gateway_token = c.value;
+        if (c.key === 'github_token') {
+          settings.github.connected = Boolean(c.value);
+          settings.github.token = c.value;
+        }
+        if (c.key === 'github_repo') settings.github.repo = c.value;
+      }
+    } catch (e) {
+      console.warn("Could not load settings from D1:", e);
+    }
+  }
+
+  return jsonResponse({ success: true, settings });
+}
+
+// 🐙 GitHub Actions সেটিংস সেভ API
+async function handleSetupGitHub(body, env) {
+  if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+  await ensureTables(env.DB);
+  const { github_token, github_repo } = body;
+  if (github_token) {
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('github_token', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(github_token.trim()).run();
+  }
+  if (github_repo) {
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('github_repo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(github_repo.trim()).run();
+  }
+  return jsonResponse({
     success: true,
-    message: "✅ পোস্টিং টাস্ক শিডিউল্ড আছে। ক্রন শিডিউল অনুযায়ী GitHub Actions স্বয়ংক্রিয়ভাবে D1 থেকে ডেটা নিয়ে পোস্ট করবে।"
+    message: "GitHub Actions ক্রেডেনশিয়ালস D1 ডেটাবেসে সফলভাবে সেভ হয়েছে!"
   });
 }
 
@@ -951,68 +1053,6 @@ async function handleSetupMeta(body, env) {
     account: { id: accountId, name: accountName, platform: cleanPlatform },
     subscription: subStatus
   });
-}
-
-// 📤 ৫.১ মেটা ফেসবুক পেজে ১-ক্লিক টেস্ট পোস্ট (Caption Only)
-async function handleTestPostFacebook(body, env) {
-  let token = null;
-  let pageId = null;
-
-  if (env.DB) {
-    try {
-      await ensureTables(env.DB);
-      const row = await env.DB.prepare(
-        "SELECT account_id, access_token FROM social_accounts WHERE platform = 'facebook' AND status = 'active' ORDER BY created_at DESC"
-      ).first();
-      if (row) {
-        pageId = row.account_id;
-        token = row.access_token;
-      }
-    } catch (e) {}
-  }
-
-  if (!token && activeMetaToken) {
-    token = activeMetaToken;
-    pageId = activeMetaPageId;
-  }
-
-  if (body.token) token = body.token.trim();
-  if (body.page_id) pageId = body.page_id.trim();
-
-  if (!token || !pageId) {
-    return jsonResponse({ error: "Facebook পেজের অ্যাক্সেস টোকেন বা পেজ আইডি পাওয়া যায়নি। অনুগ্রহ করে ড্যাশবোর্ডে Meta সেটিংস সেভ করুন।" }, 400);
-  }
-
-  const caption = (body.caption || body.message || "🚀 SocialAutomate - AI Automation Test Post\n\nঅভিনন্দন! আপনার Ranonex পেজটি SocialAutomate-এর সাথে সফলভাবে কানেক্ট হয়েছে। এখন থেকে স্বয়ংক্রিয়ভাবে প্রতিদিন আকর্ষণীয় সেলস কপি সহ পোস্ট পাবলিশ হবে। ⚡").trim();
-
-  try {
-    const feedUrl = `https://graph.facebook.com/v19.0/${pageId}/feed`;
-    const res = await fetch(feedUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: caption,
-        access_token: token
-      })
-    });
-
-    const data = await res.json();
-    if (data.id) {
-      return jsonResponse({
-        success: true,
-        post_id: data.id,
-        message: "🎉 সফলভাবে শুধুমাত্র ক্যাপশন দিয়ে ফেসবুকে টেস্ট পোস্ট পাবলিশ হয়েছে!",
-        post_url: `https://www.facebook.com/${data.id}`
-      });
-    } else {
-      return jsonResponse({
-        success: false,
-        error: data.error?.message || JSON.stringify(data.error || data)
-      }, 400);
-    }
-  } catch (err) {
-    return jsonResponse({ success: false, error: err.message }, 500);
-  }
 }
 
 // ========================================================

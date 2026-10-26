@@ -423,10 +423,12 @@
           <div class="card">
             <div class="card-header">
               <h3>🌐 Meta (Facebook Page) Connect (Optional)</h3>
-              <span class="badge-zero-worker" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa;">Secondary Channel</span>
+              <span class="badge-zero-worker" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa;" id="badge-meta-status">Secondary Channel</span>
             </div>
             <p class="section-desc">মেটা ফেসবুক পেজ কানেক্ট করতে চাইলে পেজ টোকেন সেভ রাখতে পারেন। পেজে মেসেজ আসলেই AI স্বয়ংক্রিয়ভাবে রিপ্লাই দিতে পারবে:</p>
             
+            <div id="meta-connected-badge" style="display: none; margin-bottom: 16px; padding: 12px 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
+
             <form id="meta-connect-form">
               <div class="form-group">
                 <label>Meta Page Access Token (Permanent / Long-Lived Token)</label>
@@ -442,8 +444,8 @@
               <button type="submit" class="btn-secondary full-width" id="btn-save-meta">💾 Save Meta Settings</button>
 
               <div style="display: flex; gap: 10px; margin-top: 14px;">
-                <button type="button" class="btn-primary" id="btn-test-post-facebook" style="flex: 1.2; padding: 12px 14px; font-weight: 600; background: linear-gradient(135deg, #1877f2, #0d6efd); border: none; color: #fff;">🚀 1-Click Test Post (Caption Only)</button>
-                <a href="https://www.facebook.com/1287050647827199" id="link-view-fb-page" target="_blank" class="btn-refresh" style="flex: 0.8; text-align: center; text-decoration: none; padding: 12px 14px; display: flex; align-items: center; justify-content: center;">👁️ View Page</a>
+                <button type="button" class="btn-primary" id="btn-test-post-facebook" style="flex: 1.3; padding: 12px 14px; font-weight: 600; background: linear-gradient(135deg, #1877f2, #0d6efd); border: none; color: #fff;">🚀 1-Click Test Post (Caption Only)</button>
+                <a href="https://www.facebook.com/1287050647827199" id="link-view-fb-page" target="_blank" class="btn-refresh" style="flex: 0.7; text-align: center; text-decoration: none; padding: 12px 14px; display: flex; align-items: center; justify-content: center;">👁️ View Page</a>
               </div>
             </form>
 
@@ -458,19 +460,36 @@
             </div>
           </div>
 
-          <!-- ⚡ CARD 4: Optimization Info -->
+          <!-- 🐙 CARD 4: GitHub Actions Posting Engine -->
           <div class="card">
             <div class="card-header">
-              <h3>⚡ Worker Quota Protection Strategy</h3>
-              <span class="badge-zero-worker" style="background: rgba(16, 185, 129, 0.15); color: var(--emerald);">0-Quota Wasted</span>
+              <h3>🐙 GitHub Actions Posting Engine</h3>
+              <span class="badge-status published">Automated Posting</span>
             </div>
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); padding: 16px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.8; color: var(--text-muted);">
-              <strong style="color: var(--text-main);">এই আর্কিটেকচারে ক্লাউডফ্লেয়ারের ফ্রি ১০০,০০০ কোটা যেভাবে শতভাগ সুরক্ষিত:</strong>
-              <ul style="padding-left: 20px; margin-top: 8px;">
-                <li><strong>০ ব্যাকগ্রাউন্ড পোলিং:</strong> ড্যাশবোর্ডে কোনো <code>setInterval</code> বা স্বয়ংক্রিয় লুপ নেই। সারাদিন পেজ খোলা থাকলেও ১টিও রিকোয়েস্ট কাটবে না।</li>
-                <li><strong>লোকাল ব্রাউজার ক্যাশ:</strong> কাস্টমার চ্যাট, প্রোডাক্ট তালিকা এবং স্টোর প্রোফাইল ব্রাউজারের <code>localStorage</code>-এ থাকে, ফলে ড্যাশবোর্ড লোড হয় ০ মিলিসেকেন্ডে এবং ০ ওয়ার্কার রিকোয়েস্টে।</li>
-                <li><strong>পোস্টিং রান হয় GitHub Actions-এ:</strong> প্রতিদিনের AI কপি তৈরি ও পোস্টিং ক্লাউডফ্লেয়ারে নয়, বরং GitHub Actions-এর ফ্রি সার্ভারে চলে।</li>
-              </ul>
+            <p class="section-desc">ড্যাশবোর্ড ও ক্রন শিডিউল থেকে GitHub Actions দিয়ে অটোমেটিক পোস্ট করাতে আপনার GitHub Personal Access Token (PAT) সেভ রাখুন:</p>
+
+            <form id="github-connect-form">
+              <div class="form-group">
+                <label>GitHub Personal Access Token (PAT)</label>
+                <input type="password" id="input-gh-token" placeholder="ghp_xxxxxxxxxxxx বা github_pat_xxxxxx">
+                <small class="help-text">GitHub ➜ Settings ➜ Developer settings ➜ Personal access tokens (with 'repo' or 'actions:write' scope)</small>
+              </div>
+
+              <div class="form-group">
+                <label>GitHub Repository</label>
+                <input type="text" id="input-gh-repo" value="rifatrabbi104-oss/social-automate" placeholder="username/repository">
+              </div>
+
+              <div style="display: flex; gap: 10px;">
+                <button type="submit" class="btn-secondary" id="btn-save-github" style="flex: 1;">💾 Save GitHub Token to D1</button>
+                <a href="https://github.com/rifatrabbi104-oss/social-automate/actions/workflows/post_publisher.yml" target="_blank" class="btn-primary" style="flex: 1.2; text-align: center; text-decoration: none; padding: 12px 14px; background: linear-gradient(135deg, #24292e, #0969da); border: none; font-weight: 600; color: #fff; display: flex; align-items: center; justify-content: center;">⚡ Run Directly on GitHub</a>
+              </div>
+            </form>
+
+            <div id="github-setup-result" style="display: none; margin-top: 16px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
+
+            <div style="margin-top: 18px; padding: 12px; border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); font-size: 12px; line-height: 1.6; color: var(--text-muted);">
+              <strong>💡 কীভাবে কাজ করে:</strong> আপনি যখন ড্যাশবোর্ড থেকে টেস্ট পোস্ট বা প্রোডাক্ট শিডিউল পোস্ট চাপেন, Worker কোনো পোস্ট তৈরি না করে সরাসরি GitHub Actions-কে নির্দেশ দেয়। GitHub Actions ফ্রি সার্ভার থেকে Gemini AI কল করে এবং ফেসবুক ও টিকটকে পোস্ট পাবলিশ করে।
             </div>
           </div>
 

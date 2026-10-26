@@ -878,12 +878,8 @@ function initSettingsForm() {
     });
   }
 
-  // লোকালে সেভ থাকা মেটা ক্রেডেনশিয়াল লোড করা
-  const cachedMeta = getLocalCache('sa_meta_config', null);
-  if (cachedMeta) {
-    if (tokenInput && cachedMeta.token) tokenInput.value = cachedMeta.token;
-    if (pageIdInput && cachedMeta.page_id) pageIdInput.value = cachedMeta.page_id;
-  }
+  // সার্ভার ও লোকাল থেকে সেটিংস লোড করা (রিফ্রেশ মারলে ফর্ম পূরণ রাখার জন্য)
+  loadSettingsFromServer();
 
   if (form && tokenInput) {
     form.addEventListener('submit', async (e) => {
@@ -892,8 +888,6 @@ function initSettingsForm() {
       const pageId = pageIdInput ? pageIdInput.value.trim() : '';
 
       if (!token) return;
-
-      setLocalCache('sa_meta_config', { token: token, page_id: pageId || '1287050647827199' });
 
       submitBtn.disabled = true;
       submitBtn.textContent = '⏳ Saving Meta Settings...';
@@ -914,8 +908,18 @@ function initSettingsForm() {
           resultBox.innerHTML = `
             <strong>✅ মেটা সেটিংস সেভ হয়েছে!</strong><br>
             সংযুক্ত পেজ: <strong>${escapeHtml(data.account.name)}</strong> (ID: ${escapeHtml(data.account.id)})<br>
-            এখন নিচে <strong>🚀 1-Click Test Post (Caption Only)</strong> বাটনে ক্লিক করে পেজে টেস্ট পোস্ট দিন।
+            এখন নিচে <strong>🚀 1-Click Test Post (Caption Only)</strong> বাটনে ক্লিক করে GitHub Actions দিয়ে টেস্ট পোস্ট চালান।
           `;
+
+          const metaBadge = document.getElementById('meta-connected-badge');
+          if (metaBadge) {
+            metaBadge.style.display = 'block';
+            metaBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+            metaBadge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            metaBadge.style.color = '#a7f3d0';
+            metaBadge.innerHTML = `✅ <strong>সংযুক্ত ফেসবুক পেজ:</strong> ${escapeHtml(data.account.name)} (ID: <code>${escapeHtml(data.account.id)}</code>)`;
+          }
+
           showToast('🎉 মেটা সেটিংস সফলভাবে সেভ হয়েছে!');
         } else {
           resultBox.style.display = 'block';
@@ -934,80 +938,59 @@ function initSettingsForm() {
     });
   }
 
-  // ৪. Facebook ১-ক্লিক টেস্ট পোস্ট (Caption Only)
+  // ৪. Facebook ১-ক্লিক টেস্ট পোস্ট (GitHub Actions Engine দিয়ে)
   const fbTestPostBtn = document.getElementById('btn-test-post-facebook');
   if (fbTestPostBtn) {
     fbTestPostBtn.addEventListener('click', async () => {
-      const token = (tokenInput ? tokenInput.value.trim() : '') || (getLocalCache('sa_meta_config', null)?.token || '');
-      const pageId = (pageIdInput ? pageIdInput.value.trim() : '') || (getLocalCache('sa_meta_config', null)?.page_id || '1287050647827199');
-
       fbTestPostBtn.disabled = true;
-      fbTestPostBtn.textContent = '⏳ Posting to Facebook...';
-
-      const testCaption = "🚀 SocialAutomate - AI Automation Live Test\n\nঅভিনন্দন! আপনার Ranonex পেজটি SocialAutomate-এর সাথে সফলভাবে কানেক্ট হয়েছে। এখন থেকে স্বয়ংক্রিয়ভাবে প্রতিদিন আকর্ষণীয় সেলস কপি সহ পোস্ট পাবলিশ হবে। ⚡";
+      fbTestPostBtn.textContent = '⏳ Triggering GitHub Actions...';
 
       try {
-        let postSuccess = false;
-        let postId = null;
-        let errorMsg = '';
+        const res = await fetch(`${API_BASE}/trigger-post`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            target_platform: 'facebook',
+            post_type: 'caption_only'
+          })
+        });
 
-        // ক. সরাসরি মেটা Graph API দিয়ে ফাস্ট কল
-        if (token && pageId) {
-          try {
-            const fbRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/feed`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                message: testCaption,
-                access_token: token
-              })
-            });
-            const fbData = await fbRes.json();
-            if (fbData.id) {
-              postSuccess = true;
-              postId = fbData.id;
-            } else {
-              errorMsg = fbData.error?.message || JSON.stringify(fbData.error || fbData);
-            }
-          } catch (clientErr) {
-            console.warn('Direct FB API call failed, trying worker:', clientErr);
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (resultBox) {
+            resultBox.style.display = 'block';
+            resultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            resultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            resultBox.style.color = '#a7f3d0';
+            resultBox.innerHTML = `
+              <strong>🚀 GitHub Actions-এ Facebook টেস্ট পোস্টিং শুরু হয়েছে!</strong><br>
+              GitHub Actions রানারে Gemini AI দিয়ে ইউনিক সেলস ক্যাপশন তৈরি করে আপনার Ranonex পেজে পোস্ট পাবলিশ হচ্ছে।<br>
+              <a href="${escapeHtml(data.run_url || 'https://github.com/rifatrabbi104-oss/social-automate/actions')}" target="_blank" style="color: #60a5fa; text-decoration: underline; margin-top: 8px; display: inline-block;">👉 ক্লিক করে GitHub Actions লাইভ লগ দেখুন</a>
+            `;
           }
-        }
-
-        // খ. ফলব্যাক: ওয়ার্কারের /api/test-post-facebook এন্ডপয়েন্ট
-        if (!postSuccess) {
-          const res = await fetch(`${API_BASE}/test-post-facebook`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token, page_id: pageId, caption: testCaption })
-          });
-          const data = await res.json();
-          if (res.ok && data.success) {
-            postSuccess = true;
-            postId = data.post_id;
-          } else {
-            errorMsg = data.error || errorMsg || 'Test post failed';
+          showToast('🚀 GitHub Actions ক্রন পোস্টিং শুরু হয়েছে!');
+        } else if (data.missing_token) {
+          if (resultBox) {
+            resultBox.style.display = 'block';
+            resultBox.style.background = 'rgba(234, 179, 8, 0.15)';
+            resultBox.style.border = '1px solid rgba(234, 179, 8, 0.4)';
+            resultBox.style.color = '#fef08a';
+            resultBox.innerHTML = `
+              <strong>ℹ️ GitHub Actions সরাসরি রান করুন:</strong><br>
+              ${escapeHtml(data.message)}<br>
+              <a href="${escapeHtml(data.workflow_url)}" target="_blank" class="btn-primary" style="display: inline-block; margin-top: 10px; padding: 10px 18px; text-decoration: none; font-size: 13px; color: #fff; border-radius: 6px;">⚡ GitHub Actions এ ১-ক্লিকে 'Run workflow' চাপুন</a>
+            `;
           }
-        }
-
-        if (postSuccess && resultBox) {
-          resultBox.style.display = 'block';
-          resultBox.style.background = 'rgba(16, 185, 129, 0.15)';
-          resultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
-          resultBox.style.color = '#a7f3d0';
-          resultBox.innerHTML = `
-            <strong>🎉 সফলভাবে ফেসবুক পেজে শুধুমাত্র ক্যাপশন দিয়ে টেস্ট পোস্ট পাবলিশ হয়েছে!</strong><br>
-            পোস্ট আইডি: <strong>${escapeHtml(postId)}</strong><br>
-            <a href="https://www.facebook.com/${escapeHtml(postId)}" target="_blank" style="color: #60a5fa; text-decoration: underline; margin-top: 6px; display: inline-block;">👉 এখানে ক্লিক করে আপনার ফেসবুক পেজের লাইভ পোস্টটি দেখে নিন!</a>
-          `;
-          showToast('🎉 ফেসবুকে ক্যাপশন টেস্ট পোস্ট পাবলিশ হয়েছে!');
-        } else if (resultBox) {
-          resultBox.style.display = 'block';
-          resultBox.style.background = 'rgba(239, 68, 68, 0.15)';
-          resultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
-          resultBox.style.color = '#fca5a5';
-          resultBox.innerHTML = `❌ ফেসবুক পোস্ট ব্যর্থ: ${escapeHtml(errorMsg)}`;
-          showToast('❌ টেস্ট পোস্ট করতে ব্যর্থ হয়েছে।');
+          showToast('⚠️ GitHub-এ সরাসরি রান করুন অথবা GitHub টোকেন সেভ করুন।');
+        } else {
+          if (resultBox) {
+            resultBox.style.display = 'block';
+            resultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+            resultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+            resultBox.style.color = '#fca5a5';
+            resultBox.innerHTML = `❌ ${escapeHtml(data.error || 'Failed to trigger post')}`;
+          }
+          showToast('❌ ট্রিগার এরর: ' + (data.error || 'Failed'));
         }
       } catch (err) {
         showToast('❌ এরর: ' + err.message);
@@ -1016,6 +999,126 @@ function initSettingsForm() {
         fbTestPostBtn.textContent = '🚀 1-Click Test Post (Caption Only)';
       }
     });
+  }
+
+  // ৫. GitHub Actions Connect Form
+  const ghForm = document.getElementById('github-connect-form');
+  const ghTokenInput = document.getElementById('input-gh-token');
+  const ghRepoInput = document.getElementById('input-gh-repo');
+  const ghSubmitBtn = document.getElementById('btn-save-github');
+  const ghResultBox = document.getElementById('github-setup-result');
+
+  if (ghForm) {
+    ghForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const token = ghTokenInput ? ghTokenInput.value.trim() : '';
+      const repo = ghRepoInput ? ghRepoInput.value.trim() : 'rifatrabbi104-oss/social-automate';
+
+      if (ghSubmitBtn) {
+        ghSubmitBtn.disabled = true;
+        ghSubmitBtn.textContent = '⏳ Saving GitHub Token...';
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/setup-github`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ github_token: token, github_repo: repo })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (ghResultBox) {
+            ghResultBox.style.display = 'block';
+            ghResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            ghResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            ghResultBox.style.color = '#a7f3d0';
+            ghResultBox.innerHTML = `<strong>✅ GitHub Actions ক্রেডেনশিয়ালস D1-এ সেভ হয়েছে!</strong> এখন ড্যাশবোর্ডের টেস্ট বাটন চাপলেই স্বয়ংক্রিয়ভাবে GitHub Actions চলবে।`;
+          }
+          showToast('✅ GitHub Token D1-এ সেভ হয়েছে!');
+        } else {
+          showToast('❌ সেভ করতে ব্যর্থ: ' + (data.error || 'Error'));
+        }
+      } catch (e) {
+        showToast('❌ নেটওয়ার্ক এরর: ' + e.message);
+      } finally {
+        if (ghSubmitBtn) {
+          ghSubmitBtn.disabled = false;
+          ghSubmitBtn.textContent = '💾 Save GitHub Token to D1';
+        }
+      }
+    });
+  }
+}
+
+// 🌐 সেটিংস ও ক্রেডেনশিয়াল সার্ভার থেকে ফেচ করে ফর্ম পূরণ করা
+async function loadSettingsFromServer() {
+  try {
+    const res = await fetch(`${API_BASE}/settings`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.success || !data.settings) return;
+
+    const s = data.settings;
+    setLocalCache(CACHE_KEYS.SETTINGS, s);
+
+    // ১. Meta / Facebook প্রি-ফিল
+    const tokenInput = document.getElementById('input-meta-token');
+    const pageIdInput = document.getElementById('input-meta-page-id');
+    const metaBadge = document.getElementById('meta-connected-badge');
+    const metaStatus = document.getElementById('badge-meta-status');
+    const linkFbPage = document.getElementById('link-view-fb-page');
+
+    if (s.facebook && s.facebook.connected) {
+      if (tokenInput && s.facebook.access_token) tokenInput.value = s.facebook.access_token;
+      if (pageIdInput && s.facebook.account_id) {
+        pageIdInput.value = s.facebook.account_id;
+        if (linkFbPage) linkFbPage.href = `https://www.facebook.com/${s.facebook.account_id}`;
+      }
+      if (metaBadge) {
+        metaBadge.style.display = 'block';
+        metaBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+        metaBadge.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+        metaBadge.style.color = '#a7f3d0';
+        metaBadge.innerHTML = `✅ <strong>সংযুক্ত ফেসবুক পেজ:</strong> ${escapeHtml(s.facebook.account_name || 'Ranonex')} (Page ID: <code>${escapeHtml(s.facebook.account_id)}</code>)`;
+      }
+      if (metaStatus) {
+        metaStatus.textContent = '🟢 Connected';
+        metaStatus.style.background = 'rgba(16, 185, 129, 0.2)';
+        metaStatus.style.color = '#34d399';
+      }
+    }
+
+    // ২. TikTok প্রি-ফিল
+    const tkKeyInput = document.getElementById('input-tiktok-client-key');
+    const tkSecretInput = document.getElementById('input-tiktok-client-secret');
+    const tkTokenInput = document.getElementById('input-tiktok-access-token');
+    if (s.tiktok) {
+      if (tkKeyInput && s.tiktok.client_key) tkKeyInput.value = s.tiktok.client_key;
+      if (tkSecretInput && s.tiktok.client_secret) tkSecretInput.value = s.tiktok.client_secret;
+      if (tkTokenInput && s.tiktok.access_token) tkTokenInput.value = s.tiktok.access_token;
+    }
+
+    // ৩. WhatsApp প্রি-ফিল
+    const waPhoneInput = document.getElementById('input-wa-phone');
+    const waModeInput = document.getElementById('input-wa-mode');
+    const waGatewayUrlInput = document.getElementById('input-wa-gateway-url');
+    const waTokenInput = document.getElementById('input-wa-token');
+    if (s.whatsapp) {
+      if (waPhoneInput && s.whatsapp.phone) waPhoneInput.value = s.whatsapp.phone;
+      if (waModeInput && s.whatsapp.mode) waModeInput.value = s.whatsapp.mode;
+      if (waGatewayUrlInput && s.whatsapp.gateway_url) waGatewayUrlInput.value = s.whatsapp.gateway_url;
+      if (waTokenInput && s.whatsapp.gateway_token) waTokenInput.value = s.whatsapp.gateway_token;
+    }
+
+    // ৪. GitHub Actions প্রি-ফিল
+    const ghTokenInput = document.getElementById('input-gh-token');
+    const ghRepoInput = document.getElementById('input-gh-repo');
+    if (s.github) {
+      if (ghTokenInput && s.github.token) ghTokenInput.value = s.github.token;
+      if (ghRepoInput && s.github.repo) ghRepoInput.value = s.github.repo;
+    }
+  } catch (e) {
+    console.warn('Could not load settings from server:', e);
   }
 }
 

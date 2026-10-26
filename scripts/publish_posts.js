@@ -150,7 +150,7 @@ async function getAutoPostTasks() {
         category: "ফ্যাশন",
         image_url: "https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=1000&q=80",
         product_url: "",
-        target_platform: "tiktok",
+        target_platform: "all",
         previous_posts: []
       }
     ],
@@ -583,7 +583,12 @@ async function main() {
   const activeFbToken = credentials.facebook?.token || META_PAGE_ACCESS_TOKEN;
   const activeFbPageId = credentials.facebook?.id || META_PAGE_ID;
 
-  const targetPlatform = selectedProduct.target_platform || TARGET_PLATFORM || "tiktok";
+  const explicitPlatform = (process.env.TARGET_PLATFORM || TARGET_PLATFORM || "").trim().toLowerCase();
+  const targetPlatform = (explicitPlatform && explicitPlatform !== "all")
+    ? explicitPlatform
+    : (selectedProduct.target_platform || "facebook");
+
+  console.log(`🎯 টার্গেট প্ল্যাটফর্ম: ${targetPlatform}`);
 
   // ১. TikTok পাবলিশ
   if (targetPlatform === "all" || targetPlatform === "tiktok") {
