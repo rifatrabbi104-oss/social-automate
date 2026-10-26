@@ -201,8 +201,8 @@
                 আপনার শপের যেকোনো প্রোডাক্ট পেজের লিংক এখানে পেস্ট করে <strong>Auto-Fetch</strong> বাটনে চাপুন। Worker সাইটে গিয়ে নাম, মূল্য, বিবরণ ও <strong>পাবলিক R2 ইমেজ URL</strong> স্বয়ংক্রিয়ভাবে নিচে ফর্মে সাজিয়ে দেবে:
               </p>
               <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                <input type="url" id="input-quick-fetch-url" placeholder="যেমন: https://ranonex.shop/product.html?id=123" style="flex: 1; min-width: 250px; padding: 12px 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: var(--radius-md); color: var(--text-main); font-family: inherit;">
-                <button type="button" class="btn-primary" id="btn-quick-fetch-prod" style="padding: 12px 20px; font-weight: 700; white-space: nowrap; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; border: none; border-radius: var(--radius-md); cursor: pointer;">
+                <input type="url" id="input-quick-fetch-url" placeholder="যেমন: https://ranonex.shop/product.html?id=123" onkeypress="if(event.key==='Enter'){event.preventDefault();handleQuickFetchClick();}" style="flex: 1; min-width: 250px; padding: 12px 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: var(--radius-md); color: var(--text-main); font-family: inherit;">
+                <button type="button" class="btn-primary" id="btn-quick-fetch-prod" onclick="handleQuickFetchClick()" style="padding: 12px 20px; font-weight: 700; white-space: nowrap; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; border: none; border-radius: var(--radius-md); cursor: pointer;">
                   ⚡ Auto-Fetch Product Info
                 </button>
               </div>
@@ -538,6 +538,85 @@
 
   <div class="toast-notification" id="toast"></div>
 
-  <script src="app.js"></script>
+  <script>
+    // ⚡ ১-ক্লিক অটো-ফেচ হ্যান্ডলার (ব্রাউজার ক্যাশ বাইপাস ও ১০০% নির্ভরযোগ্যতা)
+    window.handleQuickFetchClick = async function() {
+      const input = document.getElementById('input-quick-fetch-url');
+      const btn = document.getElementById('btn-quick-fetch-prod');
+      const previewBox = document.getElementById('fetch-preview-box');
+      const previewImg = document.getElementById('fetch-preview-img');
+      const previewTitle = document.getElementById('fetch-preview-title');
+      const previewPrice = document.getElementById('fetch-preview-price');
+      const prodImgInput = document.getElementById('prod-img');
+      const prodImgPreview = document.getElementById('prod-img-preview');
+
+      if (!input) return;
+      const url = input.value.trim();
+      if (!url) {
+        if (typeof showToast === 'function') showToast('⚠️ অনুগ্রহ করে একটি প্রোডাক্ট লিংক পেস্ট করুন!');
+        else alert('অনুগ্রহ করে একটি প্রোডাক্ট লিংক পেস্ট করুন!');
+        input.focus();
+        return;
+      }
+
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ ফেচ হচ্ছে...';
+      }
+
+      try {
+        const customUrl = localStorage.getItem('social_automate_worker_url');
+        const apiBase = customUrl ? customUrl.replace(/\/$/, '') + '/api' : 'https://social-automate.rifatrabbi104.workers.dev/api';
+        
+        const res = await fetch(`${apiBase}/extract-product`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success && data.product) {
+          const p = data.product;
+          const nameEl = document.getElementById('prod-name');
+          const priceEl = document.getElementById('prod-price');
+          const urlEl = document.getElementById('prod-url');
+          const descEl = document.getElementById('prod-desc');
+
+          if (nameEl) nameEl.value = p.name || '';
+          if (priceEl) priceEl.value = p.price || '';
+          if (urlEl) urlEl.value = p.product_url || url;
+          if (descEl) descEl.value = p.description || '';
+
+          if (prodImgInput) {
+            prodImgInput.value = p.image_url || '';
+            if (prodImgPreview && p.image_url) {
+              prodImgPreview.src = p.image_url;
+              prodImgPreview.style.display = 'block';
+            }
+          }
+
+          if (previewBox) {
+            previewBox.style.display = 'flex';
+            if (previewImg) previewImg.src = p.image_url || 'https://via.placeholder.com/50';
+            if (previewTitle) previewTitle.textContent = p.name;
+            if (previewPrice) previewPrice.textContent = `৳${p.price} BDT`;
+          }
+
+          if (typeof showToast === 'function') showToast(`✅ "${p.name}" এর তথ্য ও R2 ইমেজ সফলভাবে লোড হয়েছে!`);
+          else alert(`✅ "${p.name}" এর তথ্য ও R2 ইমেজ সফলভাবে লোড হয়েছে!`);
+        } else {
+          alert(`ফেচ ব্যর্থ হয়েছে:\n${data.error || 'প্রোডাক্টের বিবরণ পাওয়া যায়নি'}`);
+        }
+      } catch (err) {
+        alert(`নেটওয়ার্ক এরর: ${err.message}`);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = '⚡ Auto-Fetch Product Info';
+        }
+      }
+    };
+  </script>
+  <script src="app.js?v=2.1.1"></script>
 </body>
 </html>
