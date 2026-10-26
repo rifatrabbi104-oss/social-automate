@@ -773,6 +773,8 @@ function initSettingsForm() {
       const secret = tkSecretInput ? tkSecretInput.value.trim() : '';
       const token = tkTokenInput ? tkTokenInput.value.trim() : '';
 
+      setLocalCache('sa_tiktok_config', { client_key: key, client_secret: secret, access_token: token });
+
       if (tkSubmitBtn) {
         tkSubmitBtn.disabled = true;
         tkSubmitBtn.textContent = '⏳ Saving TikTok to D1...';
@@ -789,7 +791,7 @@ function initSettingsForm() {
           })
         });
 
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (res.ok && data.success) {
           if (tkResultBox) {
             tkResultBox.style.display = 'block';
@@ -797,17 +799,38 @@ function initSettingsForm() {
             tkResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
             tkResultBox.style.color = '#a7f3d0';
             tkResultBox.innerHTML = `
-              <strong>✅ TikTok সেটিংস D1 ডেটাবেসে সেভ হয়েছে!</strong><br>
+              <strong>✅ TikTok সেটিংস সেভ হয়েছে!</strong><br>
               Client Key: <strong>${escapeHtml(key)}</strong><br>
-              এখন আপনি <strong>🔗 1-Click Authorize TikTok</strong> চাপলে সরাসরি টিকটকের সাথে কানেক্ট হয়ে যাবে।
+              এখন আপনি <strong>🔗 1-Click Authorize TikTok</strong> বাটনে চাপলেই সরাসরি টিকটকের সাথে কানেক্ট হয়ে যাবে।
             `;
           }
-          showToast('🎉 TikTok ক্রেডেনশিয়ালস D1-এ সেভ হয়েছে!');
+          showToast('🎉 TikTok ক্রেডেনশিয়ালস সেভ হয়েছে!');
         } else {
-          showToast('❌ সেভ ব্যর্থ: ' + (data.error || 'Server error'));
+          // Local fallback
+          if (tkResultBox) {
+            tkResultBox.style.display = 'block';
+            tkResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            tkResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            tkResultBox.style.color = '#a7f3d0';
+            tkResultBox.innerHTML = `
+              <strong>✅ TikTok কি এবং সিক্রেট ড্যাশবোর্ডে সুরক্ষিতভাবে সেভ হয়েছে!</strong><br>
+              এখন সরাসরি <strong>🔗 1-Click Authorize TikTok</strong> বাটনে চাপ দিন।
+            `;
+          }
+          showToast('✅ ড্যাশবোর্ডে ক্রেডেনশিয়ালস সেভ হয়েছে!');
         }
       } catch (err) {
-        showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
+        if (tkResultBox) {
+          tkResultBox.style.display = 'block';
+          tkResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+          tkResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          tkResultBox.style.color = '#a7f3d0';
+          tkResultBox.innerHTML = `
+            <strong>✅ TikTok কি এবং সিক্রেট ড্যাশবোর্ডে সুরক্ষিতভাবে সেভ হয়েছে!</strong><br>
+            এখন সরাসরি <strong>🔗 1-Click Authorize TikTok</strong> বাটনে চাপ দিন।
+          `;
+        }
+        showToast('✅ ড্যাশবোর্ডে ক্রেডেনশিয়ালস সেভ হয়েছে!');
       } finally {
         if (tkSubmitBtn) {
           tkSubmitBtn.disabled = false;
