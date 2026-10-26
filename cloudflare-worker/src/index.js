@@ -431,6 +431,12 @@ export default {
       console.error("Worker Global Error:", err);
       return jsonResponse({ error: err.message, stack: err.stack }, 500);
     }
+  },
+
+  // ⏰ ক্রন শিডিউল: নির্দিষ্ট সময়ে মাত্র ১ বার ওয়ার্কার রান হয়ে GitHub Actions-কে ট্রিগার করবে
+  async scheduled(event, env, ctx) {
+    console.log("⏰ [Cron Triggered] Scheduled time reached -> Triggering GitHub Actions Post Publisher");
+    ctx.waitUntil(handleTriggerPost({ target_platform: "all" }, env));
   }
 };
 
