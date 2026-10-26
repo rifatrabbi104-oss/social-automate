@@ -153,6 +153,14 @@ export default {
       }
 
       // ==========================================
+      // ৫.১ মেটা ফেসবুক পেজে ১-ক্লিক টেস্ট পোস্ট (Caption Only)
+      // ==========================================
+      if (request.method === "POST" && path === "/api/test-post-facebook") {
+        const body = await request.json().catch(() => ({}));
+        return await handleTestPostFacebook(body, env);
+      }
+
+      // ==========================================
       // ৬. টেলিগ্রাম Webhook (ঐচ্ছিক ব্যাকআপ)
       // ==========================================
       if (request.method === "POST" && (path === "/webhook/telegram" || path === "/api/telegram/webhook")) {
@@ -943,6 +951,68 @@ async function handleSetupMeta(body, env) {
     account: { id: accountId, name: accountName, platform: cleanPlatform },
     subscription: subStatus
   });
+}
+
+// 📤 ৫.১ মেটা ফেসবুক পেজে ১-ক্লিক টেস্ট পোস্ট (Caption Only)
+async function handleTestPostFacebook(body, env) {
+  let token = null;
+  let pageId = null;
+
+  if (env.DB) {
+    try {
+      await ensureTables(env.DB);
+      const row = await env.DB.prepare(
+        "SELECT account_id, access_token FROM social_accounts WHERE platform = 'facebook' AND status = 'active' ORDER BY created_at DESC"
+      ).first();
+      if (row) {
+        pageId = row.account_id;
+        token = row.access_token;
+      }
+    } catch (e) {}
+  }
+
+  if (!token && activeMetaToken) {
+    token = activeMetaToken;
+    pageId = activeMetaPageId;
+  }
+
+  if (body.token) token = body.token.trim();
+  if (body.page_id) pageId = body.page_id.trim();
+
+  if (!token || !pageId) {
+    return jsonResponse({ error: "Facebook পেজের অ্যাক্সেস টোকেন বা পেজ আইডি পাওয়া যায়নি। অনুগ্রহ করে ড্যাশবোর্ডে Meta সেটিংস সেভ করুন।" }, 400);
+  }
+
+  const caption = (body.caption || body.message || "🚀 SocialAutomate - AI Automation Test Post\n\nঅভিনন্দন! আপনার Ranonex পেজটি SocialAutomate-এর সাথে সফলভাবে কানেক্ট হয়েছে। এখন থেকে স্বয়ংক্রিয়ভাবে প্রতিদিন আকর্ষণীয় সেলস কপি সহ পোস্ট পাবলিশ হবে। ⚡").trim();
+
+  try {
+    const feedUrl = `https://graph.facebook.com/v19.0/${pageId}/feed`;
+    const res = await fetch(feedUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: caption,
+        access_token: token
+      })
+    });
+
+    const data = await res.json();
+    if (data.id) {
+      return jsonResponse({
+        success: true,
+        post_id: data.id,
+        message: "🎉 সফলভাবে শুধুমাত্র ক্যাপশন দিয়ে ফেসবুকে টেস্ট পোস্ট পাবলিশ হয়েছে!",
+        post_url: `https://www.facebook.com/${data.id}`
+      });
+    } else {
+      return jsonResponse({
+        success: false,
+        error: data.error?.message || JSON.stringify(data.error || data)
+      }, 400);
+    }
+  } catch (err) {
+    return jsonResponse({ success: false, error: err.message }, 500);
+  }
 }
 
 // ========================================================

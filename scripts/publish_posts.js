@@ -596,7 +596,12 @@ async function main() {
   // ২. Facebook পাবলিশ (ঐচ্ছিক - টোকেন থাকলে রান হবে)
   if (targetPlatform === "all" || targetPlatform === "facebook") {
     if (activeFbToken) {
-      fbResult = await publishToFacebook(postCaption, selectedProduct.image_url, activeFbToken, activeFbPageId);
+      const isCaptionOnly = process.env.CAPTION_ONLY === "true" || process.env.POST_TYPE === "caption_only";
+      const fbImageUrl = isCaptionOnly ? null : selectedProduct.image_url;
+      if (isCaptionOnly) {
+        console.log("📝 [Caption-Only Mode] শুধুমাত্র টেক্সট ক্যাপশন নিয়ে পোস্ট করা হচ্ছে (ছবি ছাড়া)।");
+      }
+      fbResult = await publishToFacebook(postCaption, fbImageUrl, activeFbToken, activeFbPageId);
       if (fbResult.success && selectedProduct.id) {
         await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, fbResult.id, "facebook");
       }

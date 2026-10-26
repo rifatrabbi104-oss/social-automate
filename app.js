@@ -878,6 +878,13 @@ function initSettingsForm() {
     });
   }
 
+  // লোকালে সেভ থাকা মেটা ক্রেডেনশিয়াল লোড করা
+  const cachedMeta = getLocalCache('sa_meta_config', null);
+  if (cachedMeta) {
+    if (tokenInput && cachedMeta.token) tokenInput.value = cachedMeta.token;
+    if (pageIdInput && cachedMeta.page_id) pageIdInput.value = cachedMeta.page_id;
+  }
+
   if (form && tokenInput) {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -885,6 +892,8 @@ function initSettingsForm() {
       const pageId = pageIdInput ? pageIdInput.value.trim() : '';
 
       if (!token) return;
+
+      setLocalCache('sa_meta_config', { token: token, page_id: pageId || '1287050647827199' });
 
       submitBtn.disabled = true;
       submitBtn.textContent = '⏳ Saving Meta Settings...';
@@ -904,7 +913,8 @@ function initSettingsForm() {
           resultBox.style.color = '#a7f3d0';
           resultBox.innerHTML = `
             <strong>✅ মেটা সেটিংস সেভ হয়েছে!</strong><br>
-            সংযুক্ত পেজ: <strong>${escapeHtml(data.account.name)}</strong> (ID: ${escapeHtml(data.account.id)})
+            সংযুক্ত পেজ: <strong>${escapeHtml(data.account.name)}</strong> (ID: ${escapeHtml(data.account.id)})<br>
+            এখন নিচে <strong>🚀 1-Click Test Post (Caption Only)</strong> বাটনে ক্লিক করে পেজে টেস্ট পোস্ট দিন।
           `;
           showToast('🎉 মেটা সেটিংস সফলভাবে সেভ হয়েছে!');
         } else {
@@ -920,6 +930,90 @@ function initSettingsForm() {
       } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = '💾 Save Meta Settings';
+      }
+    });
+  }
+
+  // ৪. Facebook ১-ক্লিক টেস্ট পোস্ট (Caption Only)
+  const fbTestPostBtn = document.getElementById('btn-test-post-facebook');
+  if (fbTestPostBtn) {
+    fbTestPostBtn.addEventListener('click', async () => {
+      const token = (tokenInput ? tokenInput.value.trim() : '') || (getLocalCache('sa_meta_config', null)?.token || '');
+      const pageId = (pageIdInput ? pageIdInput.value.trim() : '') || (getLocalCache('sa_meta_config', null)?.page_id || '1287050647827199');
+
+      fbTestPostBtn.disabled = true;
+      fbTestPostBtn.textContent = '⏳ Posting to Facebook...';
+
+      const testCaption = "🚀 SocialAutomate - AI Automation Live Test\n\nঅভিনন্দন! আপনার Ranonex পেজটি SocialAutomate-এর সাথে সফলভাবে কানেক্ট হয়েছে। এখন থেকে স্বয়ংক্রিয়ভাবে প্রতিদিন আকর্ষণীয় সেলস কপি সহ পোস্ট পাবলিশ হবে। ⚡";
+
+      try {
+        let postSuccess = false;
+        let postId = null;
+        let errorMsg = '';
+
+        // ক. সরাসরি মেটা Graph API দিয়ে ফাস্ট কল
+        if (token && pageId) {
+          try {
+            const fbRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/feed`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message: testCaption,
+                access_token: token
+              })
+            });
+            const fbData = await fbRes.json();
+            if (fbData.id) {
+              postSuccess = true;
+              postId = fbData.id;
+            } else {
+              errorMsg = fbData.error?.message || JSON.stringify(fbData.error || fbData);
+            }
+          } catch (clientErr) {
+            console.warn('Direct FB API call failed, trying worker:', clientErr);
+          }
+        }
+
+        // খ. ফলব্যাক: ওয়ার্কারের /api/test-post-facebook এন্ডপয়েন্ট
+        if (!postSuccess) {
+          const res = await fetch(`${API_BASE}/test-post-facebook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, page_id: pageId, caption: testCaption })
+          });
+          const data = await res.json();
+          if (res.ok && data.success) {
+            postSuccess = true;
+            postId = data.post_id;
+          } else {
+            errorMsg = data.error || errorMsg || 'Test post failed';
+          }
+        }
+
+        if (postSuccess && resultBox) {
+          resultBox.style.display = 'block';
+          resultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+          resultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          resultBox.style.color = '#a7f3d0';
+          resultBox.innerHTML = `
+            <strong>🎉 সফলভাবে ফেসবুক পেজে শুধুমাত্র ক্যাপশন দিয়ে টেস্ট পোস্ট পাবলিশ হয়েছে!</strong><br>
+            পোস্ট আইডি: <strong>${escapeHtml(postId)}</strong><br>
+            <a href="https://www.facebook.com/${escapeHtml(postId)}" target="_blank" style="color: #60a5fa; text-decoration: underline; margin-top: 6px; display: inline-block;">👉 এখানে ক্লিক করে আপনার ফেসবুক পেজের লাইভ পোস্টটি দেখে নিন!</a>
+          `;
+          showToast('🎉 ফেসবুকে ক্যাপশন টেস্ট পোস্ট পাবলিশ হয়েছে!');
+        } else if (resultBox) {
+          resultBox.style.display = 'block';
+          resultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+          resultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          resultBox.style.color = '#fca5a5';
+          resultBox.innerHTML = `❌ ফেসবুক পোস্ট ব্যর্থ: ${escapeHtml(errorMsg)}`;
+          showToast('❌ টেস্ট পোস্ট করতে ব্যর্থ হয়েছে।');
+        }
+      } catch (err) {
+        showToast('❌ এরর: ' + err.message);
+      } finally {
+        fbTestPostBtn.disabled = false;
+        fbTestPostBtn.textContent = '🚀 1-Click Test Post (Caption Only)';
       }
     });
   }

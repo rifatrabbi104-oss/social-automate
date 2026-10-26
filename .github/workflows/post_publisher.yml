@@ -21,7 +21,15 @@ on:
           - tiktok
           - facebook
           - telegram
-        default: all
+        default: facebook
+      post_type:
+        description: 'পোস্ট ফরম্যাট (caption_only = শুধুমাত্র টেক্সট ক্যাপশন, standard = ছবি সহ পোস্ট)'
+        required: false
+        type: choice
+        options:
+          - caption_only
+          - standard
+        default: caption_only
 
 jobs:
   publish-ai-post:
@@ -44,7 +52,8 @@ jobs:
           TIKTOK_CREATOR_ID: ${{ secrets.TIKTOK_CREATOR_ID }}
           META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
           META_PAGE_ID: ${{ secrets.META_PAGE_ID || '1287050647827199' }}
-          TARGET_PLATFORM: ${{ inputs.target_platform || 'all' }}
+          TARGET_PLATFORM: ${{ inputs.target_platform || 'facebook' }}
+          POST_TYPE: ${{ inputs.post_type || 'caption_only' }}
           PRODUCT_URL: ${{ inputs.product_url }}
           WORKER_URL: 'https://social-automate.rifatrabbi104.workers.dev'
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
