@@ -60,6 +60,16 @@ export default {
       }
 
       // ==========================================
+      // ০. টিকটক ডোমেইন ভেরিফিকেশন টেক্সট ফাইল রুট
+      // ==========================================
+      if (request.method === "GET" && (path.toLowerCase().includes("tiktok") && path.endsWith(".txt"))) {
+        return new Response("tiktok-developers-site-verification=c08852w0Lw08iYtozIiZEFmNR3XYa8u8", {
+          status: 200,
+          headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS_HEADERS }
+        });
+      }
+
+      // ==========================================
       // ১. মেটা ও হোয়াটসঅ্যাপ Webhook Verification (১-বার লাইফটাইম হ্যান্ডশেক)
       // ==========================================
       if (request.method === "GET" && (path === "/webhook/meta" || path === "/api/meta/webhook" || path === "/webhook/whatsapp" || path === "/api/whatsapp/webhook")) {
