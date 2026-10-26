@@ -1732,7 +1732,38 @@ const MARKETING_ANGLES = [
 ];
 
 // ========================================================
-// ✍️ AI সেলস কপিরাইটার (ইউনিক ও কনটেক্সট-ইন্ডিপেন্ডেন্ট)
+// ========================================================
+// 🏪 D1 ডেটাবেস থেকে স্টোর পলিসি ও ডেলিভারি চার্জ রিড করা (১০০% ডায়নামিক)
+// ========================================================
+async function getStorePolicies(db) {
+  const policies = {
+    store_name: "Ranonex",
+    del_inside: "৬০ টাকা (২৪-৪৮ ঘণ্টা)",
+    del_outside: "১২০ টাকা (২-৩ দিন)",
+    payment_methods: "ক্যাশ অন ডেলিভারি, বিকাশ, নগদ",
+    return_policy: "ডেলিভারির সময় চেক করে দেখে নেওয়া যাবে। ডিফেক্ট থাকলে সাথে সাথে রিটার্ন করা যাবে।",
+    contact_phone: ""
+  };
+
+  if (!db) return policies;
+
+  try {
+    const { results } = await db.prepare("SELECT key, value FROM system_config").all();
+    for (const r of (results || [])) {
+      if (r.key === "store_name" && r.value) policies.store_name = r.value.trim();
+      if (r.key === "delivery_inside_dhaka" && r.value) policies.del_inside = r.value.trim();
+      if (r.key === "delivery_outside_dhaka" && r.value) policies.del_outside = r.value.trim();
+      if (r.key === "payment_methods" && r.value) policies.payment_methods = r.value.trim();
+      if (r.key === "return_policy" && r.value) policies.return_policy = r.value.trim();
+      if (r.key === "contact_phone" && r.value) policies.contact_phone = r.value.trim();
+    }
+  } catch (e) {}
+
+  return policies;
+}
+
+// ========================================================
+// ✍️ AI সেলস কপিরাইটার (ইউনিক, কনটেক্সট-ইন্ডিপেন্ডেন্ট ও ডায়নামিক পলিসি)
 // ========================================================
 async function generateAIPostCaption(product, angleObj, env) {
   const apiKey = env.GEMINI_API_KEY;
@@ -1740,7 +1771,9 @@ async function generateAIPostCaption(product, angleObj, env) {
 
   // র‍্যান্ডম হুক সিলেক্টর
   const randomHook = angleObj.hook_starters[Math.floor(Math.random() * angleObj.hook_starters.length)];
-  const storeContext = await getCachedBusinessContext(env.DB);
+  
+  // D1 ডেটাবেস থেকে রিয়েল-টাইম স্টোর পলিসি ও ডেলিভারি চার্জ রিড
+  const policies = await getStorePolicies(env.DB);
 
   const prompt = `
 You are an elite Bangladeshi e-commerce copywriter with mastery in high-converting, viral social media posts.
@@ -1753,15 +1786,20 @@ Details / Features: ${product.description || 'Premium quality durable product'}
 Category: ${product.category || 'General'}
 Website Order Link: ${product.product_url || 'https://ranonex.shop'}
 
-=== STORE POLICIES (FROM D1) ===
-${storeContext}
+=== STORE POLICIES (LOADED DIRECTLY FROM D1 DATABASE) ===
+Store Name: ${policies.store_name}
+Delivery Charge Inside Dhaka: ${policies.del_inside}
+Delivery Charge Outside Dhaka: ${policies.del_outside}
+Payment Methods: ${policies.payment_methods}
+Return Policy: ${policies.return_policy}
+Contact Phone / Hotline: ${policies.contact_phone || 'ইনবক্স করুন'}
 
 === TODAY'S MARKETING ANGLE ===
 Angle Name: ${angleObj.name}
 Angle Directive: ${angleObj.instruction}
 Opening Inspiration: "${randomHook}"
 
-=== STRICT ANTI-REPETITION RULES ===
+=== STRICT ANTI-REPETITION & STORE POLICY RULES ===
 1. ABSOLUTELY BANNED CLICHÉS (DO NOT USE ANY OF THESE):
    - "🔥 আকর্ষণীয় অফার"
    - "সুসংবাদ সুসংবাদ"
@@ -1769,12 +1807,17 @@ Opening Inspiration: "${randomHook}"
    - "দেরি না করে এখনই অর্ডার করুন"
    - "আসসালামু আলাইকুম ভিউয়ার্স"
 2. Start with an eye-catching, relatable human opening line matching the chosen angle.
-3. Keep the language natural, conversational, and persuasive (Bangladeshi tone).
+3. Keep the language natural, conversational, and persuasive (authentic Bangladeshi tone).
 4. Highlight why this product is truly worth buying, its build and practical benefits.
-5. Mention the price clearly (৳${product.price}) and nationwide Cash on Delivery (হাতে পেয়ে চেক করে নেওয়ার সুবিধা).
-6. Give a clear Call-to-Action with the website order link: ${product.product_url || 'ইনবক্স করুন বা ওয়েবসাইটে গিয়ে অর্ডার করুন'}.
-7. Include 3-4 natural hashtags at the very end.
-8. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
+5. Price & COD: Mention the price clearly (৳${product.price}) and nationwide Cash on Delivery (${policies.payment_methods}).
+6. Delivery Charges: State the exact delivery charges as retrieved from the database:
+   - ঢাকা সিটির ভেতরে: ${policies.del_inside}
+   - ঢাকার বাইরে: ${policies.del_outside}
+   Do NOT invent or alter delivery prices.
+7. Return Guarantee: State that customers can check the parcel upon delivery (${policies.return_policy}).
+8. Give a clear Call-to-Action with the website order link: ${product.product_url || 'ইনবক্স করুন বা ওয়েবসাইটে গিয়ে অর্ডার করুন'}.
+9. Include 3-4 natural hashtags at the very end.
+10. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
 `;
 
   if (apiKey && apiKey !== "YOUR_GEMINI_API_KEY") {
@@ -1804,13 +1847,29 @@ Opening Inspiration: "${randomHook}"
     }
   }
 
-  // ফলব্যাক কপিরাইটিং
-  return generateFallbackCaption(product, angleObj, randomHook);
+  // ফলব্যাক কপিরাইটিং (D1 পলিসি ডাটা সহ)
+  return generateFallbackCaption(product, angleObj, randomHook, policies);
 }
 
-function generateFallbackCaption(p, angle, hook) {
+function generateFallbackCaption(p, angle, hook, policies) {
+  const pol = policies || {
+    store_name: "Ranonex",
+    del_inside: "৬০ টাকা (২৪-৪৮ ঘণ্টা)",
+    del_outside: "১২০ টাকা (২-৩ দিন)",
+    payment_methods: "ক্যাশ অন ডেলিভারি",
+    return_policy: "ডেলিভারির সময় চেক করে দেখে নেওয়ার সুযোগ",
+    contact_phone: ""
+  };
+
   const origPriceText = (p.original_price && p.original_price > p.price) ? ` (আগের দাম: ৳${p.original_price})` : '';
   const orderLink = p.product_url ? `\n🛒 সরাসরি ওয়েবসাইট থেকে অর্ডার করুন:\n👉 ${p.product_url}\n` : `\n📩 সরাসরি অর্ডার করতে আমাদের পেজে ইনবক্স করুন!\n`;
+
+  const delText = (pol.del_inside || pol.del_outside)
+    ? `\n🚚 ডেলিভারি চার্জ: ঢাকা সিটির ভেতরে ${pol.del_inside}, ঢাকার বাইরে ${pol.del_outside}।`
+    : `\n🚚 সারা দেশে দ্রুত ক্যাশ অন হোম ডেলিভারি!`;
+
+  const returnText = pol.return_policy ? `\n🛡️ রিটার্ন পলিসি: ${pol.return_policy}` : '';
+  const hotlineText = pol.contact_phone ? `\n📞 হটলাইন: ${pol.contact_phone}` : '\n📞 যেকোনো তথ্যের জন্য সরাসরি ইনবক্স করুন।';
 
   return `${hook}
 
@@ -1819,14 +1878,12 @@ ${p.description ? `\n📌 বিশেষত্ব ও বিবরণ:\n${p.des
 💎 কেন এটি আপনার জন্য সেরা পছন্দ?
 ✅ প্রিমিয়াম বিল্ড কোয়ালিটি ও দীর্ঘস্থায়িত্ব
 ✅ ১০০% অরিজিনাল প্রোডাক্টের নিশ্চয়তা
-✅ সারা বাংলাদেশে দ্রুত ক্যাশ অন ডেলিভারি (হাতে পেয়ে চেক করে মূল্য পরিশোধের সুযোগ)
+✅ সারা বাংলাদেশে ক্যাশ অন ডেলিভারি (হাতে পেয়ে চেক করে নেওয়ার সুবিধা)${returnText}
 
 💰 আজকের বিশেষ মূল্য: মাত্র ৳${p.price}${origPriceText}
-${orderLink}
-🚚 ডেলিভারি চার্জ: ঢাকা সিটির ভেতরে ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা।
-📞 যেকোনো তথ্যের জন্য ইনবক্স করুন অথবা কল করুন।
+${orderLink}${delText}${hotlineText}
 
-#${p.category ? p.category.replace(/\s+/g, '_') : 'OnlineShopping'} #TrendingProducts #SmartShopping #Bangladesh`;
+#${p.category ? p.category.replace(/\s+/g, '_') : 'OnlineShopping'} #TrendingProducts #SmartShopping #${pol.store_name.replace(/\s+/g, '')}`;
 }
 
 // ========================================================
