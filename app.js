@@ -754,13 +754,15 @@ function initSettingsForm() {
 
   if (tkOAuthBtn) {
     tkOAuthBtn.addEventListener('click', () => {
-      const key = tkKeyInput ? tkKeyInput.value.trim() : '';
+      const key = tkKeyInput ? tkKeyInput.value.trim() : 'awq5kzk0rv01o6z0';
       if (!key) {
         showToast('⚠️ অনুগ্রহ করে প্রথমে TikTok Client Key বসান!');
         return;
       }
       showToast('🚀 TikTok Authorize পেজে নিয়ে যাওয়া হচ্ছে...');
-      window.location.href = `${API_BASE}/auth/tiktok/login?client_key=${encodeURIComponent(key)}`;
+      const redirectUri = encodeURIComponent("https://social-automate.rifatrabbi104.workers.dev/api/auth/tiktok/callback");
+      const tiktokAuthUrl = `https://www.tiktok.com/v2/auth/authorize/?client_key=${encodeURIComponent(key)}&scope=user.info.basic,video.publish,video.upload&response_type=code&redirect_uri=${redirectUri}&state=social_automate`;
+      window.location.href = tiktokAuthUrl;
     });
   }
 
