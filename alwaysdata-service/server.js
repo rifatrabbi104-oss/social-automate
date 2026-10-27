@@ -220,8 +220,24 @@ function cleanCustomerReply(raw) {
     .replace(/```(?:json)?[\s\S]*?```/gi, "")
     .replace(/\{[\s\r\n]*"(?:order_confirmed|customer_name|order_updated|order_cancelled|order_note|delivery_address)"[\s\S]*?\}/gi, "")
     .replace(/\{[\s\S]*?\}[\s]*$/gi, "")
-    .replace(/🔗\s*প্রোডাক্ট\s*লিংক:?\s*https?:\/\/[^\s]+/gi, "")
     .trim();
+}
+
+// ==========================================
+// ⚡ বুলেটপ্রুফ অর্ডার অ্যাকশন ও ফার্স্ট-টার্ন ডিটেক্টর
+// ==========================================
+// 📞 বাংলাদেশি ফোন নম্বর এক্সট্র্যাক্টর (বাংলা ও ইংরেজি সংখ্যা, স্পেস, হাইফেন হ্যান্ডলার)
+// ==========================================
+function extractBangladeshiPhone(str) {
+  if (!str) return "";
+  const bengaliDigits = {'০':'0','১':'1','২':'2','৩':'3','৪':'4','৫':'5','৬':'6','৭':'7','৮':'8','৯':'9'};
+  const normalized = String(str).replace(/[০-৯]/g, d => bengaliDigits[d]);
+  const cleaned = normalized.replace(/[\s\-\.\(\)]/g, '');
+  const m = cleaned.match(/(?:(?:\+?88)?01[3-9]\d{8})/);
+  if (m) {
+    return m[0].replace(/^\+?88/, '');
+  }
+  return "";
 }
 
 // ==========================================
@@ -250,46 +266,72 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
       const address = (raw.match(/"delivery_address":\s*"([^"]+)"/i) || [])[1] || "";
       const product = (raw.match(/"product_name":\s*"([^"]+)"/i) || [])[1] || "";
       const total = parseFloat((raw.match(/"total_amount":\s*([0-9.]+)/i) || [])[1] || 0);
-      if (phone) {
+      if (phone || name || address) {
         order_confirmed = true;
         order_data = { customer_name: name, customer_phone: phone, delivery_address: address, product_name: product, total_amount: total };
       }
     }
   }
 
-  // ২. প্রথম টার্নেই কনফার্মেশন ধরা (কখনোই যেন ২য় বারের অপেক্ষায় না থাকে)
+  // ২. প্রথম টার্নেই কনফার্মেশন ধরা (কখনোই যেন ২য় বারের অপেক্ষায় না থাকে বা মিস না হয়)
   if (!order_confirmed) {
-    const isConfirmSpoken = /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম|অর্ডার\s*কনফার্ম|অর্ডার\s*নিশ্চিত|অর্ডারটি\s*নিশ্চিত|অর্ডার\s*গ্রহণ\s*করা\s*হয়েছে)/i.test(replyText);
+    const isConfirmSpoken = /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম|অর্ডার\s*কনফার্ম|অর্ডার\s*নিশ্চিত|অর্ডারটি\s*নিশ্চিত|অর্ডার\s*গ্রহণ\s*করা\s*হয়েছে|অর্ডারটি\s*ইতিমধ্যে\s*সফলভাবে|অর্ডার\s*সম্পন্ন|অর্ডার\s*প্লেস|অর্ডার\s*গৃহীত|অর্ডার\s*বুক|অর্ডার\s*নেওয়া\s*হয়েছে|অর্ডারটি\s*প্রসেস)/i.test(replyText)
+      || /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম|অর্ডার\s*কনফার্ম|অর্ডার\s*নিশ্চিত|অর্ডারটি\s*নিশ্চিত|অর্ডার\s*গ্রহণ\s*করা\s*হয়েছে|অর্ডারটি\s*ইতিমধ্যে\s*সফলভাবে|অর্ডার\s*সম্পন্ন|অর্ডার\s*প্লেস|অর্ডার\s*গৃহীত|অর্ডার\s*বুক|অর্ডার\s*নেওয়া\s*হয়েছে|অর্ডারটি\s*প্রসেস)/i.test(raw);
+
     if (isConfirmSpoken) {
+      order_confirmed = true;
+
       let foundPhone = "";
+      let foundName = "";
+      let foundAddress = "";
+
       for (let i = messages.length - 1; i >= 0; i--) {
         const text = messages[i].message_text || "";
-        const phoneMatch = text.match(/(?:(?:\+?88)?01[3-9]\d{8})/);
-        if (phoneMatch && !foundPhone) {
-          foundPhone = phoneMatch[0].replace(/^\+?88/, "");
-          break;
+        if (!foundPhone) {
+          foundPhone = extractBangladeshiPhone(text);
+        }
+
+        // মাল্টি-লাইন বা কমা-সেপারেটেড টেক্সট পার্সিং
+        const segments = text.split(/[\r\n,;|]+/).map(l => l.trim()).filter(Boolean);
+        if (segments.length >= 2) {
+          for (const seg of segments) {
+            const p = extractBangladeshiPhone(seg);
+            if (p) {
+              if (!foundPhone) foundPhone = p;
+            } else if (/কুমিল্লা|ঢাকা|চট্টগ্রাম|রাজশাহী|সিলেট|খুলনা|বরিশাল|রংপুর|উপজেলা|থানা|জেলা|বাসা|রোড|গ্রাম|ঠিকানা|cumilla|dhaka|chittagong|road|house|bangladesh|village|sector|block|post/i.test(seg) || seg.length > 10) {
+              if (!foundAddress) foundAddress = seg;
+            } else if (!foundName && seg.length < 35 && !/অর্ডার|order|confirm|ক্যাশ|cash/i.test(seg)) {
+              foundName = seg;
+            }
+          }
+        } else if (segments.length === 1 && !foundAddress) {
+          if (/কুমিল্লা|ঢাকা|চট্টগ্রাম|রাজশাহী|সিলেট|খুলনা|বরিশাল|রংপুর|উপজেলা|থানা|জেলা|বাসা|রোড|গ্রাম|ঠিকানা|cumilla|dhaka|chittagong|road|house|bangladesh/i.test(text)) {
+            foundAddress = text;
+          }
         }
       }
 
-      if (foundPhone) {
-        order_confirmed = true;
-        const prodName = activeProduct ? activeProduct.name : "Ranonex Store Product";
-        const basePrice = activeProduct ? parseFloat(activeProduct.price || 0) : 0;
-        const isDhaka = /ঢাকা|dhaka/i.test(raw) && !/ঢাকার\s*বাইরে|outside/i.test(raw);
-        const deliveryCharge = isDhaka ? 70 : 130;
-        const total = basePrice > 0 ? (basePrice + deliveryCharge) : 0;
-
-        order_data = {
-          order_confirmed: true,
-          customer_name: messages[messages.length - 1]?.sender_name || "Customer",
-          customer_phone: foundPhone,
-          delivery_address: "ইনবক্সে প্রদত্ত ঠিকানা",
-          product_name: prodName,
-          variant: "Standard",
-          total_amount: total
-        };
-        console.log(`⚡ [Auto-Detected First-Time Order Confirmation]: Phone ${foundPhone}, Product ${prodName}`);
+      const lastMsg = messages[messages.length - 1];
+      if (!foundName && lastMsg?.sender_name && !lastMsg.sender_name.startsWith("Facebook User")) {
+        foundName = lastMsg.sender_name;
       }
+
+      const prodName = activeProduct ? activeProduct.name : "Ranonex Store Product";
+      const basePrice = activeProduct ? parseFloat(activeProduct.price || 0) : 0;
+      const isDhaka = /ঢাকা|dhaka/i.test(foundAddress || raw) && !/ঢাকার\s*বাইরে|outside/i.test(foundAddress || raw);
+      const deliveryCharge = isDhaka ? 70 : 130;
+      const total = basePrice > 0 ? (basePrice + deliveryCharge) : 0;
+
+      order_data = {
+        order_confirmed: true,
+        customer_name: foundName || lastMsg?.sender_name || "Customer",
+        customer_phone: foundPhone || "ইনবক্সে প্রদত্ত নম্বর",
+        delivery_address: foundAddress || "ইনবক্সে প্রদত্ত ঠিকানা",
+        product_name: prodName,
+        variant: "Standard",
+        total_amount: total
+      };
+      console.log(`🎉 [Auto-Detected First-Time Order Confirmation]: Customer "${order_data.customer_name}", Phone "${order_data.customer_phone}", Product "${prodName}", Total ৳${total}`);
     }
   }
 
@@ -381,10 +423,12 @@ async function getStoreCatalog() {
             url: link
           });
 
+          const cleanDesc = (p.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250);
           catalog += `- [SKU: ${sku}] ${p.name}
     * EXACT PRICE: ৳${price} (${price} BDT)
     * ORDER LINK: ${link}
-    * SPECS: ${p.specifications || 'Standard'}\n`;
+    * SPECS: ${p.specifications || 'Standard'}
+    * KEY FEATURES / INFO: ${cleanDesc || 'প্রিমিয়াম কোয়ালিটি ও আকর্ষণীয় পারফরম্যান্স'}\n`;
         }
       }
     }
@@ -538,10 +582,21 @@ CRITICAL BRAND & LANGUAGE RULES:
    - Quote the EXACT numeric price listed under 'EXACT PRICE' in the catalog.
    - For example, if EXACT PRICE is ৳1315, state "১৩১৫ টাকা (1315 ৳)". Never drop zeros.
 
-5. SOFT CONSULTATIVE SELLING:
-   - Empathize with their need/inquiry (phone heating, gaming, budget, etc.).
-   - Explain product benefits, exact price (৳), and ask if they would like to order.
-   - Do NOT include full raw URLs in the text (an interactive Card View with picture and in-app webview button will automatically appear below your message).
+5. 🛍️ COMPLETE PRODUCT CONSULTATION, URL & IN-CHAT ORDERING GUIDE (প্রোডাক্ট তথ্য, লিংক ও মেসেজে অর্ডারের নিয়ম):
+   - Whenever ANY product is discussed, asked about, or recommended:
+     You MUST ALWAYS provide a complete, well-structured, and helpful response in pure Bengali script containing ALL of the following essential details:
+     1. Product Name & Core Features/Benefits: State the product name and explain its core features, specs, and benefits in 1-2 attractive, helpful lines based on KEY FEATURES/SPECS in the catalog.
+     2. Exact Price: Clearly state the current offer price: "এর বর্তমান অফার মূল্য মাত্র [Exact Price] টাকা।"
+     3. Delivery Terms & Charge: "সারা বাংলাদেশে ক্যাশ অন হোম ডেলিভারিতে পার্সেল চেক করে নেওয়ার নিশ্চয়তা রয়েছে (ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, এবং ঢাকার বাইরে ১৩০ টাকা)।"
+     4. Direct Website Product Link: Include the direct ORDER LINK from the catalog:
+        "🔗 বিস্তারিত দেখতে বা সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক: [ORDER LINK]"
+     5. Clear In-Chat Ordering Instructions (মেসেজে অর্ডার করার নিয়ম): Clearly instruct the customer:
+        "📩 অথবা এখনই ইনবক্সে মেসেজের মাধ্যমে ক্যাশ অন ডেলিভারিতে অর্ডার করতে আপনার:
+        ১. পুরো নাম
+        ২. ১১ ডিজিটের মোবাইল নম্বর
+        ৩. সম্পূর্ণ ডেলিভারি ঠিকানা
+        লিখে পাঠিয়ে দিন।"
+     6. Polite Gentle Follow-up: Courteously ask: "আপনার কি এই প্রোডাক্টটি সম্পর্কে আরও কিছু জানার আছে, নাকি এখনই অর্ডার কনফার্ম করে দেব?"
 
 6. 🚨 STRICT FIRST-TURN ORDER CONFIRMATION RULE (কড়াকড়ি নিয়ম):
    - THE VERY INSTANT the customer provides their Name, 11-digit Bangladeshi Phone Number (01XXXXXXXXX), and Delivery Address:
@@ -561,9 +616,14 @@ CRITICAL BRAND & LANGUAGE RULES:
    - When the customer sends an image, photo, or screenshot of a product:
      1. Carefully analyze the visual features (appearance, color, shape, buttons, gaming console, cooler, earphone, microphone, powerbank, hoodie, neon light, etc.).
      2. Compare it with the STORE PRODUCTS CATALOG below to identify the exact or closest matching product.
-     3. Warmly and politely greet them in pure Bengali script (বাংলা লিপি), name the identified product clearly, state its exact price in ৳ (e.g. "১৩১৫ টাকা"), and ask:
-        "ছবিতে দেখা প্রোডাক্টটি আমাদের [Product Name]। এর বর্তমান অফার মূল্য [Exact Price] টাকা। আপনি কি এই প্রোডাক্টটি খুঁজছেন বা এটি অর্ডার করতে চান?"
-     4. NEVER invent prices. Use the exact price from the catalog.
+     3. Warmly and politely greet them in pure Bengali script (বাংলা লিপি), confirm the matched product with ALL basic information:
+        - Product Name & 1-2 lines of core features/benefits.
+        - Exact offer price in ৳ (e.g. "১৩১৫ টাকা").
+        - Cash on delivery with open-box parcel checking nationwide (ডেলিভারি চার্জ: ঢাকা সিটিতে ৭০৳, ঢাকার বাইরে ১৩০৳)।
+        - Direct Website link: "🔗 বিস্তারিত দেখতে বা সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক: [ORDER LINK]"
+        - Clear message ordering instructions: "📩 অথবা ইনবক্সে অর্ডার করতে আপনার নাম, মোবাইল নম্বর ও সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।"
+        - Courteous follow-up question: "ছবিতে দেখা প্রোডাক্টটি কি আপনি খুঁজছেন বা এটি কি এখনই অর্ডার কনফার্ম করে দেব?"
+     4. NEVER invent prices. Use the exact price and link from the catalog.
 
 IMPORTANT: Internal markers (ORDER_JSON, ORDER_UPDATE_JSON, ORDER_CANCEL_JSON, ORDER_NOTE_JSON) are strictly for internal system processing. Never show raw JSON inside customer sentences.
 
@@ -590,19 +650,20 @@ ${catalog}`;
         if (!isFinished) {
           isFinished = true;
           const cleanReply = cleanCustomerReply(cached.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি।";
+          const actions = extractOrderActions(cached.accumulatedText, cleanReply, chatHistory, activeProduct);
           resolve({
             reply: cleanReply,
-            order_confirmed: false,
-            order_updated: false,
-            order_cancelled: false,
-            order_note: false,
-            order_data: null,
-            note: "",
+            order_confirmed: actions.order_confirmed,
+            order_updated: actions.order_updated,
+            order_cancelled: actions.order_cancelled,
+            order_note: actions.order_note,
+            order_data: actions.order_data,
+            note: actions.note,
             audio_id: null,
             audio_url: null
           });
         }
-      }, 25000);
+      }, 35000);
 
       cached.currentTurnResolve = (accText, chunks) => {
         if (!isFinished) {
@@ -736,19 +797,20 @@ ${catalog}`;
       if (!isFinished) {
         isFinished = true;
         const cleanReply = cleanCustomerReply(socketEntry.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।";
+        const actions = extractOrderActions(socketEntry.accumulatedText, cleanReply, chatHistory, activeProduct);
         resolve({
           reply: cleanReply,
-          order_confirmed: false,
-          order_updated: false,
-          order_cancelled: false,
-          order_note: false,
-          order_data: null,
-          note: "",
+          order_confirmed: actions.order_confirmed,
+          order_updated: actions.order_updated,
+          order_cancelled: actions.order_cancelled,
+          order_note: actions.order_note,
+          order_data: actions.order_data,
+          note: actions.note,
           audio_id: null,
           audio_url: null
         });
       }
-    }, 25000);
+    }, 35000);
 
     socketEntry.currentTurnResolve = (accText, chunks) => {
       if (!isFinished) {
@@ -868,8 +930,17 @@ ${catalog}`;
 // ==========================================
 // 📢 TELEGRAM অর্ডার ও মেসেজ অ্যালার্ট
 // ==========================================
+// ==========================================
+// 📢 TELEGRAM অর্ডার ও মেসেজ অ্যালার্ট
+// ==========================================
 async function sendTelegramAlert(order, platform = "Facebook") {
-  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
+  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
+    await syncCredentialsFromWorker();
+  }
+  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
+    console.warn("⚠️ Telegram Alert Skipped: Bot token or Admin Chat ID missing.");
+    return;
+  }
 
   const text = `🎉 [নতুন অর্ডার কনফার্ম হয়েছে - ${platform}]
 ━━━━━━━━━━━━━━━━━━━
@@ -884,15 +955,26 @@ async function sendTelegramAlert(order, platform = "Facebook") {
 🚀 SocialAutomate Alwaysdata Engine`;
 
   try {
-    await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text, parse_mode: "HTML" })
+      body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text })
     });
-  } catch (e) {}
+    const d = await res.json();
+    if (d.ok) {
+      console.log(`✅ [Telegram Order Alert Sent Successfully!] Msg ID: ${d.result?.message_id} to Chat: ${CONFIG.telegramChatId}`);
+    } else {
+      console.error(`❌ [Telegram Send Error]:`, JSON.stringify(d));
+    }
+  } catch (e) {
+    console.error("❌ Telegram Network Exception:", e.message);
+  }
 }
 
 async function sendTelegramOrderUpdate(order, platform = "Facebook") {
+  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
+    await syncCredentialsFromWorker();
+  }
   if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
 
   const text = `🔄 [অর্ডার আপডেট / সংশোধিত - ${platform}]
@@ -909,15 +991,26 @@ async function sendTelegramOrderUpdate(order, platform = "Facebook") {
 🚀 SocialAutomate Alwaysdata Engine`;
 
   try {
-    await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text, parse_mode: "HTML" })
+      body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text })
     });
-  } catch (e) {}
+    const d = await res.json();
+    if (d.ok) {
+      console.log(`✅ [Telegram Order Update Sent!] Msg ID: ${d.result?.message_id}`);
+    } else {
+      console.error(`❌ [Telegram Update Error]:`, JSON.stringify(d));
+    }
+  } catch (e) {
+    console.error("❌ Telegram Update Network Exception:", e.message);
+  }
 }
 
 async function sendTelegramOrderCancel(order, reason, platform = "Facebook") {
+  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
+    await syncCredentialsFromWorker();
+  }
   if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
 
   const text = `❌ [অর্ডার বাতিল করা হয়েছে - ${platform}]
@@ -931,15 +1024,26 @@ async function sendTelegramOrderCancel(order, reason, platform = "Facebook") {
 🚀 SocialAutomate Alwaysdata Engine`;
 
   try {
-    await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text, parse_mode: "HTML" })
+      body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text })
     });
-  } catch (e) {}
+    const d = await res.json();
+    if (d.ok) {
+      console.log(`✅ [Telegram Cancel Alert Sent!] Msg ID: ${d.result?.message_id}`);
+    } else {
+      console.error(`❌ [Telegram Cancel Error]:`, JSON.stringify(d));
+    }
+  } catch (e) {
+    console.error("❌ Telegram Cancel Network Exception:", e.message);
+  }
 }
 
 async function sendTelegramOrderNote(noteText, customer, platform = "Facebook") {
+  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) {
+    await syncCredentialsFromWorker();
+  }
   if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
 
   const text = `⚠️ [কাস্টমার অর্ডার পরিবর্তনের অনুরোধ করেছেন - জরুরি নোট - ${platform}]
@@ -952,12 +1056,20 @@ async function sendTelegramOrderNote(noteText, customer, platform = "Facebook") 
 🚀 SocialAutomate Alwaysdata Engine`;
 
   try {
-    await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text, parse_mode: "HTML" })
+      body: JSON.stringify({ chat_id: CONFIG.telegramChatId, text })
     });
-  } catch (e) {}
+    const d = await res.json();
+    if (d.ok) {
+      console.log(`✅ [Telegram Note Sent!] Msg ID: ${d.result?.message_id}`);
+    } else {
+      console.error(`❌ [Telegram Note Error]:`, JSON.stringify(d));
+    }
+  } catch (e) {
+    console.error("❌ Telegram Note Network Exception:", e.message);
+  }
 }
 
 // ==========================================
@@ -1569,16 +1681,28 @@ app.post('/webhook/meta', (req, res) => {
               });
             }
 
-            // ১. অর্ডার কনফার্মেশন -> প্রথমবারেই টেলিগ্রাম অ্যালার্ট
-            if (aiDecision.order_confirmed && aiDecision.order_data) {
-              session.last_order_data = {
-                ...aiDecision.order_data,
-                customer_name: aiDecision.order_data.customer_name || profile.name
+            // ১. অর্ডার কনফার্মেশন -> প্রথমবারেই টেলিগ্রাম অ্যালার্ট (ফুলপ্রুফ ডিটেকশন)
+            const isConfirmedReply = aiDecision.order_confirmed 
+              || /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম|অর্ডার\s*কনফার্ম|অর্ডার\s*নিশ্চিত|অর্ডারটি\s*নিশ্চিত|অর্ডার\s*গ্রহণ\s*করা\s*হয়েছে|অর্ডারটি\s*ইতিমধ্যে\s*সফলভাবে|অর্ডার\s*সম্পন্ন|অর্ডার\s*প্লেস|অর্ডার\s*গৃহীত|অর্ডার\s*বুক|অর্ডার\s*নেওয়া\s*হয়েছে|অর্ডারটি\s*প্রসেস)/i.test(aiDecision.reply || "");
+
+            if (isConfirmedReply) {
+              if (!aiDecision.order_data) {
+                const actions = extractOrderActions(aiDecision.reply || "", aiDecision.reply || "", session.messages, session.last_discussed_product);
+                aiDecision.order_data = actions.order_data;
+              }
+
+              const orderInfo = {
+                ...(session.last_order_data || {}),
+                ...(aiDecision.order_data || {}),
+                customer_name: (aiDecision.order_data && aiDecision.order_data.customer_name) || profile.name || "Customer",
+                product_name: (aiDecision.order_data && aiDecision.order_data.product_name) || session.last_discussed_product?.name || "Ranonex Store Product"
               };
+
+              session.last_order_data = orderInfo;
               session.last_order_time = Date.now();
               session.last_order_cancelled = false;
 
-              console.log(`🎉 [ORDER CONFIRMED FIRST TIME! Sending Telegram Alert...]`);
+              console.log(`🎉 [ORDER CONFIRMED FIRST TIME! Sending Telegram Alert...]`, JSON.stringify(session.last_order_data));
               await sendTelegramAlert(session.last_order_data, "Facebook Messenger");
 
               if (CONFIG.workerUrl) {

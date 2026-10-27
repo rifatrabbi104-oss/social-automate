@@ -2013,17 +2013,24 @@ CRITICAL BRAND & LANGUAGE RULES:
    - ALWAYS write the brand name in English letters as "Ranonex". NEVER write it in Bengali script (e.g., do not write 'র‌্যানোনেক্স' or 'রেনোনেক্স')!
    - Website link: https://ranonex.shop
 
-2. SOFT CONSULTATIVE SELLING (NO DIRECT FORCING):
-   - Never aggressively force or pressure the customer to buy.
-   - First empathize with their problem, need, or inquiry (e.g., phone heating, gaming, daily use, budget).
-   - Carefully check ALL products in the Store Products Catalog below. Find which product(s) best match their exact description, problem, use-case, or price budget.
-   - Warmly recommend the best matching product(s), explain WHY it matches their need, state the exact price (৳), mention available sizes/colors, and give the direct order link (https://ranonex.shop/product.html?id=...).
+2. 🛍️ COMPLETE PRODUCT CONSULTATION, URL & IN-CHAT ORDERING GUIDE:
+   - Whenever ANY product is discussed, asked about, or recommended:
+     You MUST provide a complete, well-structured, and helpful response in pure Bengali containing ALL of the following:
+     1. Product Name & Core Features/Benefits: 1-2 attractive, helpful lines explaining what the product is and its main benefits/specs from the catalog.
+     2. Exact Price: State current offer price: "এর বর্তমান অফার মূল্য মাত্র [Exact Price] টাকা।"
+     3. Delivery Terms & Charge: "সারা বাংলাদেশে ক্যাশ অন হোম ডেলিভারিতে পার্সেল চেক করে নেওয়ার নিশ্চয়তা রয়েছে (ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, এবং ঢাকার বাইরে ১৩০ টাকা)।"
+     4. Direct Website Product Link: Provide the exact ORDER LINK:
+        "🔗 বিস্তারিত দেখতে বা সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক: [ORDER LINK]"
+     5. Clear In-Chat Ordering Instructions:
+        "📩 অথবা এখনই ইনবক্সে মেসেজের মাধ্যমে ক্যাশ অন ডেলিভারিতে অর্ডার করতে আপনার:
+        ১. পুরো নাম
+        ২. ১১ ডিজিটের মোবাইল নম্বর
+        ৩. সম্পূর্ণ ডেলিভারি ঠিকানা
+        লিখে পাঠিয়ে দিন।"
+     6. Polite Gentle Follow-up: Courteously ask: "আপনার কি এই প্রোডাক্টটি সম্পর্কে আরও কিছু জানার আছে, নাকি এখনই অর্ডার কনফার্ম করে দেব?"
 
 3. COURTEOUS ORDER FOLLOW-UP:
-   - Whenever any product is discussed, always include a polite, gentle follow-up question at the end to guide the customer naturally toward ordering or clearing doubts without being pushy.
-   - Examples of polite follow-up:
-     "আপনি চাইলে পণ্যটি ক্যাশ অন ডেলিভারিতে হাতে পেয়ে চেক করে নেওয়ার সুবিধায় নিতে পারেন। আপনার কি এই প্রোডাক্টটি সম্পর্কে আরও কিছু জানার আছে, নাকি অর্ডার প্রসেস শুরু করে দেব?"
-     "আপনার পছন্দের কোনো নির্দিষ্ট কালার বা ভ্যারিয়েন্ট আছে কি? জানালে সুবিধা হতো।"
+   - Always guide the customer naturally toward ordering or clearing doubts without being pushy.
 
 4. MULTI-TURN ORDER COLLECTION & CONFIRMATION:
    - When a customer indicates they want to buy or order ('nibo', 'order korbo', 'kinbo', gives address, etc.):
@@ -2714,21 +2721,21 @@ async function sendTelegramOrderNotification(orderData, env) {
     : `https://automate.ranonex.shop?tab=inbox`;
 
   const text = 
-`🎉 *নতুন অর্ডার কনফার্ম করেছে AI (New Order!)*
+`🎉 [নতুন অর্ডার কনফার্ম করেছে AI - Ranonex]
 ━━━━━━━━━━━━━━━━━━━━
-📱 *অর্ডার সোর্স:* ${platformEmoji}
-👤 *কার থেকে অর্ডার (কাস্টমার):* ${orderData.customer_name || 'Customer'}
-📞 *মোবাইল নম্বর:* \`${orderData.customer_phone || 'N/A'}\`
-📍 *ডেলিভারি ঠিকানা:* ${orderData.delivery_address || 'N/A'}
+📱 অর্ডার সোর্স: ${platformEmoji}
+👤 কাস্টমার: ${orderData.customer_name || 'Customer'}
+📞 মোবাইল নম্বর: ${orderData.customer_phone || 'N/A'}
+📍 ডেলিভারি ঠিকানা: ${orderData.delivery_address || 'N/A'}
 ━━━━━━━━━━━━━━━━━━━━
-📦 *অর্ডারকৃত পণ্য:* ${orderData.product_name || 'N/A'}
-🎨 *সাইজ / কালার:* ${orderData.variant || 'Standard'}
-💵 *সর্বমোট বিল (COD):* ৳${orderData.total_amount || 0} BDT
+📦 অর্ডারকৃত পণ্য: ${orderData.product_name || 'N/A'}
+🎨 সাইজ / কালার: ${orderData.variant || 'Standard'}
+💵 সর্বমোট বিল (COD): ৳${orderData.total_amount || 0} BDT
 ━━━━━━━━━━━━━━━━━━━━
-🤖 *রিসিভ করেছে:* Gemini 2.0 AI Sales Agent (Ranonex)
-⏰ *অর্ডারের সময়:* ${nowBdt} (BDT)
-👉 [ক্লিক করে কাস্টমার চ্যাট ওপেন করুন](${chatUrl})
-🌐 *ড্যাশবোর্ড:* https://automate.ranonex.shop`;
+🤖 হ্যান্ডেল করেছে: Ranonex AI Sales Agent
+⏰ অর্ডারের সময়: ${nowBdt} (BDT)
+👉 কাস্টমার চ্যাট লিংক: ${chatUrl}
+🌐 ড্যাশবোর্ড: https://automate.ranonex.shop`;
 
   try {
     const res = await fetch(`https://api.telegram.org/bot${cleanToken}/sendMessage`, {
@@ -2736,9 +2743,7 @@ async function sendTelegramOrderNotification(orderData, env) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: String(chatId).trim(),
-        text: text,
-        parse_mode: "Markdown",
-        disable_web_page_preview: true
+        text: text
       })
     });
     const json = await res.json();
