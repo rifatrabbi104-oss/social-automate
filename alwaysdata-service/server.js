@@ -94,6 +94,21 @@ const audioCache = new Map(); // audioId -> { buffer: Buffer, createdAt: number 
 let productCatalogCache = { data: null, productsList: [], expiresAt: 0 };
 let totalMessagesHandled = 0;
 
+// ⚡ পারসিস্টেন্ট অ্যাক্টিভ লাইভ সকেট পুল (WebSocket Session Reuse - ws.send() দিয়ে লাইভ কনটেক্সট প্রিজার্ভ)
+const activeLiveSockets = new Map(); // chatId -> { ws, isReady, lastActive, currentHandler, pcmChunks, accumulatedText }
+
+// প্রতি ৫ মিনিট পর পর ১০ মিনিটের বেশি নিষ্ক্রিয় সকেট ক্লোজ ও ক্লিনআপ
+setInterval(() => {
+  const now = Date.now();
+  for (const [chatId, entry] of activeLiveSockets.entries()) {
+    if (now - entry.lastActive > 10 * 60 * 1000) {
+      try { entry.ws.close(); } catch (e) {}
+      activeLiveSockets.delete(chatId);
+      console.log(`🔌 [Live WebSocket Idle Timeout Cleanup]: Socket for ${chatId} closed gracefully.`);
+    }
+  }
+}, 5 * 60 * 1000);
+
 // ==========================================
 // 🎵 24kHz 16-BIT PCM to WAV CONVERTER
 // ==========================================
@@ -432,8 +447,17 @@ function buildContextualQuickReplies(session, aiDecision, audioId) {
 
 // ==========================================
 // 🤖 GEMINI 3.8 LIVE MULTIMODAL WEBSOCKET ENGINE
+// (WebSocket Session Reuse via ws.send() + Multimodal Image Vision)
 // ==========================================
-async function callGeminiSalesAI(incomingText, chatHistory = [], session = null, incomingAudioBuffer = null, audioMimeType = "audio/mp4") {
+async function callGeminiSalesAI(
+  incomingText,
+  chatHistory = [],
+  session = null,
+  incomingAudioBuffer = null,
+  audioMimeType = "audio/mp4",
+  incomingImageBuffer = null,
+  imageMimeType = "image/jpeg"
+) {
   if (!CONFIG.geminiApiKey || CONFIG.geminiApiKey === "YOUR_GEMINI_API_KEY") {
     return {
       reply: "ধন্যবাদ আপনার বার্তার জন্য! আমাদের একজন প্রতিনিধি খুব শীঘ্রই আপনাকে সহায়তা করবেন। নির্দিষ্ট কোনো প্রোডাক্ট সম্পর্কে জানতে চাইলে নির্দ্বিধায় লিখুন।",
@@ -533,6 +557,14 @@ CRITICAL BRAND & LANGUAGE RULES:
    - If customer cancels -> Confirm cancellation & output:
      ORDER_CANCEL_JSON: {"order_cancelled": true, "customer_name": "...", "customer_phone": "...", "product_name": "...", "reason": "Customer requested cancellation"}
 
+8. 🖼️ VISUAL PRODUCT SEARCH & SCREENSHOT RECOGNITION (ছবি/স্ক্রিনশট শনাক্তকরণ):
+   - When the customer sends an image, photo, or screenshot of a product:
+     1. Carefully analyze the visual features (appearance, color, shape, buttons, gaming console, cooler, earphone, microphone, powerbank, hoodie, neon light, etc.).
+     2. Compare it with the STORE PRODUCTS CATALOG below to identify the exact or closest matching product.
+     3. Warmly and politely greet them in pure Bengali script (বাংলা লিপি), name the identified product clearly, state its exact price in ৳ (e.g. "১৩১৫ টাকা"), and ask:
+        "ছবিতে দেখা প্রোডাক্টটি আমাদের [Product Name]। এর বর্তমান অফার মূল্য [Exact Price] টাকা। আপনি কি এই প্রোডাক্টটি খুঁজছেন বা এটি অর্ডার করতে চান?"
+     4. NEVER invent prices. Use the exact price from the catalog.
+
 IMPORTANT: Internal markers (ORDER_JSON, ORDER_UPDATE_JSON, ORDER_CANCEL_JSON, ORDER_NOTE_JSON) are strictly for internal system processing. Never show raw JSON inside customer sentences.
 
 ${orderTimeContext}
@@ -541,7 +573,109 @@ ${activeProductContext}
 STORE PRODUCTS CATALOG:
 ${catalog}`;
 
-  // Multi-turn turns for Gemini Live API
+  const chatId = session?.sender_id ? `fb_${session.sender_id}` : "default";
+
+  // ==========================================
+  // ⚡ মোড ১: অ্যাক্টিভ লাইভ সকেট রি-ইউজ (ws.send() দিয়ে লাইভ কনটেক্সট প্রিজার্ভ)
+  // ==========================================
+  const cached = activeLiveSockets.get(chatId);
+  if (cached && cached.ws && cached.ws.readyState === WebSocket.OPEN && cached.isReady) {
+    cached.lastActive = Date.now();
+    cached.accumulatedText = "";
+    cached.pcmChunks = [];
+
+    return new Promise((resolve) => {
+      let isFinished = false;
+      const timeout = setTimeout(() => {
+        if (!isFinished) {
+          isFinished = true;
+          const cleanReply = cleanCustomerReply(cached.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি।";
+          resolve({
+            reply: cleanReply,
+            order_confirmed: false,
+            order_updated: false,
+            order_cancelled: false,
+            order_note: false,
+            order_data: null,
+            note: "",
+            audio_id: null,
+            audio_url: null
+          });
+        }
+      }, 25000);
+
+      cached.currentTurnResolve = (accText, chunks) => {
+        if (!isFinished) {
+          isFinished = true;
+          clearTimeout(timeout);
+
+          let audioId = null;
+          let audioUrl = null;
+          if (chunks && chunks.length > 0) {
+            try {
+              const rawPcm = Buffer.concat(chunks);
+              const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+              audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+              audioCache.set(audioId, { buffer: wavBuffer, createdAt: Date.now() });
+              if (audioCache.size > 100) {
+                const oldest = audioCache.keys().next().value;
+                audioCache.delete(oldest);
+              }
+              audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
+            } catch (audioErr) {}
+          }
+
+          const cleanReply = cleanCustomerReply(accText);
+          const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct);
+
+          resolve({
+            reply: cleanReply,
+            order_confirmed: actions.order_confirmed,
+            order_updated: actions.order_updated,
+            order_cancelled: actions.order_cancelled,
+            order_note: actions.order_note,
+            order_data: actions.order_data,
+            note: actions.note,
+            audio_id: audioId,
+            audio_url: audioUrl
+          });
+        }
+      };
+
+      // অডিও থাকলে পাঠানো
+      if (incomingAudioBuffer) {
+        cached.ws.send(JSON.stringify({
+          realtimeInput: {
+            mediaChunks: [{ mimeType: audioMimeType, data: incomingAudioBuffer.toString('base64') }]
+          }
+        }));
+      }
+
+      // ⚡ একই ওপেন সকেটে ws.send() দিয়ে পরবর্তী টার্ন পাঠানো
+      const currentParts = [];
+      if (incomingImageBuffer) {
+        currentParts.push({
+          inlineData: {
+            mimeType: imageMimeType,
+            data: incomingImageBuffer.toString('base64')
+          }
+        });
+      }
+      currentParts.push({ text: incomingText.trim() });
+
+      cached.ws.send(JSON.stringify({
+        clientContent: {
+          turns: [{ role: "user", parts: currentParts }],
+          turnComplete: true
+        }
+      }));
+      console.log(`⚡ [Reusing Active Live WebSocket for ${chatId}] Dispatched turn via ws.send()!`);
+    });
+  }
+
+  // ==========================================
+  // 🔌 মোড ২: নতুন লাইভ সকেট ওপেন ও সেশন পুলে সংরক্ষণ
+  // ==========================================
   const rawTurns = [];
   if (Array.isArray(chatHistory)) {
     for (const m of chatHistory.slice(-8)) {
@@ -551,8 +685,19 @@ ${catalog}`;
     }
   }
 
-  if (rawTurns.length === 0 || rawTurns[rawTurns.length - 1].parts[0].text !== incomingText.trim()) {
-    rawTurns.push({ role: "user", parts: [{ text: incomingText.trim() }] });
+  const lastTurnParts = [];
+  if (incomingImageBuffer) {
+    lastTurnParts.push({
+      inlineData: {
+        mimeType: imageMimeType,
+        data: incomingImageBuffer.toString('base64')
+      }
+    });
+  }
+  lastTurnParts.push({ text: incomingText.trim() });
+
+  if (rawTurns.length === 0 || rawTurns[rawTurns.length - 1].parts[rawTurns[rawTurns.length - 1].parts.length - 1]?.text !== incomingText.trim()) {
+    rawTurns.push({ role: "user", parts: lastTurnParts });
   }
 
   const turns = [];
@@ -563,26 +708,34 @@ ${catalog}`;
     }
     const prevTurn = turns[turns.length - 1];
     if (prevTurn.role === turn.role) {
-      prevTurn.parts[0].text += "\n" + turn.parts[0].text;
+      prevTurn.parts[0].text += "\n" + (turn.parts[0]?.text || "");
     } else {
       turns.push(turn);
     }
   }
   if (turns.length === 0) {
-    turns.push({ role: "user", parts: [{ text: incomingText.trim() }] });
+    turns.push({ role: "user", parts: lastTurnParts });
   }
 
   return new Promise((resolve) => {
-    let accumulatedText = "";
-    const pcmChunks = [];
-    let isFinished = false;
-    const startTime = Date.now();
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
+    const ws = new WebSocket(wsUrl);
 
+    const socketEntry = {
+      ws,
+      isReady: false,
+      lastActive: Date.now(),
+      accumulatedText: "",
+      pcmChunks: [],
+      currentTurnResolve: null
+    };
+    activeLiveSockets.set(chatId, socketEntry);
+
+    let isFinished = false;
     const timeout = setTimeout(() => {
       if (!isFinished) {
         isFinished = true;
-        try { ws.close(); } catch (e) {}
-        const cleanReply = cleanCustomerReply(accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।";
+        const cleanReply = cleanCustomerReply(socketEntry.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।";
         resolve({
           reply: cleanReply,
           order_confirmed: false,
@@ -597,8 +750,43 @@ ${catalog}`;
       }
     }, 25000);
 
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
-    const ws = new WebSocket(wsUrl);
+    socketEntry.currentTurnResolve = (accText, chunks) => {
+      if (!isFinished) {
+        isFinished = true;
+        clearTimeout(timeout);
+
+        let audioId = null;
+        let audioUrl = null;
+        if (chunks && chunks.length > 0) {
+          try {
+            const rawPcm = Buffer.concat(chunks);
+            const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+            audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+            audioCache.set(audioId, { buffer: wavBuffer, createdAt: Date.now() });
+            if (audioCache.size > 100) {
+              const oldest = audioCache.keys().next().value;
+              audioCache.delete(oldest);
+            }
+            audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
+          } catch (audioErr) {}
+        }
+
+        const cleanReply = cleanCustomerReply(accText);
+        const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct);
+
+        resolve({
+          reply: cleanReply,
+          order_confirmed: actions.order_confirmed,
+          order_updated: actions.order_updated,
+          order_cancelled: actions.order_cancelled,
+          order_note: actions.order_note,
+          order_data: actions.order_data,
+          note: actions.note,
+          audio_id: audioId,
+          audio_url: audioUrl
+        });
+      }
+    };
 
     ws.onopen = () => {
       const setupPayload = {
@@ -618,6 +806,9 @@ ${catalog}`;
         const msg = JSON.parse(rawText);
 
         if (msg.setupComplete !== undefined) {
+          socketEntry.isReady = true;
+          socketEntry.lastActive = Date.now();
+
           if (incomingAudioBuffer) {
             ws.send(JSON.stringify({
               realtimeInput: {
@@ -636,52 +827,22 @@ ${catalog}`;
 
         if (msg.serverContent) {
           if (msg.serverContent.outputTranscription?.text) {
-            accumulatedText += msg.serverContent.outputTranscription.text;
+            socketEntry.accumulatedText += msg.serverContent.outputTranscription.text;
           }
           const parts = msg.serverContent.modelTurn?.parts || [];
           for (const p of parts) {
-            if (p.text) accumulatedText += p.text;
+            if (p.text) socketEntry.accumulatedText += p.text;
             if (p.inlineData && p.inlineData.data) {
-              pcmChunks.push(Buffer.from(p.inlineData.data, 'base64'));
+              socketEntry.pcmChunks.push(Buffer.from(p.inlineData.data, 'base64'));
             }
           }
 
           if (msg.serverContent.turnComplete) {
-            if (!isFinished) {
-              isFinished = true;
-              clearTimeout(timeout);
-              try { ws.close(); } catch (e) {}
-
-              let audioId = null;
-              let audioUrl = null;
-              if (pcmChunks.length > 0) {
-                try {
-                  const rawPcm = Buffer.concat(pcmChunks);
-                  const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
-                  audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-                  audioCache.set(audioId, { buffer: wavBuffer, createdAt: Date.now() });
-                  if (audioCache.size > 100) {
-                    const oldest = audioCache.keys().next().value;
-                    audioCache.delete(oldest);
-                  }
-                  audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
-                } catch (audioErr) {}
-              }
-
-              const cleanReply = cleanCustomerReply(accumulatedText);
-              const actions = extractOrderActions(accumulatedText, cleanReply, chatHistory, activeProduct);
-
-              resolve({
-                reply: cleanReply,
-                order_confirmed: actions.order_confirmed,
-                order_updated: actions.order_updated,
-                order_cancelled: actions.order_cancelled,
-                order_note: actions.order_note,
-                order_data: actions.order_data,
-                note: actions.note,
-                audio_id: audioId,
-                audio_url: audioUrl
-              });
+            socketEntry.lastActive = Date.now();
+            if (socketEntry.currentTurnResolve) {
+              const resFn = socketEntry.currentTurnResolve;
+              socketEntry.currentTurnResolve = null;
+              resFn(socketEntry.accumulatedText, socketEntry.pcmChunks);
             }
           }
         }
@@ -690,25 +851,15 @@ ${catalog}`;
 
     ws.onerror = (e) => {
       console.error("[Gemini 3.8 Live] WebSocket error:", e.message || e);
+      activeLiveSockets.delete(chatId);
     };
 
     ws.onclose = () => {
-      if (!isFinished) {
-        isFinished = true;
-        clearTimeout(timeout);
-        const cleanReply = cleanCustomerReply(accumulatedText);
-        const actions = extractOrderActions(accumulatedText, cleanReply, chatHistory, activeProduct);
-        resolve({
-          reply: cleanReply || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।",
-          order_confirmed: actions.order_confirmed,
-          order_updated: actions.order_updated,
-          order_cancelled: actions.order_cancelled,
-          order_note: actions.order_note,
-          order_data: actions.order_data,
-          note: actions.note,
-          audio_id: null,
-          audio_url: null
-        });
+      activeLiveSockets.delete(chatId);
+      if (!isFinished && socketEntry.currentTurnResolve) {
+        const resFn = socketEntry.currentTurnResolve;
+        socketEntry.currentTurnResolve = null;
+        resFn(socketEntry.accumulatedText, socketEntry.pcmChunks);
       }
     };
   });
@@ -1162,6 +1313,7 @@ app.post('/webhook/meta', (req, res) => {
             const incomingPayload = quickReplyPayload || postbackPayload;
             const incomingText = message?.text || incomingPayload;
             const userSentAudio = Boolean(message?.attachments && message.attachments.some(a => a.type === 'audio'));
+            const userSentImage = Boolean(message?.attachments && message.attachments.some(a => a.type === 'image'));
 
             const chatId = `fb_${senderId}`;
             let session = memorySessions.get(chatId) || { messages: [], sender_id: senderId };
@@ -1305,7 +1457,7 @@ app.post('/webhook/meta', (req, res) => {
               continue;
             }
 
-            if (!incomingText && !userSentAudio) continue;
+            if (!incomingText && !userSentAudio && !userSentImage) continue;
 
             // ==========================================
             // 🎙️ কাস্টমারের ভয়েস অডিও ডাউনলোড ও প্রসেসিং
@@ -1325,25 +1477,60 @@ app.post('/webhook/meta', (req, res) => {
               }
             }
 
-            const userPromptText = userSentAudio
-              ? "The customer sent this voice note. Listen to their speech and directly answer their question, need, or inquiry in pure Bengali script like a friendly human conversation. DO NOT introduce yourself! Answer directly."
-              : incomingText.trim();
+            // ==========================================
+            // 📸 কাস্টমারের পাঠানো ছবি / স্ক্রিনশট ডাউনলোড ও প্রসেসিং
+            // ==========================================
+            let incomingImageBuffer = null;
+            let imageMimeType = "image/jpeg";
+            if (userSentImage) {
+              const imgAttachment = message.attachments.find(a => a.type === 'image');
+              if (imgAttachment?.payload?.url) {
+                try {
+                  console.log(`🖼️ [Customer sent Image / Screenshot]: ${imgAttachment.payload.url}`);
+                  const iRes = await fetch(imgAttachment.payload.url);
+                  if (iRes.ok) {
+                    incomingImageBuffer = Buffer.from(await iRes.arrayBuffer());
+                    imageMimeType = iRes.headers.get("content-type") || "image/jpeg";
+                    console.log(`✅ Image downloaded successfully (${incomingImageBuffer.length} bytes, ${imageMimeType})`);
+                  }
+                } catch (dlErr) {
+                  console.error("Error downloading customer image:", dlErr.message);
+                }
+              }
+            }
+
+            let userPromptText = incomingText ? incomingText.trim() : "";
+            if (userSentAudio) {
+              userPromptText = "The customer sent this voice note. Listen to their speech and directly answer their question, need, or inquiry in pure Bengali script like a friendly human conversation. DO NOT introduce yourself! Answer directly.";
+            } else if (userSentImage) {
+              userPromptText = userPromptText
+                ? `The customer sent this photo/screenshot with the caption: "${userPromptText}". Carefully analyze this product image, match it with our Ranonex store catalog, state its exact name and price in pure Bengali script, and ask if they are looking for or want to order this product.`
+                : "The customer sent this photo/screenshot of a product. Carefully analyze this product image, match it with our Ranonex store catalog, state its exact name and price in pure Bengali script, and ask if they are looking for this product or want to order it.";
+            }
 
             totalMessagesHandled++;
-            console.log(`📩 [Messenger from ${senderId}]: ${incomingText || "[Voice Note]"}`);
+            console.log(`📩 [Messenger from ${senderId}]: ${incomingText || (userSentAudio ? "[Voice Note]" : "[Product Screenshot]")}`);
 
             session.messages.push({
               id: message?.mid || `m_${Date.now()}`,
               sender_type: "customer",
               sender_name: profile.name,
-              message_text: incomingText || "[Voice Message]",
+              message_text: incomingText || (userSentAudio ? "[Voice Message]" : "[Product Image / Screenshot]"),
               timestamp: new Date().toISOString()
             });
 
             const isVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|শুনতে চাই/i.test(incomingText || "");
 
-            // Gemini 3.8 Live কল
-            const aiDecision = await callGeminiSalesAI(userPromptText, session.messages, session, incomingAudioBuffer, audioMimeType);
+            // Gemini 3.8 Live কল (WebSocket Session Reuse + Multimodal Image Vision)
+            const aiDecision = await callGeminiSalesAI(
+              userPromptText,
+              session.messages,
+              session,
+              incomingAudioBuffer,
+              audioMimeType,
+              incomingImageBuffer,
+              imageMimeType
+            );
 
             if (aiDecision && aiDecision.reply) {
               console.log(`🤖 [AI Reply to ${profile.name}]: ${aiDecision.reply.substring(0, 80)}...`);
@@ -1368,7 +1555,7 @@ app.post('/webhook/meta', (req, res) => {
                 session.last_inquiry_time = Date.now();
                 session.abandoned_reminder_sent = false;
 
-                if (/প্রোডাক্ট|কুলার|cooler|হেডফোন|earphone|game|console|neon|light|দাম|৳|অর্ডার|নিবেন/i.test(aiDecision.reply)) {
+                if (userSentImage || /প্রোডাক্ট|কুলার|cooler|হেডফোন|earphone|game|console|neon|light|দাম|৳|অর্ডার|নিবেন/i.test(aiDecision.reply)) {
                   await sendFacebookProductCard(senderId, matchedProduct);
                 }
               }
@@ -1523,6 +1710,158 @@ app.post(['/api/send-reply', '/api/messages/send'], async (req, res) => {
 
   const fbResult = await sendFacebookMessage(chat_id, message_text);
   res.json({ success: true, result: fbResult });
+});
+
+// ==========================================
+// ✍️ AI POST GENERATOR API (For Cloudflare Worker & Web Dashboard)
+// ==========================================
+function generateTextViaLiveWebSocket(prompt) {
+  if (!CONFIG.geminiApiKey) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let finished = false;
+    let accumulatedText = "";
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
+    const ws = new WebSocket(wsUrl);
+
+    const timer = setTimeout(() => {
+      if (!finished) {
+        finished = true;
+        try { ws.close(); } catch (e) {}
+        resolve(accumulatedText.trim() || null);
+      }
+    }, 15000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        setup: {
+          model: "models/gemini-3.8-live",
+          generationConfig: { responseModalities: ["AUDIO"] },
+          outputAudioTranscription: {}
+        }
+      }));
+    };
+
+    ws.onmessage = async (evt) => {
+      try {
+        const raw = evt.data instanceof Blob ? await evt.data.text() : evt.data;
+        const msg = JSON.parse(raw);
+
+        if (msg.setupComplete !== undefined) {
+          ws.send(JSON.stringify({
+            clientContent: {
+              turns: [{ role: "user", parts: [{ text: prompt }] }],
+              turnComplete: true
+            }
+          }));
+          return;
+        }
+
+        if (msg.serverContent) {
+          if (msg.serverContent.outputTranscription?.text) {
+            accumulatedText += msg.serverContent.outputTranscription.text;
+          }
+          const parts = msg.serverContent.modelTurn?.parts || [];
+          for (const p of parts) {
+            if (p.text) accumulatedText += p.text;
+          }
+
+          if (msg.serverContent.turnComplete) {
+            if (!finished) {
+              finished = true;
+              clearTimeout(timer);
+              try { ws.close(); } catch (e) {}
+              resolve(accumulatedText.trim() || null);
+            }
+          }
+        }
+      } catch (e) {}
+    };
+
+    ws.onerror = () => {
+      if (!finished) {
+        finished = true;
+        clearTimeout(timer);
+        resolve(accumulatedText.trim() || null);
+      }
+    };
+
+    ws.onclose = () => {
+      if (!finished) {
+        finished = true;
+        clearTimeout(timer);
+        resolve(accumulatedText.trim() || null);
+      }
+    };
+  });
+}
+
+app.post('/api/generate-post', async (req, res) => {
+  const { product, angle } = req.body || {};
+  if (!product) return res.status(400).json({ error: "Missing product data" });
+
+  try {
+    const angleName = angle?.name || "Problem-Solution";
+    const angleTheme = angle?.theme || "কাস্টমারের দৈনন্দিন সমস্যা ও নিখুঁত সমাধান";
+    const angleInstruction = angle?.instruction || "Focus on relatable daily frustration and reveal this product as the solution.";
+
+    const prompt = `You are an elite, highly persuasive Bangladeshi Direct-Response Copywriter and E-commerce Social Media Marketer for "Ranonex" (https://ranonex.shop).
+Your task is to write an irresistible, high-converting Facebook post in natural, engaging, pure Bengali script (বাংলা লিপি).
+
+CRITICAL REQUIREMENTS:
+1. STRICT ZERO BANGLISH POLICY: Write 100% in natural Bengali script. Never write in Banglish!
+2. Write the store brand name in English letters as "Ranonex".
+3. NO generic, robotic templates! Do NOT use repetitive formulaic bullets like "💎 কেন এটি আপনার জন্য সেরা পছন্দ?" or "✅ প্রিমিয়াম বিল্ড কোয়ালিটি".
+4. Craft an attention-grabbing, curiosity-inducing opening hook matching today's angle: "${angleName}".
+5. Highlight real customer pain points and how this product solves them with authentic, vivid storytelling.
+6. Clearly state the exact price: ${product.price} ৳ / টাকা. Never misquote prices.
+7. Mention Cash on Delivery (ক্যাশ অন ডেলিভারি) available across all 64 districts in Bangladesh with open-box parcel checking allowed before payment.
+8. State accurate delivery charges: ঢাকা সিটির ভেতরে মাত্র ৭০ টাকা, এবং ঢাকার বাইরে ১৩০ টাকা।
+9. Clear Call to Action: ইনবক্সে মেসেজ দিন অথবা ভিজিট করুন: ${product.url || 'https://ranonex.shop'}.
+10. Include 4-6 relevant Bengali & English hashtags at the end (#Ranonex #GadgetBD etc.).
+
+Product Details:
+- Name: ${product.name || product.title}
+- Price: ৳${product.price}
+- Details: ${product.description || ''}
+- URL: ${product.url || ''}
+
+Output ONLY the final Facebook post caption, ready to publish. No conversational preamble.`;
+
+    // ১. Gemini 3.8 Live WebSocket ট্রাই (নো কোটা লিমিট)
+    const wsCaption = await generateTextViaLiveWebSocket(prompt);
+    if (wsCaption && wsCaption.length > 50) {
+      return res.json({ success: true, caption: wsCaption, method: "gemini-3.8-live-ws" });
+    }
+
+    // ২. REST ফলব্যাক (gemini-3.8-flash)
+    if (CONFIG.geminiApiKey) {
+      const restRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${CONFIG.geminiApiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.85, maxOutputTokens: 1000 }
+        })
+      });
+      if (restRes.ok) {
+        const d = await restRes.json();
+        const candidateText = d.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (candidateText && candidateText.trim()) {
+          return res.json({ success: true, caption: candidateText.trim(), method: "gemini-3.8-flash-rest" });
+        }
+      }
+    }
+
+    // ৩. ফলব্যাক কপি
+    return res.json({
+      success: true,
+      caption: `🔥 ${product.name || product.title} 🔥\n\nদৈনন্দিন ব্যবহারের জন্য দারুণ একটি গ্যাজেট!\n\n💰 অফার মূল্য: মাত্র ৳${product.price}\n🚚 সারা বাংলাদেশে ক্যাশ অন ডেলিভারি (পার্সেল খুলে দেখে মূল্য পরিশোধের সুবিধা)\n📦 ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা।\n\n👉 অর্ডার করতে এখনই আমাদের ইনবক্সে মেসেজ দিন অথবা ভিজিট করুন: ${product.url || 'https://ranonex.shop'}\n\n#Ranonex #GadgetBD #OnlineShopping`,
+      method: "fallback"
+    });
+  } catch (err) {
+    console.error("Error generating post caption:", err);
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 // ৯. সার্ভার চালু

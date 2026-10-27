@@ -855,12 +855,25 @@ function renderProductsTable() {
     const skuDisplay = p.sku || p.id || 'N/A';
     const specsDisplay = p.specifications ? p.specifications : 'Standard / Single';
 
+    let galleryCount = 0;
+    try {
+      const g = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []);
+      galleryCount = Array.isArray(g) ? g.length : (p.image_url ? 1 : 0);
+    } catch (e) {
+      galleryCount = p.image_url ? 1 : 0;
+    }
+
+    const photoBadge = galleryCount > 1 
+      ? `<span style="font-size: 10px; background: rgba(59, 130, 246, 0.2); color: #60a5fa; font-weight: 700; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 3px; margin-top: 3px;">📸 ${galleryCount} Photos</span>`
+      : '';
+
     tr.innerHTML = `
       <td>
         <div style="display: flex; align-items: center; gap: 10px;">
           ${imgThumb}
           <div>
             ${productTitle}
+            ${photoBadge}
             <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(p.description || '').substring(0, 40)}...</div>
           </div>
         </div>
@@ -880,8 +893,11 @@ function renderProductsTable() {
       <td>${autoBadge}</td>
       <td><span class="badge-status ${isStockIn ? 'published' : 'pending'}">${isStockIn ? 'In Stock' : 'Out of Stock'}</span></td>
       <td style="white-space: nowrap;">
-        <button class="btn-primary" style="padding: 6px 12px; font-size: 11px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 6px; cursor: pointer; color: #fff; margin-right: 6px;" onclick="publishProductNow('${p.id}', this)" title="এই প্রোডাক্টটি ফেসবুক পেজে পোস্ট করুন">
+        <button class="btn-primary" style="padding: 6px 12px; font-size: 11px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 6px; cursor: pointer; color: #fff; margin-right: 5px;" onclick="publishProductNow('${p.id}', this)" title="এই প্রোডাক্টটি ফেসবুক পেজে পোস্ট করুন">
           🚀 Post Now
+        </button>
+        <button class="btn-secondary" style="padding: 6px 10px; font-size: 11px; font-weight: 600; cursor: pointer; margin-right: 5px; border-color: rgba(59, 130, 246, 0.4); color: #93c5fd;" onclick="editProduct('${p.id}')" title="প্রোডাক্ট ও সমস্ত ছবি এডিট করুন">
+          ✏️ Edit
         </button>
         <button class="btn-refresh" style="color: var(--rose); font-size: 11px; padding: 6px 8px;" onclick="deleteProduct('${p.id}')">🗑️</button>
       </td>
@@ -1029,6 +1045,112 @@ function populateBusinessProfileUI() {
   if (data.contact_phone) document.getElementById('contact-phone').value = data.contact_phone;
 }
 
+// ==========================================
+// 📸 মাল্টি-ফটো সিরিয়াল গ্যালারি কন্ট্রোলার
+// ==========================================
+window.currentGalleryPhotos = [];
+
+window.renderGalleryPhotos = function() {
+  const container = document.getElementById('prod-gallery-container');
+  const countBadge = document.getElementById('gallery-count-badge');
+  const jsonInput = document.getElementById('prod-gallery-json');
+  const primaryImgInput = document.getElementById('prod-img');
+  const primaryImgPreview = document.getElementById('prod-img-preview');
+
+  if (!container) return;
+
+  if (countBadge) {
+    countBadge.textContent = `${window.currentGalleryPhotos.length} Photo${window.currentGalleryPhotos.length === 1 ? '' : 's'}`;
+  }
+
+  if (jsonInput) {
+    jsonInput.value = JSON.stringify(window.currentGalleryPhotos);
+  }
+
+  if (primaryImgInput) {
+    primaryImgInput.value = window.currentGalleryPhotos[0] || '';
+  }
+
+  if (primaryImgPreview) {
+    if (window.currentGalleryPhotos[0]) {
+      primaryImgPreview.src = window.currentGalleryPhotos[0];
+      primaryImgPreview.style.display = 'block';
+    } else {
+      primaryImgPreview.style.display = 'none';
+    }
+  }
+
+  if (window.currentGalleryPhotos.length === 0) {
+    container.innerHTML = `<div id="gallery-empty-placeholder" style="font-size: 12px; color: var(--text-dim); padding: 8px 4px;">কোনো ছবি নেই। ওয়েবসাইট থেকে ফেচ করলে সমস্ত ছবি এখানে সিরিয়ালি আসবে বা নিচের বক্সে লিঙ্ক দিন।</div>`;
+    return;
+  }
+
+  container.innerHTML = window.currentGalleryPhotos.map((url, idx) => `
+    <div class="gallery-photo-chip" style="position: relative; width: 68px; height: 68px; border-radius: 8px; overflow: hidden; border: 2px solid ${idx === 0 ? '#10b981' : 'rgba(59, 130, 246, 0.4)'}; background: #0b0f19; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,0.4);" title="Photo #${idx + 1}${idx === 0 ? ' (Primary Cover Photo)' : ''}">
+      <img src="${escapeHtml(url)}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.src='https://via.placeholder.com/68?text=Error'">
+      <span style="position: absolute; bottom: 2px; left: 4px; background: rgba(0,0,0,0.75); color: #fff; font-size: 9px; font-weight: 700; padding: 1px 4px; border-radius: 3px;">
+        ${idx === 0 ? '★ Cover' : `#${idx + 1}`}
+      </span>
+      <button type="button" onclick="removeGalleryPhoto(${idx})" title="ছবিটি বাদ দিন" style="position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; background: rgba(239, 68, 68, 0.95); color: #fff; border: none; font-size: 11px; font-weight: 900; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; transition: transform 0.15s ease;" onmouseover="this.style.transform='scale(1.15)'" onmouseout="this.style.transform='scale(1)'">✕</button>
+    </div>
+  `).join('');
+};
+
+window.addGalleryPhoto = function(url) {
+  if (!url || typeof url !== 'string' || !url.trim().startsWith('http')) {
+    showToast('⚠️ অনুগ্রহ করে একটি সঠিক ইমেজ URL পেস্ট করুন (http/https)!');
+    return false;
+  }
+  const cleanUrl = url.trim();
+  if (!window.currentGalleryPhotos.includes(cleanUrl)) {
+    window.currentGalleryPhotos.push(cleanUrl);
+    window.renderGalleryPhotos();
+    showToast(`📸 ছবি #${window.currentGalleryPhotos.length} সফলভাবে যুক্ত হয়েছে!`);
+    return true;
+  } else {
+    showToast('ℹ️ এই ছবির লিঙ্কটি ইতিমধ্যে তালিকায় রয়েছে।');
+    return false;
+  }
+};
+
+window.removeGalleryPhoto = function(index) {
+  if (index >= 0 && index < window.currentGalleryPhotos.length) {
+    window.currentGalleryPhotos.splice(index, 1);
+    window.renderGalleryPhotos();
+    showToast(`🗑️ ছবিটি বাদ দেওয়া হয়েছে।`);
+  }
+};
+
+// ✏️ প্রোডাক্ট এডিটর
+window.editProduct = function(id) {
+  const p = appState.products.find(x => x.id === id);
+  if (!p) return;
+  document.getElementById('prod-name').value = p.name || '';
+  document.getElementById('prod-price').value = p.price || '';
+  if (document.getElementById('prod-sku')) document.getElementById('prod-sku').value = p.sku || '';
+  if (document.getElementById('prod-specs')) document.getElementById('prod-specs').value = p.specifications || '';
+  if (document.getElementById('prod-url')) document.getElementById('prod-url').value = p.product_url || '';
+  if (document.getElementById('prod-desc')) document.getElementById('prod-desc').value = p.description || '';
+  if (document.getElementById('prod-post-time')) document.getElementById('prod-post-time').value = p.posting_time || 'interval_4';
+  if (document.getElementById('prod-target-platform')) document.getElementById('prod-target-platform').value = p.target_platform || 'facebook';
+  if (document.getElementById('prod-stock')) document.getElementById('prod-stock').value = p.stock_status || 'in_stock';
+  if (document.getElementById('prod-auto-post')) document.getElementById('prod-auto-post').value = (p.daily_auto_post === undefined || p.daily_auto_post != 0) ? '1' : '0';
+
+  let gallery = [];
+  try {
+    gallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []);
+  } catch(e){}
+  if (gallery.length === 0 && p.image_url) gallery = [p.image_url];
+  window.currentGalleryPhotos = gallery;
+  window.renderGalleryPhotos();
+
+  const formCard = document.getElementById('add-product-form');
+  if (formCard) {
+    formCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    showToast(`✏️ "${p.name}" এর তথ্য ও ${gallery.length}টি ছবি এডিটের জন্য লোড হয়েছে!`);
+  }
+};
+
 function initBusinessDataForms() {
   // ⚡ পদ্ধতি ১: ওয়েবসাইট প্রোডাক্ট লিংক দিয়ে অটো-ফেচ
   const quickFetchBtn = document.getElementById('btn-quick-fetch-prod');
@@ -1039,6 +1161,27 @@ function initBusinessDataForms() {
   const previewPrice = document.getElementById('fetch-preview-price');
   const prodImgInput = document.getElementById('prod-img');
   const prodImgPreview = document.getElementById('prod-img-preview');
+
+  // গ্যালারি এড বাটন ইভেন্ট ওয়্যারিং
+  const addPhotoBtn = document.getElementById('btn-add-gallery-photo');
+  const newPhotoInput = document.getElementById('input-new-photo-url');
+  if (addPhotoBtn && newPhotoInput) {
+    addPhotoBtn.addEventListener('click', () => {
+      const val = newPhotoInput.value.trim();
+      if (window.addGalleryPhoto(val)) {
+        newPhotoInput.value = '';
+      }
+    });
+    newPhotoInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const val = newPhotoInput.value.trim();
+        if (window.addGalleryPhoto(val)) {
+          newPhotoInput.value = '';
+        }
+      }
+    });
+  }
 
   if (prodImgInput && prodImgPreview) {
     prodImgInput.addEventListener('input', () => {
@@ -1080,24 +1223,28 @@ function initBusinessDataForms() {
           if (document.getElementById('prod-sku')) document.getElementById('prod-sku').value = p.sku || '';
           if (document.getElementById('prod-specs')) document.getElementById('prod-specs').value = p.specifications || '';
           if (document.getElementById('prod-url')) document.getElementById('prod-url').value = p.product_url || url;
-          if (prodImgInput) {
-            prodImgInput.value = p.image_url || '';
-            if (p.image_url) {
-              prodImgPreview.src = p.image_url;
-              prodImgPreview.style.display = 'block';
-            }
-          }
           if (document.getElementById('prod-desc')) document.getElementById('prod-desc').value = p.description || '';
+
+          // সমস্ত ছবি গ্যালারিতে রেন্ডার
+          let fetchedGallery = [];
+          try {
+            fetchedGallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []);
+          } catch(e){}
+          if (fetchedGallery.length === 0 && p.image_url) {
+            fetchedGallery = [p.image_url];
+          }
+          window.currentGalleryPhotos = fetchedGallery;
+          window.renderGalleryPhotos();
 
           // প্রিভিউ কার্ড দেখানো
           if (previewBox) {
             previewBox.style.display = 'flex';
-            if (previewImg) previewImg.src = p.image_url || 'https://via.placeholder.com/50';
+            if (previewImg) previewImg.src = fetchedGallery[0] || p.image_url || 'https://via.placeholder.com/50';
             if (previewTitle) previewTitle.textContent = p.name;
             if (previewPrice) previewPrice.textContent = `৳${p.price} BDT`;
           }
 
-          showToast(`✅ "${p.name}" এর তথ্য ও R2 ইমেজ সফলভাবে ফেচ হয়েছে!`);
+          showToast(`✅ "${p.name}" এর তথ্য ও ${fetchedGallery.length}টি R2 ফটো লোড হয়েছে!`);
         } else {
           showToast(`❌ ফেচ ব্যর্থ: ${data.error || 'Product not found'}`);
           alert(`ফেচ ব্যর্থ হয়েছে:\n${data.error || 'প্রোডাক্টের তথ্য খুঁজে পাওয়া যায়নি। অনুগ্রহ করে ম্যানুয়ালি লিখুন।'}`);
@@ -1121,7 +1268,6 @@ function initBusinessDataForms() {
       const sku = document.getElementById('prod-sku') ? document.getElementById('prod-sku').value.trim() : '';
       const specs = document.getElementById('prod-specs') ? document.getElementById('prod-specs').value.trim() : '';
       const url = document.getElementById('prod-url') ? document.getElementById('prod-url').value.trim() : '';
-      const img = document.getElementById('prod-img') ? document.getElementById('prod-img').value.trim() : '';
       const postTime = document.getElementById('prod-post-time') ? document.getElementById('prod-post-time').value : 'interval_4';
       const targetPlatform = document.getElementById('prod-target-platform') ? document.getElementById('prod-target-platform').value : 'facebook';
       const autoPost = document.getElementById('prod-auto-post') ? Number(document.getElementById('prod-auto-post').value) : 1;
@@ -1133,14 +1279,21 @@ function initBusinessDataForms() {
       const isInterval = postTime.startsWith('interval_');
       const intervalHours = isInterval ? (parseInt(postTime.replace('interval_', '')) || 4) : 4;
 
+      const galleryPhotos = window.currentGalleryPhotos || [];
+      const primaryImg = galleryPhotos[0] || (document.getElementById('prod-img') ? document.getElementById('prod-img').value.trim() : '');
+
+      const existingProd = appState.products.find(x => x.name.trim().toLowerCase() === name.toLowerCase() || (sku && x.sku === sku));
+      const prodId = existingProd ? existingProd.id : ('p_' + Date.now());
+
       const newProd = {
-        id: 'p_' + Date.now(),
+        id: prodId,
         sku: sku || ('P_' + Date.now()),
         name,
         price: parseFloat(price) || 0,
         specifications: specs,
         product_url: url,
-        image_url: img,
+        image_url: primaryImg,
+        gallery_images: JSON.stringify(galleryPhotos),
         posting_time: postTime,
         schedule_type: isInterval ? 'interval' : 'daily',
         interval_hours: intervalHours,
@@ -1150,13 +1303,20 @@ function initBusinessDataForms() {
         description: desc
       };
 
-      appState.products.unshift(newProd);
+      if (existingProd) {
+        const idx = appState.products.indexOf(existingProd);
+        appState.products[idx] = newProd;
+      } else {
+        appState.products.unshift(newProd);
+      }
+
       setLocalCache(CACHE_KEYS.PRODUCTS, appState.products);
       renderProductsTable();
       prodForm.reset();
-      if (prodImgPreview) prodImgPreview.style.display = 'none';
+      window.currentGalleryPhotos = [];
+      window.renderGalleryPhotos();
       if (previewBox) previewBox.style.display = 'none';
-      showToast('✅ প্রোডাক্ট ও শিডিউল D1-এ সেভ হয়েছে!');
+      showToast(`✅ "${name}" (${galleryPhotos.length}টি ফটো সহ) D1-এ সেভ হয়েছে!`);
 
       // ব্যাকএন্ড D1-এ সেভ
       try {

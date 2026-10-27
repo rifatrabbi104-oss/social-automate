@@ -11,7 +11,8 @@
  */
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash-exp";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const ALWAYSDATA_URL = (process.env.ALWAYSDATA_URL || "https://ranonex.alwaysdata.net").replace(/\/$/, "");
 
 const META_PAGE_ACCESS_TOKEN = process.env.META_PAGE_ACCESS_TOKEN;
 const META_PAGE_ID = process.env.META_PAGE_ID || "1287050647827199";
@@ -127,6 +128,7 @@ async function fetchProductFromWebUrl(url) {
                 description: cleanDesc,
                 raw_page_content: cleanDesc,
                 image_url: r2Img,
+                gallery_images: gallery,
                 product_url: url,
                 previous_posts: []
               };
@@ -256,18 +258,19 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "gemini-2.0-f
     }, 12000);
 
     ws.onopen = () => {
-      const cleanModel = modelName.includes("/") ? modelName : `models/${modelName}`;
       ws.send(JSON.stringify({
         setup: {
-          model: cleanModel,
-          generationConfig: { responseModalities: ["TEXT"], temperature: 0.75 }
+          model: "models/gemini-3.8-live",
+          generationConfig: { responseModalities: ["AUDIO"] },
+          outputAudioTranscription: {}
         }
       }));
     };
 
-    ws.onmessage = (event) => {
+    ws.onmessage = async (event) => {
       try {
-        const data = JSON.parse(typeof event.data === "string" ? event.data : event.data.toString());
+        const raw = event.data instanceof Blob ? await event.data.text() : (typeof event.data === "string" ? event.data : event.data.toString());
+        const data = JSON.parse(raw);
         if (data.setupComplete) {
           ws.send(JSON.stringify({
             clientContent: {
@@ -278,6 +281,9 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "gemini-2.0-f
           return;
         }
 
+        if (data.serverContent?.outputTranscription?.text) {
+          accumulatedText += data.serverContent.outputTranscription.text;
+        }
         const parts = data.serverContent?.modelTurn?.parts;
         if (parts && Array.isArray(parts)) {
           for (const part of parts) {
@@ -307,18 +313,34 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "gemini-2.0-f
   });
 }
 
-// 🤖 ৩.২ Google AI Studio দিয়ে আন-রিপিটেবল ইউনিক বাংলা পোস্ট জেনারেট
+// 🤖 ৩.২ AI দিয়ে সম্পূর্ণ অটোমেটিক ও ইউনিক বাংলা পোস্ট জেনারেট
 async function generateUniquePostContent(product, chosenAngle) {
+  // ১. Alwaysdata হাই-পারফরম্যান্স AI পোস্ট জেনারেটর সার্ভিস ট্রাই (নো কোটা লিমিট)
+  try {
+    const adRes = await fetch(`${ALWAYSDATA_URL}/api/generate-post`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ product, angle: chosenAngle })
+    });
+    if (adRes.ok) {
+      const adJson = await adRes.json();
+      if (adJson.caption && adJson.caption.length > 50) {
+        console.log(`⚡ [Alwaysdata AI Engine] ${chosenAngle.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (${adJson.method})`);
+        return adJson.caption;
+      }
+    }
+  } catch (e) {}
+
   if (!GEMINI_API_KEY) {
-    let text = `🔥 সেরা কালেকশন: ${product.name} 🔥\n\n` +
-      `✨ বিশেষত্ব:\n${product.description || "অসাধারণ মানের সেরা পণ্য।"}\n\n`;
+    let text = `🔥 ${product.name} 🔥\n\n` +
+      `${product.description || "দৈনন্দিন ব্যবহারের জন্য দারুণ একটি গ্যাজেট।"}\n\n`;
     if (product.price) text += `💰 অফার মূল্য: মাত্র ৳${product.price}/-\n`;
-    text += `🚚 সারা দেশে ক্যাশ অন হোম ডেলিভারি সুবিধা!\n` +
-      `📦 ডেলিভারি চার্জ: ঢাকার ভেতরে ৬০ টাকা, ঢাকার বাইরে ১২০ টাকা।\n\n`;
+    text += `🚚 সারা দেশে ক্যাশ অন হোম ডেলিভারি সুবিধা (পার্সেল খুলে দেখে পেমেন্ট করার নিশ্চয়তা)!\n` +
+      `📦 ডেলিভারি চার্জ: ঢাকার ভেতরে ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা।\n\n`;
     if (product.product_url) {
       text += `🌐 সরাসরি ওয়েবসাইট থেকে অর্ডার করতে ক্লিক করুন:\n👉 ${product.product_url}\n\n`;
     }
-    text += `📩 অথবা বিস্তারিত জানতে এখনই পেজে ইনবক্স করুন!\n\n#Ranonex #OnlineShopping #HomeDelivery #FashionBD`;
+    text += `📩 অথবা বিস্তারিত জানতে এখনই পেজে ইনবক্স করুন!\n\n#Ranonex #OnlineShopping #HomeDelivery #GadgetBD`;
     return text;
   }
 
@@ -327,58 +349,49 @@ async function generateUniquePostContent(product, chosenAngle) {
     .map((p, idx) => `[Post #${idx + 1} (${p.angle || 'Angle'})]: ${p.caption.substring(0, 150)}...`)
     .join("\n");
 
-  const prompt = `
-You are an expert e-commerce copywriter in Bangladesh managing a popular Facebook Page.
-Your mission is to write an irresistible, high-converting Facebook sales post in natural, engaging Bengali for the product below.
+  const prompt = `You are an elite, highly persuasive Bangladeshi Direct-Response Copywriter and E-commerce Social Media Marketer for "Ranonex" (https://ranonex.shop).
+Your task is to write an irresistible, high-converting Facebook sales post in natural, engaging, pure Bengali script (বাংলা লিপি).
+
+CRITICAL REQUIREMENTS:
+1. STRICT ZERO BANGLISH POLICY: Write 100% in natural Bengali script. Never write in Banglish!
+2. Write the store brand name in English letters as "Ranonex".
+3. NO generic, robotic templates! Do NOT use repetitive formulaic bullets like "💎 কেন এটি আপনার জন্য সেরা পছন্দ?" or "✅ প্রিমিয়াম বিল্ড কোয়ালিটি".
+4. Craft an attention-grabbing, curiosity-inducing opening hook matching today's angle: "${chosenAngle.name}".
+5. Highlight real customer pain points and how this product solves them with authentic, vivid storytelling.
+6. Clearly state the exact price: ${product.price ? "৳" + product.price : "বিশেষ অফার মূল্য"}. Never misquote prices.
+7. Mention Cash on Delivery (ক্যাশ অন ডেলিভারি) available across all 64 districts in Bangladesh with open-box parcel checking allowed before payment.
+8. State accurate delivery charges: ঢাকা সিটির ভেতরে মাত্র ৭০ টাকা, এবং ঢাকার বাইরে ১৩০ টাকা।
+9. Clear Call to Action: ইনবক্সে মেসেজ দিন অথবা ভিজিট করুন: ${product.product_url || 'https://ranonex.shop'}.
+10. Include 4-6 relevant Bengali & English hashtags at the end (#Ranonex #GadgetBD etc.).
 
 Product Details:
-- Product Name: ${product.name}
-- Product Page / URL: ${product.product_url || "N/A"}
-- Price / Offer: ${product.price ? "৳" + product.price : "Extract from page if mentioned"}
+- Name: ${product.name}
+- Product URL: ${product.product_url || "N/A"}
+- Price / Offer: ${product.price ? "৳" + product.price : "N/A"}
 - Description & Specs: ${product.description || ""}
-- Raw Webpage Info: ${product.raw_page_content ? product.raw_page_content.substring(0, 1500) : "N/A"}
 
-🎯 TODAY'S MARKETING ANGLE:
-- Angle: "${chosenAngle.name}"
-- Theme: ${chosenAngle.theme}
-- Strategic Instruction: ${chosenAngle.instruction}
+${previousCaptions ? `PREVIOUS POSTS (DO NOT REPEAT THESE STYLES OR PHRASES):\n${previousCaptions}` : ""}
 
-🚫 CRITICAL ANTI-REPETITION RULE:
-Here are the previous posts made for this exact product:
-${previousCaptions || "None (First time post)"}
-DO NOT reuse the same opening hooks, sentences, or layout from previous posts. This post must feel completely new, fresh, and captivating to returning followers!
+Output ONLY the final Facebook post caption, ready to publish. No markdown code fences or conversational preamble.`;
 
-Formatting Requirements:
-1. Catchy headline matching today's angle with emojis.
-2. 3-4 bullet points highlighting specific benefits.
-3. Mention the price: ${product.price ? "৳" + product.price : "best offer"}.
-4. Mention Delivery: "সারা দেশে ক্যাশ অন হোম ডেলিভারি (পণ্য হাতে পেয়ে দেখে টাকা দেওয়ার সুবিধা)"
-5. If product URL is present, say:
-   "🌐 সরাসরি ওয়েবসাইট থেকে অর্ডার করতে ক্লিক করুন: ${product.product_url}"
-6. Clear Call to Action: "অথবা অর্ডার করতে এখনই আমাদের পেজে মেসেজ / ইনবক্স করুন।"
-7. 4-6 relevant trending hashtags at the end (e.g. #Ranonex, #ShopOnline, #BDStore).
-8. Return ONLY the plain text ready to post on Facebook (No markdown code blocks).
-`;
-
-  // ১. Gemini Live WebSocket ট্রাই
+  // ২. Gemini Live WebSocket ট্রাই
   try {
-    const liveText = await callGeminiLiveWebSocket(prompt, GEMINI_API_KEY, GEMINI_MODEL);
+    const liveText = await callGeminiLiveWebSocket(prompt, GEMINI_API_KEY, "gemini-3.8-live");
     if (liveText && liveText.length > 50) {
       console.log(`⚡ [Gemini Live WebSocket] ${chosenAngle.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
       return liveText;
     }
   } catch (e) {}
 
-  // ২. REST ফলব্যাক
+  // ৩. REST ফলব্যাক (gemini-3.8-flash)
   try {
-    const cleanModel = GEMINI_MODEL.replace(/^models\//, '');
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${GEMINI_API_KEY}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${GEMINI_API_KEY}`;
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.8, maxOutputTokens: 800 }
+        generationConfig: { temperature: 0.85, maxOutputTokens: 1000 }
       })
     });
 
@@ -494,7 +507,7 @@ async function publishToTikTok(caption, mediaUrl, token = null) {
 }
 
 // 📤 ৫. Facebook Page-এ ফটো সহ পোস্ট পাবলিশ (Meta Graph API)
-async function publishToFacebook(caption, imageUrl, token = null, pageId = null) {
+async function publishToFacebook(caption, imageUrl, token = null, pageId = null, galleryImages = []) {
   const activeToken = token || META_PAGE_ACCESS_TOKEN;
   const activePageId = pageId || META_PAGE_ID;
   if (!activeToken || !activePageId) {
@@ -503,15 +516,70 @@ async function publishToFacebook(caption, imageUrl, token = null, pageId = null)
 
   console.log(`📤 Facebook Page (${activePageId})-এ পোস্ট পাবলিশ করা হচ্ছে...`);
 
-  // ছবির লিংক থাকলে /photos এন্ডপয়েন্টে পোস্ট
-  if (imageUrl && imageUrl.startsWith("http")) {
-    console.log(`📸 ছবির লিংক: ${imageUrl}`);
+  // ১. প্রোডাক্টের সমস্ত সিরিয়াল ফটো সংগ্রহ
+  let images = [];
+  if (Array.isArray(galleryImages) && galleryImages.length > 0) {
+    images = galleryImages.filter(u => typeof u === "string" && u.startsWith("http"));
+  }
+  if (images.length === 0 && imageUrl && imageUrl.startsWith("http")) {
+    images = [imageUrl];
+  }
+
+  // ২. একাধিক ছবি থাকলে -> ফেসবুক মাল্টি-ফটো অ্যালবাম ফিড পোস্ট (Multi-Photo Album)
+  if (images.length > 1) {
+    console.log(`📸 ${images.length}টি ফটো সহ ফেসবুক মাল্টি-ফটো অ্যালবাম পোস্ট করা হচ্ছে...`);
+    const attachedMedia = [];
+    for (let i = 0; i < images.length; i++) {
+      try {
+        const upRes = await fetch(`https://graph.facebook.com/v19.0/${activePageId}/photos`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: images[i],
+            published: false,
+            access_token: activeToken
+          })
+        });
+        const upData = await upRes.json();
+        if (upData.id) {
+          attachedMedia.push({ media_fbid: upData.id });
+          console.log(`  ✅ Photo #${i + 1} uploaded: FBID ${upData.id}`);
+        }
+      } catch (upErr) {
+        console.warn(`  ⚠️ Photo #${i + 1} upload failed:`, upErr.message);
+      }
+    }
+
+    if (attachedMedia.length > 0) {
+      const feedRes = await fetch(`https://graph.facebook.com/v19.0/${activePageId}/feed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: caption,
+          attached_media: attachedMedia,
+          published: true,
+          access_token: activeToken
+        })
+      });
+      const feedData = await feedRes.json();
+      if (feedData.id) {
+        console.log(`🎉 [Facebook Multi-Photo Album Post Success] Post ID: ${feedData.id}`);
+        return { success: true, id: feedData.id, type: "multi_photo", photos_count: attachedMedia.length };
+      } else {
+        console.warn("⚠️ Facebook multi-photo post failed, falling back to single photo:", feedData);
+      }
+    }
+  }
+
+  // ৩. সিঙ্গেল ছবি থাকলে /photos এন্ডপয়েন্টে পোস্ট
+  if (images.length === 1) {
+    console.log(`📸 ছবির লিংক: ${images[0]}`);
     const photoUrl = `https://graph.facebook.com/v19.0/${activePageId}/photos`;
     const res = await fetch(photoUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        url: imageUrl,
+        url: images[0],
         caption: caption,
         access_token: activeToken
       })
@@ -526,7 +594,7 @@ async function publishToFacebook(caption, imageUrl, token = null, pageId = null)
     }
   }
 
-  // ছবি ছাড়া টেক্সট পোস্ট (/feed)
+  // ৪. ছবি ছাড়া টেক্সট পোস্ট (/feed)
   const feedUrl = `https://graph.facebook.com/v19.0/${activePageId}/feed`;
   const res = await fetch(feedUrl, {
     method: "POST",
@@ -669,10 +737,20 @@ async function main() {
     if (activeFbToken) {
       const isCaptionOnly = process.env.CAPTION_ONLY === "true" || process.env.POST_TYPE === "caption_only";
       const fbImageUrl = isCaptionOnly ? null : selectedProduct.image_url;
+      let galleryList = [];
+      try {
+        if (typeof selectedProduct.gallery_images === 'string') {
+          galleryList = JSON.parse(selectedProduct.gallery_images);
+        } else if (Array.isArray(selectedProduct.gallery_images)) {
+          galleryList = selectedProduct.gallery_images;
+        }
+      } catch (e) {}
+      if (isCaptionOnly) galleryList = [];
+
       if (isCaptionOnly) {
         console.log("📝 [Caption-Only Mode] শুধুমাত্র টেক্সট ক্যাপশন নিয়ে পোস্ট করা হচ্ছে (ছবি ছাড়া)।");
       }
-      fbResult = await publishToFacebook(postCaption, fbImageUrl, activeFbToken, activeFbPageId);
+      fbResult = await publishToFacebook(postCaption, fbImageUrl, activeFbToken, activeFbPageId, galleryList);
       if (fbResult.success && selectedProduct.id) {
         await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, fbResult.id, "facebook");
       }

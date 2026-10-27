@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS products (
     description TEXT,
     category TEXT DEFAULT 'General',
     image_url TEXT,
+    gallery_images TEXT,
     product_url TEXT,
     posting_time TEXT DEFAULT '10:00', -- e.g. "10:00", "15:00", "20:00"
     daily_auto_post INTEGER DEFAULT 1, -- 1 = active, 0 = off

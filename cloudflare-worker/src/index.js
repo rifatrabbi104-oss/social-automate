@@ -436,8 +436,17 @@ export default {
         const {
           id, sku, name, price, description, category, image_url, product_url,
           specifications, posting_time, daily_auto_post, stock_status, target_platform,
-          schedule_type, interval_hours
+          schedule_type, interval_hours, gallery_images
         } = body;
+
+        let galleryStr = "[]";
+        if (Array.isArray(gallery_images)) {
+          galleryStr = JSON.stringify(gallery_images);
+        } else if (typeof gallery_images === "string" && gallery_images.trim()) {
+          galleryStr = gallery_images.trim();
+        } else if (image_url) {
+          galleryStr = JSON.stringify([image_url]);
+        }
 
         const prodId = id || `prod_${Date.now()}`;
         const prodSku = (sku && sku.trim()) ? sku.trim() : prodId.toUpperCase();
@@ -445,9 +454,9 @@ export default {
           INSERT INTO products (
             id, sku, name, price, description, category, image_url, product_url,
             specifications, posting_time, daily_auto_post, stock_status, target_platform,
-            schedule_type, interval_hours, is_active
+            schedule_type, interval_hours, gallery_images, is_active
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
           ON CONFLICT(id) DO UPDATE SET
             sku = excluded.sku,
             name = excluded.name,
@@ -463,6 +472,7 @@ export default {
             target_platform = excluded.target_platform,
             schedule_type = excluded.schedule_type,
             interval_hours = excluded.interval_hours,
+            gallery_images = excluded.gallery_images,
             is_active = 1
         `).bind(
           prodId,
@@ -479,7 +489,8 @@ export default {
           stock_status || 'in_stock',
           target_platform || 'facebook',
           schedule_type || 'daily',
-          interval_hours ? Number(interval_hours) : 4
+          interval_hours ? Number(interval_hours) : 4,
+          galleryStr
         ).run();
 
         await invalidateBusinessCache();
@@ -565,13 +576,15 @@ export default {
             const sku = (p.sku && p.sku.trim()) ? p.sku.trim() : prodId.toUpperCase();
             const productUrl = `https://ranonex.shop/product.html?id=${encodeURIComponent(p.id)}`;
 
+            const galleryJson = JSON.stringify(gallery);
+
             await env.DB.prepare(`
               INSERT INTO products (
                 id, sku, name, price, description, category, image_url, product_url,
-                specifications, stock_status, daily_auto_post, target_platform, schedule_type,
+                specifications, gallery_images, stock_status, daily_auto_post, target_platform, schedule_type,
                 posting_time, interval_hours, is_active
               )
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_stock', 1, 'facebook', 'interval', 'interval_4', 4, 1)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_stock', 1, 'facebook', 'interval', 'interval_4', 4, 1)
               ON CONFLICT(id) DO UPDATE SET
                 sku = excluded.sku,
                 name = excluded.name,
@@ -580,6 +593,7 @@ export default {
                 image_url = excluded.image_url,
                 product_url = excluded.product_url,
                 specifications = excluded.specifications,
+                gallery_images = excluded.gallery_images,
                 stock_status = 'in_stock',
                 target_platform = 'facebook',
                 schedule_type = 'interval',
@@ -596,7 +610,8 @@ export default {
               p.category || 'General',
               r2Img,
               productUrl,
-              specsSummary
+              specsSummary,
+              galleryJson
             ).run();
 
             synced.push({
@@ -605,6 +620,7 @@ export default {
               name: p.name,
               price: finalPrice,
               image_url: r2Img,
+              gallery_images: galleryJson,
               product_url: productUrl,
               specifications: specsSummary,
               target_platform: 'facebook',
@@ -2449,6 +2465,7 @@ async function ensureTables(db) {
     try { await db.prepare("ALTER TABLE products ADD COLUMN schedule_type TEXT DEFAULT 'daily'").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN interval_hours INTEGER DEFAULT 4").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN last_posted_at TIMESTAMP").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN gallery_images TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE post_history ADD COLUMN image_url TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE live_conversations ADD COLUMN sender_avatar TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE live_conversations ADD COLUMN unread_count INTEGER DEFAULT 0").run(); } catch (e) {}
@@ -2850,23 +2867,48 @@ async function getStorePolicies(db) {
 }
 
 // ========================================================
+// ========================================================
 // ✍️ AI সেলস কপিরাইটার (ইউনিক, কনটেক্সট-ইন্ডিপেন্ডেন্ট ও ডায়নামিক পলিসি)
 async function generateAIPostCaption(product, angleObj, env) {
   let apiKey = env.GEMINI_API_KEY;
   if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
     apiKey = await getConfigValue(env.DB, "gemini_api_key", null);
   }
+  if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
+    apiKey = "";
+  }
+
   let model = env.GEMINI_MODEL;
   if (!model && env.DB) {
     model = await getConfigValue(env.DB, "gemini_model", null);
   }
-  if (!model) model = "gemini-2.0-flash";
+  if (!model || model === "gemini-2.0-flash" || model === "gemini-2.5-flash") {
+    model = "gemini-3.8-flash";
+  }
 
   // র‍্যান্ডম হুক সিলেক্টর
   const randomHook = angleObj.hook_starters[Math.floor(Math.random() * angleObj.hook_starters.length)];
   
   // D1 ডেটাবেস থেকে রিয়েল-টাইম স্টোর পলিসি ও ডেলিভারি চার্জ রিড
   const policies = await getStorePolicies(env.DB);
+
+  // ১. Alwaysdata Gemini 3.8 Live ইঞ্জিন দিয়ে আনলিমিটেড ও ন্যাচারাল AI কপিরাইটিং
+  try {
+    const alwaysdataRes = await fetch("https://ranonex.alwaysdata.net/api/generate-post", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ product, angle: angleObj, policies })
+    });
+    if (alwaysdataRes.ok) {
+      const adData = await alwaysdataRes.json();
+      if (adData.caption && adData.caption.trim().length > 40) {
+        console.log(`⚡ [Alwaysdata AI Engine] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
+        return adData.caption.trim();
+      }
+    }
+  } catch (adErr) {
+    console.warn("Alwaysdata AI post generator note:", adErr.message);
+  }
 
   const prompt = `
 You are an elite Bangladeshi e-commerce copywriter with mastery in high-converting, viral social media posts.
@@ -2913,9 +2955,11 @@ Opening Inspiration: "${randomHook}"
 10. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
 `;
 
+  // ২. সরাসরি Gemini REST API ট্রাই
   if (apiKey && apiKey !== "YOUR_GEMINI_API_KEY") {
     try {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+      const cleanModel = model.replace(/^models\//, '');
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2940,7 +2984,7 @@ Opening Inspiration: "${randomHook}"
     }
   }
 
-  // ফলব্যাক কপিরাইটিং (D1 পলিসি ডাটা সহ)
+  // ৩. স্মার্ট ডায়নামিক ফলব্যাক কপিরাইটিং
   return generateFallbackCaption(product, angleObj, randomHook, policies);
 }
 
@@ -2954,33 +2998,33 @@ function generateFallbackCaption(p, angle, hook, policies) {
     contact_phone: ""
   };
 
-  const origPriceText = (p.original_price && p.original_price > p.price) ? ` (আগের দাম: ৳${p.original_price})` : '';
-  const orderLink = p.product_url ? `\n🛒 সরাসরি ওয়েবসাইট থেকে অর্ডার করুন:\n👉 ${p.product_url}\n` : `\n📩 সরাসরি অর্ডার করতে আমাদের পেজে ইনবক্স করুন!\n`;
+  const origPriceText = (p.original_price && p.original_price > p.price) ? ` (রেগুলার প্রাইস: ৳${p.original_price})` : '';
+  const orderLink = p.product_url ? `\n🛒 ওয়েবসাইটে গিয়ে সহজে অর্ডার করুন:\n👉 ${p.product_url}\n` : `\n📩 সরাসরি অর্ডার করতে আমাদের পেজে ইনবক্স করুন!\n`;
 
   const delText = (pol.del_inside || pol.del_outside)
     ? `\n🚚 ডেলিভারি চার্জ: ঢাকা সিটির ভেতরে ${pol.del_inside}, ঢাকার বাইরে ${pol.del_outside}।`
     : `\n🚚 সারা দেশে দ্রুত ক্যাশ অন হোম ডেলিভারি!`;
 
-  const returnText = pol.return_policy ? `\n🛡️ রিটার্ন পলিসি: ${pol.return_policy}` : '';
-  const hotlineText = pol.contact_phone ? `\n📞 হটলাইন: ${pol.contact_phone}` : '\n📞 যেকোনো তথ্যের জন্য সরাসরি ইনবক্স করুন।';
+  const returnText = pol.return_policy ? `\n🛡️ রিটার্ন গ্যারান্টি: ${pol.return_policy}` : '';
+  const hotlineText = pol.contact_phone ? `\n📞 হটলাইন: ${pol.contact_phone}` : '';
 
   return `${hook}
 
 ✨ ${p.name}
-${p.description ? `\n📌 বিশেষত্ব ও বিবরণ:\n${p.description}\n` : ''}
+${p.description ? `\n${p.description}\n` : ''}
 💎 কেন এটি আপনার জন্য সেরা পছন্দ?
 ✅ প্রিমিয়াম বিল্ড কোয়ালিটি ও দীর্ঘস্থায়িত্ব
 ✅ ১০০% অরিজিনাল প্রোডাক্টের নিশ্চয়তা
 ✅ সারা বাংলাদেশে ক্যাশ অন ডেলিভারি (হাতে পেয়ে চেক করে নেওয়ার সুবিধা)${returnText}
 
-💰 আজকের বিশেষ মূল্য: মাত্র ৳${p.price}${origPriceText}
+💰 বিশেষ মূল্য: মাত্র ৳${p.price}${origPriceText}
 ${orderLink}${delText}${hotlineText}
 
 #${p.category ? p.category.replace(/\s+/g, '_') : 'OnlineShopping'} #TrendingProducts #SmartShopping #${pol.store_name.replace(/\s+/g, '')}`;
 }
 
 // ========================================================
-// 🔵 ফেসবুক পেজে পোস্ট সেন্ডার (পাবলিক R2 ছবি সহ)
+// 🔵 ফেসবুক পেজে পোস্ট সেন্ডার (মাল্টি-ফটো অ্যালবাম + পাবলিক R2 ছবি সহ)
 // ========================================================
 async function publishToFacebookPage(product, caption, env) {
   const token = await getMetaPageToken(env);
@@ -2994,15 +3038,82 @@ async function publishToFacebookPage(product, caption, env) {
     throw new Error("Facebook Page Access Token D1 বা Worker-এ পাওয়া যায়নি। ড্যাশবোর্ডে টোকেন সেভ করুন।");
   }
 
-  // ১. পাবলিক R2 ছবি থাকলে /photos এন্ডপয়েন্টে ছবি + ক্যাপশন পোস্ট
-  if (product.image_url && product.image_url.startsWith("http")) {
-    console.log(`📸 Posting Photo to Facebook Page (${pageId}): ${product.image_url}`);
+  // ১. প্রোডাক্টের সমস্ত সিরিয়াল ফটো সংগ্রহ
+  let images = [];
+  try {
+    if (typeof product.gallery_images === 'string') {
+      images = JSON.parse(product.gallery_images);
+    } else if (Array.isArray(product.gallery_images)) {
+      images = product.gallery_images;
+    }
+  } catch (e) {}
+
+  if (!images || images.length === 0) {
+    if (product.image_url) images = [product.image_url];
+  }
+  images = (images || []).filter(u => typeof u === 'string' && u.startsWith('http'));
+
+  // ২. একাধিক ছবি থাকলে -> ফেসবুক মাল্টি-ফটো অ্যালবাম ফিড পোস্ট (Multi-Photo Attached Media)
+  if (images.length > 1) {
+    console.log(`📸 Posting ${images.length} Photos in Serial Order to Facebook Page (${pageId})`);
+    const attachedMedia = [];
+    for (let i = 0; i < images.length; i++) {
+      const photoUrl = images[i];
+      try {
+        const upRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/photos`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: photoUrl,
+            published: false,
+            access_token: token
+          })
+        });
+        const upData = await upRes.json();
+        if (upData.id) {
+          attachedMedia.push({ media_fbid: upData.id });
+          console.log(`  ✅ Photo #${i + 1} uploaded: FBID ${upData.id}`);
+        }
+      } catch (upErr) {
+        console.warn(`  ⚠️ Photo #${i + 1} upload failed:`, upErr.message);
+      }
+    }
+
+    if (attachedMedia.length > 0) {
+      const feedRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/feed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: caption,
+          attached_media: attachedMedia,
+          published: true,
+          access_token: token
+        })
+      });
+      const feedData = await feedRes.json();
+      if (feedRes.ok && feedData.id) {
+        return {
+          success: true,
+          mode: "multi_photo",
+          post_id: feedData.id,
+          photos_count: attachedMedia.length,
+          post_url: `https://facebook.com/${feedData.id}`
+        };
+      } else {
+        console.warn("Facebook multi-photo feed post failed, falling back to single photo:", feedData);
+      }
+    }
+  }
+
+  // ৩. সিঙ্গেল ছবি থাকলে -> /photos এন্ডপয়েন্টে পোস্ট
+  if (images.length === 1) {
+    console.log(`📸 Posting Single Photo to Facebook Page (${pageId}): ${images[0]}`);
     try {
       const photoRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/photos`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          url: product.image_url,
+          url: images[0],
           caption: caption,
           published: true,
           access_token: token
@@ -3026,7 +3137,7 @@ async function publishToFacebookPage(product, caption, env) {
     }
   }
 
-  // ২. ফলব্যাক: /feed টেক্সট পোস্ট
+  // ৪. ছবি ছাড়া টেক্সট পোস্ট -> /feed
   console.log(`📝 Posting Feed to Facebook Page (${pageId})`);
   const feedRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/feed`, {
     method: "POST",

@@ -283,13 +283,31 @@
                   <label>Website Product URL (অর্ডার লিংক)</label>
                   <input type="url" id="prod-url" placeholder="https://ranonex.shop/product.html?id=...">
                 </div>
-                <div class="form-group" style="flex: 1;">
-                  <label>Product Image URL (পাবলিক R2 ফটো লিংক)</label>
-                  <div style="display: flex; gap: 8px; align-items: center;">
-                    <input type="url" id="prod-img" placeholder="https://pub-...r2.dev/game_console.jpg" style="flex: 1;">
-                    <img id="prod-img-preview" src="" style="display: none; width: 42px; height: 42px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border-color);">
-                  </div>
+              </div>
+
+              <!-- 📸 মাল্টি-ফটো সিরিয়াল গ্যালারি ও ফটো রিমুভ/অ্যাড বক্স -->
+              <div class="form-group" style="width: 100%; margin: 6px 0 14px 0; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+                  <label style="margin: 0; font-weight: 700; font-size: 13px; display: flex; align-items: center; gap: 8px;">
+                    📸 Product Photos Gallery (সিরিয়াল অনুযায়ী একাধিক ছবি)
+                    <span id="gallery-count-badge" style="font-size: 11px; padding: 2px 8px; border-radius: 12px; background: rgba(59, 130, 246, 0.2); color: #60a5fa; font-weight: 700;">0 Photos</span>
+                  </label>
+                  <span style="font-size: 11px; color: var(--text-muted);">❌ চিহ্নে ক্লিক করে ছবি বাদ দিতে পারেন বা নতুন লিঙ্ক যোগ করতে পারেন</span>
                 </div>
+
+                <!-- থাম্বনেইল চিপস কনটেইনার -->
+                <div id="prod-gallery-container" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; min-height: 54px; margin-bottom: 12px;">
+                  <div id="gallery-empty-placeholder" style="font-size: 12px; color: var(--text-dim); padding: 6px 2px;">কোনো ছবি নেই। ওয়েবসাইট থেকে ফেচ করলে সমস্ত ছবি এখানে সিরিয়ালি আসবে।</div>
+                </div>
+
+                <!-- নতুন ছবি যুক্ত করার ইনপুট ফিল্ড -->
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <input type="url" id="input-new-photo-url" placeholder="https://pub-...r2.dev/photo.jpg (নতুন ছবির লিঙ্ক পেস্ট করুন)" style="flex: 1; padding: 10px 12px; font-size: 12px;">
+                  <button type="button" id="btn-add-gallery-photo" class="btn-primary" style="padding: 10px 16px; font-size: 12px; font-weight: 700; background: linear-gradient(135deg, #3b82f6, #1d4ed8); border: none; white-space: nowrap; cursor: pointer; border-radius: 6px;">➕ Add Photo</button>
+                </div>
+                <input type="hidden" id="prod-gallery-json" value="[]">
+                <input type="hidden" id="prod-img" value="">
+                <img id="prod-img-preview" src="" style="display: none;">
               </div>
               <div class="form-row">
                 <div class="form-group" style="flex: 1.2;">
