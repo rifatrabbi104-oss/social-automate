@@ -409,9 +409,12 @@ function renderConversationList() {
     const initial = (c.name || 'U').charAt(0).toUpperCase();
     const timeFormatted = formatTime(c.last_message_at);
     const platformLabel = c.platform === 'facebook' ? '🔵 FB' : (c.platform === 'whatsapp' ? '🟢 WA' : '💬 Chat');
+    const avatarHtml = c.sender_avatar 
+      ? `<img src="${escapeHtml(c.sender_avatar)}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" onerror="this.onerror=null;this.parentElement.textContent='${initial}';">` 
+      : initial;
 
     item.innerHTML = `
-      <div class="conv-avatar">${initial}</div>
+      <div class="conv-avatar">${avatarHtml}</div>
       <div class="conv-details">
         <div class="conv-top-row">
           <span class="conv-name">${escapeHtml(c.name)}</span>
@@ -456,7 +459,13 @@ function renderActiveChat() {
   if (badge) badge.style.display = 'flex';
   if (btn) btn.style.display = 'flex';
 
-  document.getElementById('active-chat-avatar').textContent = (conv.name || 'U').charAt(0).toUpperCase();
+  const avatarEl = document.getElementById('active-chat-avatar');
+  const initial = (conv.name || 'U').charAt(0).toUpperCase();
+  if (conv.sender_avatar) {
+    avatarEl.innerHTML = `<img src="${escapeHtml(conv.sender_avatar)}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" onerror="this.onerror=null;this.parentElement.textContent='${initial}';">`;
+  } else {
+    avatarEl.textContent = initial;
+  }
   document.getElementById('active-chat-name').textContent = conv.name;
   document.getElementById('active-chat-id').textContent = `#${conv.id}`;
 
@@ -616,7 +625,7 @@ function initHandoverToggle() {
   const btn = document.getElementById('btn-toggle-handover');
   if (!btn) return;
 
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', async () => {
     const conv = appState.conversations.find(c => String(c.id) === String(appState.activeChatId));
     if (!conv) return;
 
@@ -624,6 +633,14 @@ function initHandoverToggle() {
     setLocalCache(CACHE_KEYS.CONVERSATIONS, appState.conversations);
     updateHandoverUI(conv);
     renderConversationList();
+
+    try {
+      await fetch(`${API_BASE}/handover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: conv.id, admin_takeover: conv.admin_takeover })
+      });
+    } catch (e) {}
 
     showToast(conv.admin_takeover ? '👤 Admin Takeover সক্রিয়।' : '🤖 AI সক্রিয় করা হয়েছে।');
   });

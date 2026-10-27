@@ -175,13 +175,22 @@ export default {
         if (!token) return jsonResponse({ success: false, error: "No Meta Page token found in D1 or env" }, 400);
 
         try {
-          const checkRes = await fetch(`https://graph.facebook.com/v19.0/me/subscribed_apps?access_token=${token}`);
-          const checkData = await checkRes.json();
-
-          const subRes = await fetch(`https://graph.facebook.com/v19.0/me/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${token}`, {
+          // ১. মেসেজিং ওয়েববুক সাবস্ক্রাইব (pages_messaging পারমিশন দিয়ে ১০০% কাজ করে)
+          const subRes = await fetch(`https://graph.facebook.com/v19.0/me/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_reactions,messaging_optins&access_token=${token}`, {
             method: "POST"
           });
           const subData = await subRes.json();
+
+          // ২. কমেন্ট / ফিড ওয়েববুক সাবস্ক্রাইব (pages_manage_metadata পারমিশন থাকলে কাজ করবে)
+          let feedSubData = null;
+          try {
+            const feedRes = await fetch(`https://graph.facebook.com/v19.0/me/subscribed_apps?subscribed_fields=feed&access_token=${token}`, {
+              method: "POST"
+            });
+            feedSubData = await feedRes.json();
+          } catch (e) {
+            feedSubData = { error: e.message };
+          }
 
           const pageRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name&access_token=${token}`);
           const pageData = await pageRes.json();
@@ -189,8 +198,12 @@ export default {
           return jsonResponse({
             success: true,
             page: pageData,
-            current_subscriptions: checkData,
-            subscribe_attempt: subData,
+            messaging_subscription: subData,
+            feed_subscription: feedSubData,
+            feed_active: Boolean(feedSubData && feedSubData.success),
+            note: feedSubData && feedSubData.success 
+              ? "✅ মেসেঞ্জার এবং কমেন্ট উভয় ওয়েববুকই সফলভাবে সক্রিয় আছে!" 
+              : "ℹ️ মেসেঞ্জার অ্যাক্টিভ আছে। কমেন্টের অটো-রিপ্লাই পেতে টোকেন জেনারেট করার সময় 'pages_manage_metadata' পারমিশন দিয়ে সেভ করুন।",
             webhook_url: `${url.origin}/webhook/meta`
           });
         } catch (err) {
@@ -246,6 +259,23 @@ export default {
       }
 
       // ==========================================
+      // ৭.১ চ্যাট হ্যান্ডওভার টগল (AI vs Admin Takeover)
+      // ==========================================
+      if (request.method === "POST" && path === "/api/handover") {
+        const body = await request.json().catch(() => ({}));
+        const { chat_id, admin_takeover } = body;
+        if (!chat_id) return jsonResponse({ error: "Missing chat_id" }, 400);
+        const cleanId = String(chat_id).replace(/^(tg_|fb_|wa_)/, '');
+        if (env.DB) {
+          await ensureTables(env.DB);
+          await env.DB.prepare("UPDATE live_conversations SET admin_takeover = ? WHERE chat_id = ?").bind(admin_takeover ? 1 : 0, cleanId).run();
+        }
+        const session = memorySessions.get(cleanId);
+        if (session) session.admin_takeover = Boolean(admin_takeover);
+        return jsonResponse({ success: true, chat_id: cleanId, admin_takeover: Boolean(admin_takeover) });
+      }
+
+      // ==========================================
       // ৬. লাইভ সেশন ফেচ (শুধুমাত্র অ্যাডমিন রিফ্রেশ বাটনে চাপলে কল হবে)
       // ==========================================
       if (request.method === "GET" && path === "/api/conversations") {
@@ -254,7 +284,7 @@ export default {
           try {
             await ensureTables(env.DB);
             const { results } = await env.DB.prepare(
-              "SELECT chat_id as id, chat_id as sender_id, sender_name as name, platform, last_message, last_message_at, admin_takeover, needs_attention, messages_json FROM live_conversations ORDER BY last_message_at DESC LIMIT 50"
+              "SELECT chat_id as id, chat_id as sender_id, sender_name as name, sender_avatar, platform, last_message, last_message_at, admin_takeover, needs_attention, messages_json FROM live_conversations ORDER BY last_message_at DESC LIMIT 50"
             ).all();
             if (results && results.length > 0) {
               list = results.map(r => {
@@ -264,6 +294,7 @@ export default {
                   id: r.id,
                   sender_id: r.sender_id,
                   name: r.name,
+                  sender_avatar: r.sender_avatar || "",
                   platform: r.platform || "facebook",
                   last_message: r.last_message,
                   last_message_at: r.last_message_at,
@@ -1178,22 +1209,48 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
         const senderId = String(messaging.sender.id);
         const recipientId = String(messaging.recipient.id);
         const incomingText = messaging.message.text.trim();
-        const senderName = `User (${senderId.slice(-4)})`;
+        let senderName = `User (${senderId.slice(-4)})`;
+        let senderAvatar = "";
+
+        // মেটা গ্রাফ এপিআই দিয়ে কাস্টমারের আসল নাম ও ছবি ফেচ করা (PSID lookup)
+        const token = await getMetaPageToken(env, recipientId);
+        if (token) {
+          try {
+            const userProfileRes = await fetch(`https://graph.facebook.com/v19.0/${senderId}?fields=first_name,last_name,name,profile_pic&access_token=${token}`);
+            const userProfile = await userProfileRes.json();
+            if (userProfile && userProfile.name) senderName = userProfile.name;
+            if (userProfile && userProfile.profile_pic) senderAvatar = userProfile.profile_pic;
+          } catch (uErr) {
+            console.warn("Could not fetch user profile:", uErr.message);
+          }
+        }
 
         // অ্যান্টি-স্প্যাম ডিবাউন্স
         const now = Date.now();
         const lastTime = userLastMessageTime.get(senderId) || 0;
         if (now - lastTime < 2500) {
-          await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env);
+          await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env, senderAvatar);
           continue;
         }
         userLastMessageTime.set(senderId, now);
 
-        const session = await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env);
+        const session = await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env, senderAvatar);
 
-        // হ্যান্ডওভার চেক
-        if (session.admin_takeover && (session.takeover_until ? session.takeover_until > now : true)) {
-          continue;
+        // হ্যান্ডওভার চেক (যদি অ্যাডমিন টেকওভার থাকে এবং তা ২ ঘণ্টার বেশি পুরনো না হয়)
+        const isTakeoverExpired = session.takeover_until 
+          ? (now > session.takeover_until) 
+          : (session.last_message_at ? (now - new Date(session.last_message_at).getTime() > 2 * 3600 * 1000) : true);
+
+        if (session.admin_takeover) {
+          if (isTakeoverExpired) {
+            // ২ ঘণ্টা পুরনো টেকওভার হলে স্বয়ংক্রিয়ভাবে আবার AI সক্রিয় করা
+            session.admin_takeover = false;
+            if (env.DB) {
+              env.DB.prepare("UPDATE live_conversations SET admin_takeover = 0 WHERE chat_id = ?").bind(senderId).run().catch(() => {});
+            }
+          } else {
+            continue;
+          }
         }
 
         // D1 বিজনেস ডেটা রিড (৫ মিনিটের ক্যাশ API)
@@ -1204,7 +1261,6 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
 
         if (aiDecision.reply) {
           // মেটা গ্রাফ API দিয়ে পেজ থেকে মেসেঞ্জারে উত্তর পাঠানো
-          const token = await getMetaPageToken(env, recipientId);
           if (token) {
             await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
               method: "POST",
@@ -1215,7 +1271,7 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
               })
             });
           }
-          await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook", env);
+          await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook", env, senderAvatar);
         }
 
         // যদি চ্যাটে অর্ডার কনফার্ম হয়, D1 orders টেবিলে সেভ ও নোটিফিকেশন
@@ -1271,26 +1327,18 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
     }
   }
 
-  // ২. পেজের পোস্টের কমেন্ট (Feed Comments Auto-Reply)
+  // ২. পেজের পোস্টের কমেন্ট (Feed Comments Auto-Reply & Intelligent Private DM)
   const changes = body.entry?.[0]?.changes?.[0];
   if (changes && changes.field === "feed") {
     const val = changes.value;
     if (val && val.item === "comment" && val.verb === "add" && val.message) {
-      const commentId = val.comment_id;
-      const commentText = val.message.trim();
       const commenterId = val.from?.id;
-
-      // নিজের পেজের কমেন্টে রিপ্লাই দেবে না
       const token = await getMetaPageToken(env);
-      if (token && commentId && (!activeMetaPageId || commenterId !== activeMetaPageId)) {
-        const businessContext = await getCachedBusinessContext(env.DB);
-        const aiDecision = await callGeminiStructured(commentText, [], businessContext, env);
-        if (aiDecision.reply) {
-          await fetch(`https://graph.facebook.com/v19.0/${commentId}/comments?access_token=${token}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: aiDecision.reply })
-          });
+      if (token && (!activeMetaPageId || commenterId !== activeMetaPageId)) {
+        if (ctx && typeof ctx.waitUntil === 'function') {
+          ctx.waitUntil(handleFacebookComment(val, token, env));
+        } else {
+          await handleFacebookComment(val, token, env);
         }
       }
     }
@@ -1298,6 +1346,120 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
   }
 
   return new Response("EVENT_RECEIVED", { status: 200 });
+}
+
+// ========================================================
+// 💬 ফেসবুক পেজের কমেন্ট অটো-রিপ্লাই ও ইনবক্স প্রাইভেট DM ইঞ্জিন (AI Decision)
+// ========================================================
+async function handleFacebookComment(val, token, env) {
+  const commentId = val.comment_id;
+  const commentText = (val.message || "").trim();
+  const commenterId = val.from?.id;
+  const commenterName = val.from?.name || "Customer";
+
+  if (!token || !commentId || !commentText) return;
+
+  const businessContext = await getCachedBusinessContext(env.DB);
+  let apiKey = env.GEMINI_API_KEY;
+  if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
+    apiKey = await getConfigValue(env.DB, "gemini_api_key", null);
+  }
+  const model = env.GEMINI_MODEL || "gemini-2.0-flash";
+
+  let aiDecision = {
+    action: "both",
+    public_reply: `ধন্যবাদ ${commenterName}! বিস্তারিত ও অফার প্রাইস আপনার ইনবক্সে মেসেজ পাঠিয়ে দেওয়া হয়েছে, দয়া করে মেসেজ চেক করুন। 😊`,
+    private_reply: ""
+  };
+
+  if (apiKey && apiKey !== "YOUR_GEMINI_API_KEY") {
+    try {
+      const prompt = 
+`You are the expert social media sales assistant for 'Ranonex' online store in Bangladesh.
+A customer just left a comment on our Facebook Page post:
+Customer Name: ${commenterName}
+Customer Comment: "${commentText}"
+
+AVAILABLE STORE PRODUCTS & STORE INFO:
+${businessContext}
+
+TASK:
+Analyze the comment and decide how to respond:
+1. "action": 
+   - Set "both" if the customer is asking for price (e.g. "dam koto", "price?", "koto", "কত?"), asking about details/specifications, asking how to buy/order, or showing product interest. (AI will post a polite public comment AND send a complete private DM to their Messenger inbox).
+   - Set "public_only" if it's just a general compliment (e.g. "nice", "সুন্দর", "good", "great"), a greeting, or simple emoji.
+   - Set "none" if spam or irrelevant.
+2. "public_reply":
+   - If action is "both", write: "ধন্যবাদ ${commenterName}! বিস্তারিত ও অফার প্রাইস আপনার ইনবক্সে মেসেজ পাঠিয়ে দিয়েছি, দয়া করে ইনবক্স চেক করুন। 😊"
+   - If action is "public_only", write: "অসংখ্য ধন্যবাদ আপনার সুন্দর মন্তব্যের জন্য! ❤️"
+3. "private_reply": If action is "both", write a complete, helpful sales DM in natural Bengali:
+   - Identify the product from the catalog with exact price in BDT (৳)
+   - Mention available specifications/sizes/colors
+   - Mention Cash on Delivery across Bangladesh (Dhaka ৳70, outside ৳130)
+   - Direct order link: https://ranonex.shop/product.html?id=...
+   - Ask them to reply with Name, Mobile number, and Address to confirm order directly.
+
+Response Format (JSON ONLY):
+{
+  "action": "both",
+  "public_reply": "...",
+  "private_reply": "..."
+}`;
+
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { response_mime_type: "application/json" }
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const rawJson = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (rawJson) {
+          aiDecision = JSON.parse(rawJson);
+        }
+      }
+    } catch (e) {
+      console.warn("Gemini comment evaluation error:", e.message);
+    }
+  }
+
+  // ১. পোস্টের নিচে পাবলিক কমেন্ট রিপ্লাই দেওয়া
+  if (aiDecision.public_reply) {
+    try {
+      await fetch(`https://graph.facebook.com/v19.0/${commentId}/comments?access_token=${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: aiDecision.public_reply })
+      });
+    } catch (pubErr) {
+      console.warn("Public comment reply error:", pubErr.message);
+    }
+  }
+
+  // ২. ইনবক্সে প্রাইভেট মেসেজ পাঠানো (Meta Private Replies API: recipient.comment_id)
+  if (aiDecision.action === "both" && aiDecision.private_reply) {
+    try {
+      await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipient: { comment_id: commentId },
+          message: { text: aiDecision.private_reply }
+        })
+      });
+
+      // চ্যাট সেশনে সেভ করা যেন ড্যাশবোর্ডে সাথে সাথে চলে আসে
+      const chatId = commenterId || `fb_comm_${commentId.slice(-6)}`;
+      await appendMessageToSession(chatId, commenterName, "customer", `[পোস্টে কমেন্ট করেছেন]: "${commentText}"`, "facebook", env);
+      await appendMessageToSession(chatId, commenterName, "assistant", aiDecision.private_reply, "facebook", env);
+    } catch (privErr) {
+      console.warn("Private comment DM error:", privErr.message);
+    }
+  }
 }
 
 // ========================================================
@@ -1711,10 +1873,11 @@ async function saveSession(chatId, session, env = null) {
     try {
       await ensureTables(env.DB);
       await env.DB.prepare(`
-        INSERT INTO live_conversations (chat_id, sender_name, platform, last_message, last_message_at, admin_takeover, needs_attention, messages_json)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+        INSERT INTO live_conversations (chat_id, sender_name, sender_avatar, platform, last_message, last_message_at, admin_takeover, needs_attention, messages_json)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
         ON CONFLICT(chat_id) DO UPDATE SET
           sender_name = excluded.sender_name,
+          sender_avatar = COALESCE(excluded.sender_avatar, live_conversations.sender_avatar),
           platform = excluded.platform,
           last_message = excluded.last_message,
           last_message_at = CURRENT_TIMESTAMP,
@@ -1724,6 +1887,7 @@ async function saveSession(chatId, session, env = null) {
       `).bind(
         chatId,
         session.sender_name || `User (${chatId.slice(-4)})`,
+        session.sender_avatar || "",
         session.platform || "facebook",
         session.last_message || "",
         session.admin_takeover ? 1 : 0,
@@ -1736,7 +1900,7 @@ async function saveSession(chatId, session, env = null) {
   }
 }
 
-async function appendMessageToSession(chatId, senderName, senderType, text, platform = "meta", env = null) {
+async function appendMessageToSession(chatId, senderName, senderType, text, platform = "meta", env = null, senderAvatar = null) {
   let session = await getSession(chatId, env);
   const nowStr = new Date().toISOString();
 
@@ -1744,6 +1908,7 @@ async function appendMessageToSession(chatId, senderName, senderType, text, plat
     session = {
       chat_id: chatId,
       sender_name: senderName,
+      sender_avatar: senderAvatar || "",
       platform: platform,
       admin_takeover: false,
       takeover_until: 0,
@@ -1755,6 +1920,7 @@ async function appendMessageToSession(chatId, senderName, senderType, text, plat
   }
 
   session.sender_name = senderName || session.sender_name;
+  if (senderAvatar) session.sender_avatar = senderAvatar;
   session.last_message = text;
   session.last_message_at = nowStr;
 
@@ -1851,6 +2017,7 @@ async function ensureTables(db) {
         CREATE TABLE IF NOT EXISTS live_conversations (
           chat_id TEXT PRIMARY KEY,
           sender_name TEXT NOT NULL,
+          sender_avatar TEXT,
           platform TEXT DEFAULT 'facebook',
           last_message TEXT,
           last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1899,6 +2066,8 @@ async function ensureTables(db) {
     try { await db.prepare("ALTER TABLE products ADD COLUMN interval_hours INTEGER DEFAULT 4").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN last_posted_at TIMESTAMP").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE post_history ADD COLUMN image_url TEXT").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE live_conversations ADD COLUMN sender_avatar TEXT").run(); } catch (e) {}
+    try { await db.prepare("UPDATE live_conversations SET admin_takeover = 0 WHERE admin_takeover = 1 AND last_message_at < datetime('now', '-2 hours')").run(); } catch (e) {}
   } catch (e) {}
 }
 
