@@ -42,15 +42,9 @@ try {
   }
 } catch (e) {}
 
-// হেল্পার: মডেলের নাম ক্লিন করা (যেমন 'gemini3.8 live ( ... )' থাকলে 'gemini-3.8-flash' এ কনভার্ট করা)
+// হেল্পার: Gemini Live মডেল নির্ধারণ
 function cleanModelName(model) {
-  if (!model) return "gemini-3.8-flash";
-  let m = String(model).replace(/\(.*?\)/g, '').replace(/live/gi, '').replace(/^models\//, '').trim();
-  if (/3\.8/i.test(m)) return "gemini-3.8-flash";
-  if (/3\.7/i.test(m)) return "gemini-3.7-flash";
-  if (/3\.5/i.test(m)) return "gemini-3.5-flash";
-  if (/flash/i.test(m)) return "gemini-3.8-flash";
-  return m || "gemini-3.8-flash";
+  return "models/gemini-3.8-live";
 }
 
 // ==========================================
@@ -62,7 +56,7 @@ const CONFIG = {
   metaPageId: process.env.META_PAGE_ID || "1287050647827199",
   metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN || "EAAP26tyiJpMBSwbPigSP59zUgrW3nVwverL5dGtxzJxS7wgGZCwa5FZBTwnp5yLYqBWzvGQco6SuJEXgC7csi3mHZApVZCvRpB7zDCu6KnucWzOZC3jNN8uZCI4VWVlOLyj13uzzYo6lNWlzAr4DSi1QBuYqwHZBiSAxSlbwkJaOZAEZBNBTLwoZA5zOZAIegyGZBGcmC4DeXCKs",
   geminiApiKey: process.env.GEMINI_API_KEY || "",
-  geminiModel: cleanModelName(process.env.GEMINI_MODEL || "gemini-3.8-flash"),
+  geminiModel: "models/gemini-3.8-live",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "8973914033:AAHA99QmtyefiGYFCePdNuD4ZPyp8xw1uVQ",
   telegramChatId: process.env.TELEGRAM_CHAT_ID || "5513474694",
   workerUrl: process.env.WORKER_URL || "https://social-automate.rifatrabbi104.workers.dev"
@@ -144,8 +138,11 @@ async function getStoreCatalog() {
 }
 
 // ==========================================
-// 🤖 GOOGLE GEMINI AI SALES DECISION ENGINE (LIVE PIPELINE + FAILOVER)
+// 🤖 GEMINI 3.8 LIVE MULTIMODAL WEBSOCKET ENGINE (BIDIGENERATECONTENT)
 // ==========================================
+// Gemini 3.8 Live operates via Google's Multimodal Live API over WebSockets.
+// It connects directly to wss://generativelanguage.googleapis.com/...
+// and streams live audio + transcription with Unlimited RPM/RPD.
 async function callGeminiSalesAI(incomingText, chatHistory = []) {
   if (!CONFIG.geminiApiKey || CONFIG.geminiApiKey === "YOUR_GEMINI_API_KEY") {
     return {
@@ -156,8 +153,8 @@ async function callGeminiSalesAI(incomingText, chatHistory = []) {
   }
 
   const catalog = await getStoreCatalog();
-  const systemInstruction = `You are the expert, polite, and friendly sales & customer support AI for 'Ranonex' online store in Bangladesh.
-Always respond warmly and naturally in Bengali (বাংলা) or Banglish (if customer writes in Banglish).
+  const systemInstruction = `You are the expert, polite, and friendly sales & customer support AI for 'Ranonex' online store in Bangladesh (https://ranonex.shop).
+Always respond warmly and naturally in polite Bengali (বাংলা) or Banglish (if customer writes in Banglish).
 
 CORE RESPONSIBILITIES:
 1. SMART PRODUCT MATCHING:
@@ -170,138 +167,139 @@ CORE RESPONSIBILITIES:
      Ask step-by-step for: Full Name, Active 11-digit Phone, Delivery Address, Variant/Size.
      State: Cash on Delivery available, Delivery Charge: Dhaka 70 BDT, Outside Dhaka 130 BDT.
    - Once all 4 details (Name, Phone, Address, Product) are present:
-     Confirm the order enthusiastically with a neat summary, set "order_confirmed": true, and fill "order_data".
+     Confirm the order enthusiastically with a neat summary.
+     AND at the very bottom of your response, output this exact marker:
+     ORDER_JSON: {"order_confirmed": true, "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "product_name": "...", "variant": "...", "total_amount": 0}
 
 STORE PRODUCTS CATALOG:
-${catalog}
+${catalog}`;
 
-RESPONSE FORMAT (JSON ONLY):
-{
-  "reply": "Your friendly Bengali response message",
-  "order_confirmed": false,
-  "order_data": {
-    "customer_name": "...",
-    "customer_phone": "...",
-    "delivery_address": "...",
-    "product_name": "...",
-    "variant": "...",
-    "total_amount": 0
-  }
-}`;
-
-  // Multi-turn contents
-  const contents = [];
+  // Multi-turn turns for Live API
+  const turns = [];
   if (Array.isArray(chatHistory)) {
     for (const m of chatHistory.slice(-8)) {
       const role = m.sender_type === "assistant" || m.sender_type === "ai" ? "model" : "user";
       const text = (m.message_text || "").trim();
-      if (text) contents.push({ role, parts: [{ text }] });
+      if (text) turns.push({ role, parts: [{ text }] });
     }
   }
 
-  if (contents.length === 0 || contents[contents.length - 1].parts[0].text !== incomingText.trim()) {
-    contents.push({ role: "user", parts: [{ text: incomingText.trim() }] });
+  if (turns.length === 0 || turns[turns.length - 1].parts[0].text !== incomingText.trim()) {
+    turns.push({ role: "user", parts: [{ text: incomingText.trim() }] });
   }
 
-  // ⚡ অতি দ্রুত (১-২ সেকেন্ডে) কাস্টমারকে উত্তর দেওয়ার মডেল প্রায়োরিটি:
-  // gemini-3.5-flash (গড় রেসপন্স সময় ১.৮-২.১ সেকেন্ড) -> gemini-flash-latest -> gemini-3.8-flash
-  // ⚠️ সতর্কতা: gemini-3.8-flash বর্তমানে গুগলের সার্ভারে ডিপ থিংকিং এর কারণে ২০০+ সেকেন্ড আটকে রাখে।
-  // তাই ৪ সেকেন্ডের কঠোর AbortSignal দেওয়া হয়েছে যাতে কোনো অবস্থাতেই কাস্টমারকে অপেক্ষা না করতে হয়!
-  const candidateModels = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-3.8-flash"];
-  if (CONFIG.geminiModel && !candidateModels.includes(cleanModelName(CONFIG.geminiModel))) {
-    candidateModels.unshift(cleanModelName(CONFIG.geminiModel));
-  }
+  return new Promise((resolve) => {
+    let accumulatedText = "";
+    let isFinished = false;
+    const startTime = Date.now();
 
-  for (const modelName of candidateModels) {
-    try {
-      console.log(`🤖 [Gemini Pipeline] Connecting streaming pipeline with: ${modelName}...`);
+    // 25 second safety timeout
+    const timeout = setTimeout(() => {
+      if (!isFinished) {
+        isFinished = true;
+        try { ws.close(); } catch (e) {}
+        console.warn(`[Gemini 3.8 Live] WebSocket timed out after ${Date.now() - startTime}ms`);
+        resolve({
+          reply: accumulatedText.trim() || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।",
+          order_confirmed: false,
+          order_data: null
+        });
+      }
+    }, 25000);
 
-      // ১. লাইভ স্ট্রিমিং পাইপলাইন (streamGenerateContent) - সর্বোচ্চ ৪ সেকেন্ড
-      const streamRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:streamGenerateContent?key=${CONFIG.geminiApiKey}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemInstruction }] },
-          contents,
-          generationConfig: { temperature: 0.6, response_mime_type: "application/json" }
-        }),
-        signal: AbortSignal.timeout(4000)
-      });
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
+    const ws = new WebSocket(wsUrl);
 
-      if (streamRes.ok) {
-        const streamData = await streamRes.json();
-        // যদি গুগল থেকে স্ট্রিমে এরর অবজেক্ট আসে (যেমন সাময়িক ডিমান্ড স্পাইক)
-        if (Array.isArray(streamData) && streamData[0]?.error) {
-          console.warn(`[Gemini Pipeline] ${modelName} stream returned error:`, streamData[0].error.message);
-        } else {
-          let fullText = "";
-          if (Array.isArray(streamData)) {
-            for (const item of streamData) {
-              const part = item?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (part) fullText += part;
-            }
-          } else if (streamData?.candidates?.[0]?.content?.parts?.[0]?.text) {
-            fullText = streamData.candidates[0].content.parts[0].text;
+    ws.onopen = () => {
+      console.log(`🤖 [Gemini 3.8 Live] WebSocket connected in ${Date.now() - startTime}ms. Sending setup...`);
+      const setupPayload = {
+        setup: {
+          model: "models/gemini-3.8-live",
+          generationConfig: {
+            responseModalities: ["AUDIO"]
+          },
+          systemInstruction: {
+            parts: [{ text: systemInstruction }]
+          },
+          outputAudioTranscription: {}
+        }
+      };
+      ws.send(JSON.stringify(setupPayload));
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const rawText = event.data instanceof Blob ? await event.data.text() : event.data;
+        const msg = JSON.parse(rawText);
+
+        // Step 1: Handshake setupComplete
+        if (msg.setupComplete !== undefined) {
+          console.log(`🤖 [Gemini 3.8 Live] Setup verified in ${Date.now() - startTime}ms. Dispatching prompt...`);
+          ws.send(JSON.stringify({
+            clientContent: { turns, turnComplete: true }
+          }));
+          return;
+        }
+
+        // Step 2: Accumulate live streamed transcription & text
+        if (msg.serverContent) {
+          if (msg.serverContent.outputTranscription?.text) {
+            accumulatedText += msg.serverContent.outputTranscription.text;
+          }
+          const parts = msg.serverContent.modelTurn?.parts || [];
+          for (const p of parts) {
+            if (p.text) accumulatedText += p.text;
           }
 
-          if (fullText) {
-            try {
-              const parsed = JSON.parse(fullText);
-              return {
-                reply: parsed.reply || fullText,
-                order_confirmed: Boolean(parsed.order_confirmed),
-                order_data: parsed.order_data || null
-              };
-            } catch (e) {
-              return { reply: fullText, order_confirmed: false, order_data: null };
+          if (msg.serverContent.turnComplete) {
+            if (!isFinished) {
+              isFinished = true;
+              clearTimeout(timeout);
+              try { ws.close(); } catch (e) {}
+              console.log(`🤖 [Gemini 3.8 Live] Turn complete in ${Date.now() - startTime}ms`);
+
+              let orderConfirmed = false;
+              let orderData = null;
+              let reply = accumulatedText.trim();
+
+              const orderMatch = reply.match(/ORDER_JSON:\s*(\{[\s\S]*?\})/i);
+              if (orderMatch) {
+                try {
+                  const parsed = JSON.parse(orderMatch[1]);
+                  if (parsed.order_confirmed) {
+                    orderConfirmed = true;
+                    orderData = parsed;
+                    reply = reply.replace(/ORDER_JSON:\s*\{[\s\S]*?\}/i, "").trim();
+                  }
+                } catch (e) {}
+              }
+
+              resolve({ reply, order_confirmed: orderConfirmed, order_data: orderData });
             }
           }
         }
+      } catch (err) {
+        console.warn("[Gemini 3.8 Live] Message parse error:", err.message);
       }
+    };
 
-      // ২. ব্যাকআপ ফলব্যাক: স্ট্যান্ডার্ড generateContent - সর্বোচ্চ ৪ সেকেন্ড
-      console.log(`🤖 [Gemini Pipeline] Fallback generateContent for: ${modelName}...`);
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${CONFIG.geminiApiKey}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemInstruction }] },
-          contents,
-          generationConfig: { temperature: 0.6, response_mime_type: "application/json" }
-        }),
-        signal: AbortSignal.timeout(4000)
-      });
+    ws.onerror = (e) => {
+      console.error("[Gemini 3.8 Live] WebSocket error:", e.message || e);
+    };
 
-      if (res.ok) {
-        const data = await res.json();
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (rawText) {
-          try {
-            const parsed = JSON.parse(rawText);
-            return {
-              reply: parsed.reply || rawText,
-              order_confirmed: Boolean(parsed.order_confirmed),
-              order_data: parsed.order_data || null
-            };
-          } catch (e) {
-            return { reply: rawText, order_confirmed: false, order_data: null };
-          }
-        }
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        console.warn(`[Gemini Pipeline] ${modelName} returned status ${res.status}:`, errJson?.error?.message || '');
-        if (res.status === 503 || res.status === 429) continue;
+    ws.onclose = (event) => {
+      if (!isFinished) {
+        isFinished = true;
+        clearTimeout(timeout);
+        console.log(`[Gemini 3.8 Live] WebSocket closed (code ${event.code})`);
+        resolve({
+          reply: accumulatedText.trim() || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।",
+          order_confirmed: false,
+          order_data: null
+        });
       }
-    } catch (err) {
-      console.warn(`[Gemini Pipeline] Error with ${modelName}:`, err.message);
-    }
-  }
-
-  return {
-    reply: "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।",
-    order_confirmed: false,
-    order_data: null
-  };
+    };
+  });
 }
 
 // ==========================================
@@ -403,7 +401,7 @@ app.get(['/', '/status', '/api/status'], (req, res) => {
       facebook_messenger: Boolean(CONFIG.metaPageAccessToken),
       facebook_page_id: CONFIG.metaPageId,
       gemini_ai: Boolean(CONFIG.geminiApiKey),
-      gemini_model: "gemini-3.5-flash (Ultra-Fast 2s Engine)",
+      gemini_model: "models/gemini-3.8-live (Multimodal Live WebSocket Engine)",
       telegram_alerts: Boolean(CONFIG.telegramBotToken)
     }
   });
