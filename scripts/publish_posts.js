@@ -11,7 +11,7 @@
  */
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "models/gemini-3.8-live";
 const ALWAYSDATA_URL = (process.env.ALWAYSDATA_URL || "https://ranonex.alwaysdata.net").replace(/\/$/, "");
 
 const META_PAGE_ACCESS_TOKEN = process.env.META_PAGE_ACCESS_TOKEN;
@@ -227,11 +227,11 @@ async function getAutoPostTasks() {
 }
 
 // ⚡ ৩.১ Gemini Multimodal Live WebSocket Engine
-async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "gemini-2.0-flash-exp") {
+async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemini-3.8-live", imageParts = []) {
   if (typeof WebSocket === "undefined") return null;
 
   return new Promise((resolve) => {
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
     let ws;
     let timeoutId;
     let accumulatedText = "";
@@ -255,7 +255,7 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "gemini-2.0-f
         cleanup();
         resolve(accumulatedText.trim() || null);
       }
-    }, 12000);
+    }, 15000);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({
@@ -272,9 +272,24 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "gemini-2.0-f
         const raw = event.data instanceof Blob ? await event.data.text() : (typeof event.data === "string" ? event.data : event.data.toString());
         const data = JSON.parse(raw);
         if (data.setupComplete) {
+          const userParts = [];
+          if (Array.isArray(imageParts) && imageParts.length > 0) {
+            for (const img of imageParts) {
+              if (img && (img.data || img.base64)) {
+                userParts.push({
+                  inlineData: {
+                    mimeType: img.mimeType || "image/jpeg",
+                    data: img.data || img.base64
+                  }
+                });
+              }
+            }
+          }
+          userParts.push({ text: prompt });
+
           ws.send(JSON.stringify({
             clientContent: {
-              turns: [{ role: "user", parts: [{ text: prompt }] }],
+              turns: [{ role: "user", parts: userParts }],
               turnComplete: true
             }
           }));
@@ -374,11 +389,27 @@ ${previousCaptions ? `PREVIOUS POSTS (DO NOT REPEAT THESE STYLES OR PHRASES):\n$
 
 Output ONLY the final Facebook post caption, ready to publish. No markdown code fences or conversational preamble.`;
 
-  // ২. Gemini Live WebSocket ট্রাই
+  // ২. Gemini Live WebSocket ট্রাই (models/gemini-3.8-live + Photo Vision)
   try {
-    const liveText = await callGeminiLiveWebSocket(prompt, GEMINI_API_KEY, "gemini-3.8-live");
+    const imageParts = [];
+    if (product.image_url && product.image_url.startsWith('http')) {
+      try {
+        const imgRes = await fetch(product.image_url, {
+          headers: { "User-Agent": "Mozilla/5.0 SocialAutomate-Bot" }
+        });
+        if (imgRes.ok) {
+          const ab = await imgRes.arrayBuffer();
+          imageParts.push({
+            mimeType: imgRes.headers.get("content-type") || "image/jpeg",
+            data: Buffer.from(ab).toString("base64")
+          });
+        }
+      } catch (e) {}
+    }
+
+    const liveText = await callGeminiLiveWebSocket(prompt, GEMINI_API_KEY, "models/gemini-3.8-live", imageParts);
     if (liveText && liveText.length > 50) {
-      console.log(`⚡ [Gemini Live WebSocket] ${chosenAngle.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
+      console.log(`⚡ [Gemini 3.8 Live WebSocket] ${chosenAngle.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (Vision: ${imageParts.length > 0 ? 'Active' : 'No'})`);
       return liveText;
     }
   } catch (e) {}

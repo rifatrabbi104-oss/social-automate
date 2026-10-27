@@ -450,16 +450,19 @@ async function getStoreCatalog() {
           } catch(e) {}
           const imgUrl = (Array.isArray(gallery) && gallery[0]) ? gallery[0] : "https://ranonex.shop/assets/logo.png";
 
-          productsList.push({
+          const pObj = {
             id: p.id,
             sku,
             name: p.name,
             price,
             image_url: imgUrl,
-            url: link
-          });
+            url: link,
+            category: p.category || "",
+            description: cleanDesc
+          };
+          pObj.searchTokens = extractProductTokens(pObj);
+          productsList.push(pObj);
 
-          const cleanDesc = (p.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 250);
           catalog += `- [SKU: ${sku}] ${p.name}
     * EXACT PRICE: ৳${price} (${price} BDT)
     * ORDER LINK: ${link}
@@ -476,7 +479,82 @@ async function getStoreCatalog() {
   return productCatalogCache;
 }
 
-// 🔍 বাংলা ও ইংরেজি সিনোনিম এবং কীওয়ার্ড তালিকা
+// 🔍 প্রতিটি প্রোডাক্টের জন্য ডাইনামিক সার্চ টোকেন তৈরি (যেকোনো নতুন প্রোডাক্ট স্বয়ংক্রিয়ভাবে ইনডেক্স হবে)
+function extractProductTokens(p) {
+  const tokens = new Set();
+  if (!p) return [];
+
+  // ১. প্রোডাক্ট আইডি ও এসকেইউ
+  if (p.id) {
+    tokens.add(p.id.toLowerCase());
+    p.id.toLowerCase().split(/[-_]+/).forEach(t => t.length > 1 && tokens.add(t));
+  }
+  if (p.sku) {
+    tokens.add(p.sku.toLowerCase());
+    p.sku.toLowerCase().split(/[-_]+/).forEach(t => t.length > 1 && tokens.add(t));
+  }
+
+  // ২. প্রোডাক্টের নামের শব্দসমূহ (ইংরেজি ও বাংলা)
+  const nameWords = (p.name || '')
+    .toLowerCase()
+    .replace(/[^\w\u0980-\u09FF\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 2);
+  nameWords.forEach(w => tokens.add(w));
+
+  // ৩. ক্যাটাগরি ও স্পেক্স
+  if (p.category) {
+    p.category.toLowerCase().split(/\s+/).filter(w => w.length >= 3).forEach(w => tokens.add(w));
+  }
+
+  // ৪. সার্বজনীন বাংলা ও ব্যাংলিশ প্রতিশব্দ ম্যাপিং (ঘড়ি, কুলার, হুডি, পাঞ্জাবি, গেম, ইয়ারফোন ইত্যাদি)
+  const fullContent = `${p.name || ''} ${p.description || ''} ${p.specifications || ''} ${p.category || ''} ${p.id || ''}`.toLowerCase();
+
+  // ঘড়ি / Watch
+  if (/watch|smartwatch|clock|ঘড়ি|ঘড়ির|হাতঘড়ি|skeleton|wc-1001/i.test(fullContent)) {
+    ['watch', 'smartwatch', 'ghori', 'ghorir', 'hatghori', 'ঘড়ি', 'ঘড়ির', 'হাতঘড়ি', 'ওয়াচ', 'ঘড়ী', 'ঘড়িটা'].forEach(t => tokens.add(t));
+  }
+  // কুলার / Cooler / Fan
+  if (/cooler|glacier|fan|কুলার|ফ্যান|ga6|prod_1/i.test(fullContent)) {
+    ['cooler', 'kuler', 'mobile cooler', 'phone cooler', 'fan', 'কুলার', 'মোবাইল কুলার', 'ফোন কুলার', 'ফ্যান', 'কুলারটা'].forEach(t => tokens.add(t));
+  }
+  // গেম কনসোল / Game Console
+  if (/game|console|handheld|retro|gaming|controller|gc-1102|p6|j36|x9|গেম|গেমিং/i.test(fullContent)) {
+    ['game', 'console', 'game console', 'gaming', 'retro', 'handheld', 'গেম', 'গেম কনসোল', 'গেমিং', 'ভিডিও গেম', 'কনসোল', 'p6', 'j36'].forEach(t => tokens.add(t));
+  }
+  // ইয়ারফোন / Headphone
+  if (/earphone|headphone|headset|ep-1100|m105|ইয়ারফোন|হেডফোন/i.test(fullContent)) {
+    ['earphone', 'headphone', 'headset', 'hedphone', 'earfon', 'ইয়ারফোন', 'হেডফোন', 'হেডফন', 'ইয়ারফোন'].forEach(t => tokens.add(t));
+  }
+  // ইয়ারবাড / Earbuds
+  if (/earbuds|earbud|airbuds|airpod|airpods|tws|ep-1105|k8|বাডস|ইয়ারবাড/i.test(fullContent)) {
+    ['earbuds', 'earbud', 'airbuds', 'airpod', 'airpods', 'buds', 'tws', 'ইয়ারবাড', 'বাডস', 'ইয়ারবাড', 'বাড'].forEach(t => tokens.add(t));
+  }
+  // মাইক্রোফোন / Mic
+  if (/mic|microphone|lavalier|boya|lm-1100|mw6|মাইক্রোফোন|মাইক/i.test(fullContent)) {
+    ['microphone', 'mic', 'maykrofon', 'maik', 'মাইক্রোফোন', 'মাইক', 'মাউথপিস'].forEach(t => tokens.add(t));
+  }
+  // পাওয়ার ব্যাংক / Power Bank
+  if (/power\s*bank|powerbank|magsafe|pb_1100|10000mah|পাওয়ার\s*ব্যাংক/i.test(fullContent)) {
+    ['powerbank', 'power bank', 'pawer bank', 'powar bank', 'পাওয়ার ব্যাংক', 'পাওয়ারব্যাংক'].forEach(t => tokens.add(t));
+  }
+  // লাইট / Light / Neon
+  if (/light|neon|rope|argb|rgb|prod_2|নিয়ন|লাইট/i.test(fullContent)) {
+    ['light', 'neon', 'led', 'rgb', 'lait', 'নিয়ন', 'রিমোট লাইট', 'লাইট', 'আলো'].forEach(t => tokens.add(t));
+  }
+  // হুডি / Hoodie
+  if (/hoodie|pullover|ds-1100|hd_1100|dropshoulder|হুডি|ড্রপশোল্ডার/i.test(fullContent)) {
+    ['hoodie', 'hodi', 'hudy', 'dropshoulder', 'dropsoulder', 'হুডি', 'ড্রপশোল্ডার', 'পেইজলি হুডি', 'উইন্টার হুডি'].forEach(t => tokens.add(t));
+  }
+  // পাঞ্জাবি / Panjabi
+  if (/panjabi|punjabi|crinkle|pj-100|pj-101|pj-102|pj-103|pj-104|পাঞ্জাবি|পাঞ্জাবী/i.test(fullContent)) {
+    ['panjabi', 'punjabi', 'panzabi', 'পাঞ্জাবি', 'পাঞ্জাবী', 'পাঞ্জাবিটা'].forEach(t => tokens.add(t));
+  }
+
+  return Array.from(tokens);
+}
+
+// 🔍 বাংলা ও ইংরেজি সিনোনিম এবং কীওয়ার্ড ব্যাকআপ তালিকা
 const BENGALI_PRODUCT_KEYWORDS = [
   { matchWords: ['ঘড়ি', 'ঘড়ির', 'হাতঘড়ি', 'watch', 'ঘড়িটা', 'skeleton', 'wc-1001', 'ওয়াচ'], id: 'wc-1001' },
   { matchWords: ['কুলার', 'মোবাইল কুলার', 'ফোন কুলার', 'cooler', 'ga6', 'hoco ga6', 'glacier', 'fan', 'ফ্যান'], id: 'prod_1' },
@@ -495,10 +573,10 @@ const BENGALI_PRODUCT_KEYWORDS = [
   { matchWords: ['চেরি পাঞ্জাবি', 'cherry spandex'], id: 'pj-102' }
 ];
 
-// টেক্সট থেকে প্রোডাক্ট খোঁজা (বাংলা, ইংরেজি, SKU ও সিনোনিম হ্যান্ডলিং)
+// টেক্সট থেকে প্রোডাক্ট খোঁজা (বাংলা, ইংরেজি, ব্যাংলিশ, SKU ও ডাইনামিক টোকেন স্কোরিং)
 function findMatchingProduct(text, productsList) {
   if (!text || !Array.isArray(productsList) || productsList.length === 0) return null;
-  const lower = text.toLowerCase();
+  const lower = text.toLowerCase().trim();
 
   // ১. সরাসরি আইডি বা SKU মিল
   for (const p of productsList) {
@@ -506,7 +584,7 @@ function findMatchingProduct(text, productsList) {
     if (p.sku && lower.includes(p.sku.toLowerCase())) return p;
   }
 
-  // ২. বাংলা সিনোনিম ও কীওয়ার্ড মিল
+  // ২. বাংলা ব্যাকআপ সিনোনিম কীওয়ার্ড মিল
   for (const item of BENGALI_PRODUCT_KEYWORDS) {
     for (const kw of item.matchWords) {
       if (lower.includes(kw.toLowerCase())) {
@@ -516,14 +594,46 @@ function findMatchingProduct(text, productsList) {
     }
   }
 
-  // ৩. প্রোডাক্টের নামের শব্দ মিল
+  // ৩. ডাইনামিক টোকেন স্কোরিং (বাংলা, ব্যাংলিশ ও ইংরেজি ম্যাচ)
+  let bestProduct = null;
+  let highestScore = 0;
+
   for (const p of productsList) {
-    const words = p.name.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !['with', 'control', 'original', 'retro', 'sharp'].includes(w));
-    const matchCount = words.filter(w => lower.includes(w)).length;
-    if (matchCount >= 2 || (words.length === 1 && matchCount === 1)) {
-      return p;
+    let score = 0;
+    const tokens = p.searchTokens || extractProductTokens(p);
+
+    for (const token of tokens) {
+      if (!token || token.length < 3) continue;
+      if (lower.includes(token.toLowerCase())) {
+        // যদি টোকেনটি সরাসরি প্রোডাক্টের টাইটেলে থাকে
+        if (p.name.toLowerCase().includes(token.toLowerCase())) {
+          score += 4;
+        } else {
+          score += 2;
+        }
+      }
+    }
+
+    if (score > highestScore) {
+      highestScore = score;
+      bestProduct = p;
     }
   }
+
+  if (highestScore >= 2) {
+    return bestProduct;
+  }
+
+  // ৪. যেকোনো নতুন প্রোডাক্টের টাইটেল থেকে বড় শব্দের মিল (ফ্যাক্টরি ফলব্যাক)
+  for (const p of productsList) {
+    const words = p.name.toLowerCase().split(/\s+/).filter(w => w.length >= 4 && !['with', 'control', 'original', 'retro', 'sharp', 'black', 'white'].includes(w));
+    for (const w of words) {
+      if (lower.includes(w)) {
+        return p;
+      }
+    }
+  }
+
   return null;
 }
 
@@ -625,15 +735,40 @@ ORDER_NOTE_JSON: {"order_note": true, "note": "Customer requested change/cancell
     }
   }
 
-  // সক্রিয় প্রোডাক্টের কনটেক্সট
-  const activeProduct = session?.last_discussed_product || null;
-  const activeProductContext = activeProduct ? `
-[ACTIVE PRODUCT UNDER DISCUSSION:
+  // সক্রিয় ও আলোচিত প্রোডাক্টের তালিকা
+  const activeProduct = session?.selected_order_product || session?.last_discussed_product || null;
+  const discussedProducts = Array.isArray(session?.discussed_products) ? session.discussed_products : [];
+
+  let productsDiscussionContext = "";
+  if (discussedProducts.length > 1 && !session?.selected_order_product) {
+    productsDiscussionContext = `
+[MULTIPLE PRODUCTS DISCUSSED IN THIS CONVERSATION:
+The customer has inquired about multiple items:
+${discussedProducts.map((p, idx) => `${idx + 1}. ${p.name} - ৳${p.price} (Link: ${p.url})`).join('\n')}
+
+CRITICAL RULE FOR ORDERING WHEN MULTIPLE PRODUCTS DISCUSSED:
+- If the customer says "আমি অর্ডার করতে চাই" / "অর্ডার কনফার্ম করুন" or provides contact details (Phone, Address) WITHOUT specifying which of these items they want:
+  DO NOT guess the product!
+  Politely ask them with numbering in pure Bengali script (বাংলা লিপি):
+  "আপনি কোন প্রোডাক্টটি অর্ডার করতে চান? দয়া করে নম্বর বা নাম লিখে জানান:
+${discussedProducts.map((p, idx) => `  ${['১','২','৩','৪','৫'][idx] || (idx+1)}. ${p.name} (মূল্য: ৳${p.price}/-)`).join('\n')}
+  (যেটি নিতে চান সেটির নম্বর বা নামটি লিখে জানিয়ে দিন)"
+- Once the customer specifies the number (e.g. "১" বা "২") or mentions the name, immediately confirm that specific product!]`;
+  } else if (activeProduct) {
+    productsDiscussionContext = `
+[SINGLE ACTIVE PRODUCT UNDER DISCUSSION:
 - Product Name: ${activeProduct.name}
 - SKU: ${activeProduct.sku}
 - Price: ৳${activeProduct.price}
 - Link: ${activeProduct.url}
-RULE: If customer provides Name, Phone, and Address without repeating the product name, immediately confirm the order for this active product!]` : '';
+
+CRITICAL RULE FOR SINGLE PRODUCT ORDER CONFIRMATION:
+- When only 1 product has been discussed, and the customer says they want to order or provides their Name, 11-digit Phone (01XXXXXXXXX), and Address:
+  THE CUSTOMER DOES NOT NEED TO REPEAT THE PRODUCT NAME!
+  You already know they want '${activeProduct.name}'.
+  Immediately understand and confirm the order for '${activeProduct.name}' on the very first turn!
+  Never ask "কোন প্রোডাক্টটি নিতে চান?" when only this 1 product was discussed.]`;
+  }
 
   const isFirstMessage = !Array.isArray(chatHistory) || chatHistory.length <= 1;
 
@@ -698,10 +833,22 @@ CRITICAL BRAND & LANGUAGE RULES:
         - Courteous follow-up question: "ছবিতে দেখা প্রোডাক্টটি কি আপনি খুঁজছেন বা এটি কি এখনই অর্ডার কনফার্ম করে দেব?"
      4. NEVER invent prices. Use the exact price and link from the catalog.
 
+9. 🎯 SINGLE VS MULTI-PRODUCT ORDERING RULES:
+   - SINGLE PRODUCT DISCUSSED: If only 1 product has been discussed in this conversation, and the customer provides their delivery details (Name, Phone, Address) or says "আমি এটি নিতে চাই / অর্ডার করব":
+     DO NOT ask the customer to repeat or state the product name! You already know the active product. Automatically confirm the order for that single product on the very first turn!
+   - MULTIPLE PRODUCTS DISCUSSED: If 2 or more different products have been discussed in the conversation, and the customer wants to order without naming which one:
+     DO NOT guess blindly!
+     Politely ask them with numbering in pure Bengali script (বাংলা লিপি):
+     "আপনি কোন প্রোডাক্টটি অর্ডার করতে চান? দয়া করে নম্বর বা নাম লিখে জানান:
+     ১. [প্রোডাক্ট ১] (বর্তমান অফার মূল্য: ৳[দাম])
+     ২. [প্রোডাক্ট ২] (বর্তমান অফার মূল্য: ৳[দাম])
+     (যেটি নিতে চান সেটির নম্বর বা নাম লিখে দিন)"
+     Once the customer states the number or name, confirm that specific product!
+
 IMPORTANT: Internal markers (ORDER_JSON, ORDER_UPDATE_JSON, ORDER_CANCEL_JSON, ORDER_NOTE_JSON) are strictly for internal system processing. Never show raw JSON inside customer sentences.
 
 ${orderTimeContext}
-${activeProductContext}
+${productsDiscussionContext}
 
 STORE PRODUCTS CATALOG:
 ${catalog}`;
@@ -1503,13 +1650,70 @@ app.post('/webhook/meta', (req, res) => {
             const chatId = `fb_${senderId}`;
             let session = memorySessions.get(chatId) || { messages: [], sender_id: senderId };
             session.sender_id = senderId;
+            if (!Array.isArray(session.discussed_products)) {
+              session.discussed_products = [];
+            }
+            if (session.last_discussed_product && !session.discussed_products.some(p => p.id === session.last_discussed_product.id)) {
+              session.discussed_products.push(session.last_discussed_product);
+            }
 
             const profile = await getFacebookUserProfile(senderId);
             session.sender_name = profile.name;
 
+            // ১. ইনকামিং মেসেজ থেকে কোনো প্রোডাক্টের মিল আছে কিনা তা আগেই শনাক্ত ও ট্র্যাকিং করা
+            const { productsList } = await getStoreCatalog();
+            const earlyMatchedProduct = findMatchingProduct(incomingText, productsList);
+            if (earlyMatchedProduct) {
+              if (!session.discussed_products.some(p => p.id === earlyMatchedProduct.id)) {
+                session.discussed_products.push(earlyMatchedProduct);
+              }
+              session.last_discussed_product = earlyMatchedProduct;
+              session.last_inquiry_time = Date.now();
+              session.abandoned_reminder_sent = false;
+            }
+
+            // ২. যদি একাধিক প্রোডাক্ট আলোচিত হয়ে থাকে এবং কাস্টমার নম্বর (১, ২, ৩ বা 1, 2, 3) লিখে থাকে
+            const numChoiceMatch = (incomingText || "").trim().match(/^(?:আমি\s*)?(?:নং|নম্বর|number\s*)?([1-9]|১|২|৩|৪|৫)(?:\s*(?:নং|নম্বর|number|ta|টা))?(?:\s*(?:nite chai|চাই|order|অর্ডার|দিন|নিব))?$/i)
+              || (incomingText || "").trim().match(/\b([1-9]|১|২|৩|৪|৫)\s*(?:নং|নম্বর|number|ta|টা)\b/i)
+              || (incomingText || "").trim().match(/^(প্রথমটা|দ্বিতীয়টা|তৃতীয়টা|১ম|২য়|৩য়)$/i);
+
+            if (numChoiceMatch && session.discussed_products.length > 1) {
+              const bMap = { '১': 1, '২': 2, '৩': 3, '৪': 4, '৫': 5, 'প্রথমটা': 1, 'দ্বিতীয়টা': 2, 'তৃতীয়টা': 3, '১ম': 1, '২য়': 2, '৩য়': 3 };
+              const rawIdx = numChoiceMatch[1];
+              const choiceNum = bMap[rawIdx] || parseInt(rawIdx, 10);
+              if (choiceNum >= 1 && choiceNum <= session.discussed_products.length) {
+                const chosen = session.discussed_products[choiceNum - 1];
+                session.selected_order_product = chosen;
+                session.last_discussed_product = chosen;
+                console.log(`🎯 [Product Chosen by Number]: #${choiceNum} - ${chosen.name}`);
+              }
+            }
+
             // ==========================================
             // 🕹️ কুইক রিপ্লাই ও পোস্টব্যাক হ্যান্ডলার
             // ==========================================
+
+            // [SELECT_PRODUCT_...] বাটন ক্লিক (মাল্টি-প্রোডাক্ট তালিকা থেকে নির্বাচন)
+            if (incomingPayload.startsWith("SELECT_PRODUCT_")) {
+              const prodId = incomingPayload.replace("SELECT_PRODUCT_", "").trim();
+              const matched = (session.discussed_products || []).find(p => p.id === prodId) || productsList.find(p => p.id === prodId);
+              if (matched) {
+                session.selected_order_product = matched;
+                session.last_discussed_product = matched;
+                session.last_inquiry_time = Date.now();
+                session.abandoned_reminder_sent = false;
+
+                const text = `আপনি ${matched.name} প্রোডাক্টটি নির্বাচন করেছেন।\nবর্তমান অফার মূল্য: ৳${matched.price} (ক্যাশ অন ডেলিভারি)।\n\nঅর্ডারটি এখনই কনফার্ম করতে অনুগ্রহ করে আপনার:\n১. পুরো নাম\n২. ১১ ডিজিটের মোবাইল নম্বর\n৩. সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।`;
+                const qr = [
+                  { content_type: "text", title: "📍 ঢাকার ভেতরে (৭০৳)", payload: "ACTION_LOCATION_DHAKA" },
+                  { content_type: "text", title: "📍 ঢাকার বাইরে (১৩০৳)", payload: "ACTION_LOCATION_OUTSIDE" },
+                  { content_type: "text", title: "🔊 ভয়েস শুনুন", payload: `PLAY_AUDIO_aud_${Date.now()}` }
+                ];
+                await sendFacebookMessage(senderId, text, qr);
+                await sendFacebookProductCard(senderId, matched);
+              }
+              continue;
+            }
 
             // ১. [🔊 ভয়েস শুনুন] বাটন ক্লিক
             if (incomingPayload.startsWith("PLAY_AUDIO_")) {
@@ -1529,9 +1733,26 @@ app.post('/webhook/meta', (req, res) => {
               continue;
             }
 
-            // ২. [🛍️ এখনই অর্ডার করব] বাটন ক্লিক
+            // ২. [🛍️ এখনই অর্ডার করব] বাটন ক্লিক বা অর্ডার ইনটেন্ট
             if (incomingPayload === "ACTION_ORDER_NOW") {
-              const text = "দারুণ! ক্যাশ অন ডেলিভারিতে অর্ডার কনফার্ম করতে অনুগ্রহ করে আপনার:\n১. পুরো নাম\n২. ১১ ডিজিটের মোবাইল নম্বর\n৩. সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।";
+              if (session.discussed_products.length > 1 && !session.selected_order_product) {
+                const productListBengali = session.discussed_products.map((p, idx) => {
+                  const bNum = ['১', '২', '৩', '৪', '৫'][idx] || (idx + 1);
+                  return `${bNum}. ${p.name} (মূল্য: ৳${p.price}/-)`;
+                }).join('\n');
+
+                const askText = `আপনি কোন প্রোডাক্টটি অর্ডার করতে চান? দয়া করে নম্বর বা নাম লিখে জানান:\n\n${productListBengali}\n\n(যেটি নিতে চান সেটির নম্বর বা নাম লিখে দিন)`;
+                const qr = session.discussed_products.slice(0, 5).map((p, idx) => {
+                  const bNum = ['১', '২', '৩', '৪', '৫'][idx] || (idx + 1);
+                  return { content_type: "text", title: `${bNum}. ${p.name.slice(0, 16)}`, payload: `SELECT_PRODUCT_${p.id}` };
+                });
+                await sendFacebookMessage(senderId, askText, qr);
+                continue;
+              }
+
+              const targetProd = session.selected_order_product || (session.discussed_products.length === 1 ? session.discussed_products[0] : session.last_discussed_product);
+              const prodMention = targetProd ? `${targetProd.name} প্রোডাক্টটি ` : "";
+              const text = `দারুণ! ${prodMention}ক্যাশ অন ডেলিভারিতে অর্ডার কনফার্ম করতে অনুগ্রহ করে আপনার:\n১. পুরো নাম\n২. ১১ ডিজিটের মোবাইল নম্বর\n৩. সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।`;
               const qr = [
                 { content_type: "text", title: "📍 ঢাকার ভেতরে (৭০৳)", payload: "ACTION_LOCATION_DHAKA" },
                 { content_type: "text", title: "📍 ঢাকার বাইরে (১৩০৳)", payload: "ACTION_LOCATION_OUTSIDE" },
@@ -1724,23 +1945,35 @@ app.post('/webhook/meta', (req, res) => {
               const { productsList } = await getStoreCatalog();
               const matchedProduct = findMatchingProduct(incomingText, productsList)
                 || findMatchingProduct(aiDecision.reply, productsList)
+                || session.selected_order_product
+                || (session.discussed_products && session.discussed_products.length === 1 ? session.discussed_products[0] : null)
                 || session.last_discussed_product
                 || null;
 
               if (matchedProduct) {
+                if (!session.discussed_products.some(p => p.id === matchedProduct.id)) {
+                  session.discussed_products.push(matchedProduct);
+                }
                 session.last_discussed_product = matchedProduct;
                 session.last_inquiry_time = Date.now();
                 session.abandoned_reminder_sent = false;
               }
 
-              // ২. কাস্টমারকে প্রোডাক্ট তথ্য ও সরাসরি ওয়েবসাইট অর্ডার ইউআরএল দেওয়া নিশ্চিতকরণ
+              // ২. কাস্টমারকে প্রোডাক্ট তথ্য ও সরাসরি ওয়েবসাইট অর্ডার ইউআরএল দেওয়া শতভাগ নিশ্চিতকরণ
               const isOrderConfirmedReply = aiDecision.order_confirmed 
                 || /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম\s*করা\s*হয়েছে|অর্ডার\s*কনফার্ম\s*হয়েছে|অর্ডার\s*নিশ্চিত\s*করা\s*হয়েছে)/i.test(aiDecision.reply);
 
-              if (!isOrderConfirmedReply && matchedProduct && !aiDecision.reply.includes("ranonex.shop")) {
-                const orderUrl = matchedProduct.url || `https://ranonex.shop/product.html?id=${encodeURIComponent(matchedProduct.id)}`;
-                const productInfoBlock = `\n\n📌 প্রোডাক্ট: ${matchedProduct.name}\n💰 বর্তমান অফার মূল্য: মাত্র ৳${matchedProduct.price}/-\n🚚 ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা (ক্যাশ অন ডেলিভারিতে পার্সেল চেক করে দেখে নেওয়ার শতভাগ নিশ্চয়তা)।\n🔗 সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক:\n👉 ${orderUrl}\n\n📩 অথবা ইনবক্সে অর্ডার করতে আপনার নাম, মোবাইল নম্বর ও সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।`;
+              const activeProd = session.selected_order_product || matchedProduct || (session.discussed_products && session.discussed_products.length === 1 ? session.discussed_products[0] : null) || session.last_discussed_product;
+
+              if (!isOrderConfirmedReply && activeProd && !aiDecision.reply.includes("ranonex.shop")) {
+                const orderUrl = activeProd.url || `https://ranonex.shop/product.html?id=${encodeURIComponent(activeProd.id)}`;
+                const productInfoBlock = `\n\n📌 প্রোডাক্ট: ${activeProd.name}\n💰 বর্তমান অফার মূল্য: মাত্র ৳${activeProd.price}/-\n🚚 ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা (ক্যাশ অন ডেলিভারিতে পার্সেল চেক করে দেখে নেওয়ার শতভাগ নিশ্চয়তা)।\n🔗 সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক:\n👉 ${orderUrl}\n\n📩 অথবা ইনবক্সে অর্ডার করতে আপনার নাম, মোবাইল নম্বর ও সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।`;
                 aiDecision.reply = aiDecision.reply.trim() + productInfoBlock;
+              }
+
+              // ওয়েবসাইট লিংক জানতে চাইলে স্বয়ংক্রিয়ভাবে প্রদান
+              if (!isOrderConfirmedReply && !aiDecision.reply.includes("ranonex.shop") && /(?:ওয়েবসাইট|ওয়েবসাইট|website|site|store|সাইট|লিংক|link|url)/i.test(incomingText)) {
+                aiDecision.reply = aiDecision.reply.trim() + `\n\n🌐 Ranonex অফিশিয়াল ওয়েবসাইট: https://ranonex.shop`;
               }
 
               // ৩. স্মার্ট কনটেক্সচুয়াল কুইক রিপ্লাই বাটন তৈরি
@@ -1778,12 +2011,15 @@ app.post('/webhook/meta', (req, res) => {
               || /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?কনফার্ম(?:\s*করা)?\s*হয়েছে|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?নিশ্চিত(?:\s*করা)?\s*হয়েছে|আপনার\s*অর্ডার(?:টি)?\s*গ্রহণ\s*করা\s*হয়েছে)/i.test(aiDecision.reply || "");
 
             if (isConfirmedReply) {
+              const resolvedProduct = session.selected_order_product 
+                || (session.discussed_products && session.discussed_products.length === 1 ? session.discussed_products[0] : null)
+                || session.last_discussed_product;
+
               if (!aiDecision.order_data) {
-                const actions = extractOrderActions(aiDecision.reply || "", aiDecision.reply || "", session.messages, session.last_discussed_product);
+                const actions = extractOrderActions(aiDecision.reply || "", aiDecision.reply || "", session.messages, resolvedProduct);
                 aiDecision.order_data = actions.order_data;
               }
 
-              const resolvedProduct = session.last_discussed_product;
               const prodName = (aiDecision.order_data && aiDecision.order_data.product_name && aiDecision.order_data.product_name !== "Ranonex Store Product")
                 ? aiDecision.order_data.product_name
                 : (resolvedProduct?.name || "");

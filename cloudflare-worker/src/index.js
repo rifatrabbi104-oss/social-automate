@@ -1798,11 +1798,13 @@ async function handleSetupAI(body, env) {
     return jsonResponse({ success: false, error: "Gemini API Key খালি রাখা যাবে না!" }, 400);
   }
   const cleanKey = gemini_api_key.trim();
-  const cleanModel = gemini_model ? gemini_model.trim() : "gemini-2.0-flash";
+  const cleanModel = gemini_model ? gemini_model.trim() : "models/gemini-3.8-live";
 
   // টেস্ট রিকোয়েস্ট পাঠিয়ে ভ্যালিডেশন
   try {
-    const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${cleanKey}`, {
+    const testModel = cleanModel.replace(/^models\//, '');
+    const modelToTest = testModel.includes("live") ? "gemini-2.0-flash" : testModel;
+    const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelToTest}:generateContent?key=${cleanKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
