@@ -55,28 +55,32 @@ conn.on('ready', () => {
             console.log('✅ .env uploaded successfully!');
           }
 
-          // Restart the Alwaysdata node service by terminating the old process
-          console.log('🔄 Restarting Alwaysdata Node.js process...');
-          conn.exec(`pkill -9 -f "node.*server.js" || pkill -9 node || true; touch ${REMOTE_DIR}/restart.txt`, (err4, stream) => {
-            if (err4) {
-              console.error('Exec error:', err4.message);
-              conn.end();
-              return;
-            }
+          const localTester = path.join(__dirname, 'gemini-live-tester.html');
+          const remoteTester = `${REMOTE_DIR}/gemini-live-tester.html`;
 
-            stream.on('close', (code) => {
-              console.log(`✅ Alwaysdata restart command executed (exit code: ${code})`);
-              conn.end();
-            }).on('data', (data) => {
-              console.log('REMOTE:', data.toString().trim());
-            }).stderr.on('data', (data) => {
-              console.log('REMOTE STDERR:', data.toString().trim());
+          sftp.fastPut(localTester, remoteTester, (errT) => {
+            if (!errT) console.log('✅ gemini-live-tester.html uploaded successfully!');
+
+            // Restart the Alwaysdata node service by triggering system-restart API
+            console.log('🔄 Restarting Alwaysdata Node.js process...');
+            fetch('https://ranonex.alwaysdata.net/api/system-restart').catch(() => {});
+            conn.exec(`touch ${REMOTE_DIR}/tmp/restart.txt`, (err4, stream) => {
+              if (err4) {
+                console.error('Exec error:', err4.message);
+                conn.end();
+                return;
+              }
+
+              stream.on('close', (code) => {
+                console.log(`✅ Alwaysdata restart command executed!`);
+                conn.end();
+              });
             });
-          });
         });
       });
     });
   });
+});
 }).on('error', (err) => {
   console.error('❌ SSH Connection Error:', err.message);
 }).connect({

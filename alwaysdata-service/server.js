@@ -241,6 +241,62 @@ function extractBangladeshiPhone(str) {
 }
 
 // ==========================================
+// ⚡ বুলেটপ্রুফ কাস্টমার নাম, ফোন ও ঠিকানা পার্সার
+// ==========================================
+function parseOrderDetailsFromText(text) {
+  let name = "", phone = "", address = "";
+  if (!text) return { name, phone, address };
+
+  // ১. বাংলাদেশি ফোন নম্বর
+  phone = extractBangladeshiPhone(text);
+
+  // ২. সরাসরি লেবেল ভিত্তিক পার্সিং
+  const nameMatch = text.match(/(?:নাম|name)\s*[:ঃ-]?\s*([^\r\n,;]+)/i);
+  if (nameMatch) name = nameMatch[1].trim();
+
+  const addrMatch = text.match(/(?:ঠিকানা|address|লোকেশন|location)\s*[:ঃ-]?\s*([^\r\n]+)/i);
+  if (addrMatch) address = addrMatch[1].trim();
+
+  // ৩. যদি ফোন থাকে কিন্তু নাম বা ঠিকানা না থাকে, ফোন বাউন্ডারি দিয়ে আলাদা করা
+  if (phone && (!name || !address)) {
+    const rawDigits = phone;
+    const phoneIdx = text.search(new RegExp(`(?:\\+?88)?0?${rawDigits.slice(-10)}`));
+    if (phoneIdx !== -1) {
+      const before = text.substring(0, phoneIdx).trim();
+      const after = text.substring(phoneIdx + 11).trim();
+
+      if (!name && before) {
+        const cleanBefore = before.replace(/^(?:নাম|name)\s*[:ঃ-]?\s*/i, '').replace(/[,\r\n;]+$/, '').trim();
+        if (cleanBefore.length >= 2 && cleanBefore.length < 40 && !/ঢাকা|চট্টগ্রাম|কুমিল্লা|গ্রাম|রোড/i.test(cleanBefore)) {
+          name = cleanBefore;
+        }
+      }
+      if (!address && after) {
+        const cleanAfter = after.replace(/^(?:ঠিকানা|address)\s*[:ঃ-]?\s*/i, '').replace(/^[,\r\n;]+/, '').trim();
+        if (cleanAfter.length >= 4) {
+          address = cleanAfter;
+        }
+      }
+    }
+  }
+
+  // ৪. লাইন বাই লাইন ফলব্যাক
+  if (!address || !name) {
+    const lines = text.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      const clean = line.replace(/^(?:নাম|name|ঠিকানা|address|মোবাইল|ফোন|phone)\s*[:ঃ-]?\s*/i, '').trim();
+      if (!address && (/ঢাকা|কুমিল্লা|চট্টগ্রাম|রাজশাহী|সিলেট|খুলনা|বরিশাল|রংপুর|বাসা|রোড|গ্রাম|থানা|জেলা|পোস্ট|উপজেলা|sector|block|house|road|village|post|dhaka|cumilla|chittagong/i.test(line) || clean.length > 15)) {
+        address = clean;
+      } else if (!name && clean.length >= 2 && clean.length < 35 && !/অর্ডার|order|confirm|দাম|টাকা|চাই|নেব|product|01[3-9]/i.test(clean)) {
+        name = clean;
+      }
+    }
+  }
+
+  return { name, phone, address };
+}
+
+// ==========================================
 // ⚡ বুলেটপ্রুফ অর্ডার অ্যাকশন ও ফার্স্ট-টার্ন ডিটেক্টর
 // ==========================================
 function extractOrderActions(raw, replyText = "", messages = [], activeProduct = null) {
@@ -251,88 +307,68 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
   let order_data = null;
   let note = "";
 
+  // মেসেজ হিস্ট্রি থেকে কাস্টমারের দেওয়া ফোন, নাম ও ঠিকানা বের করা
+  let foundPhone = "";
+  let foundName = "";
+  let foundAddress = "";
+
+  if (Array.isArray(messages)) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const mText = messages[i].message_text || "";
+      const parsed = parseOrderDetailsFromText(mText);
+      if (!foundPhone && parsed.phone) foundPhone = parsed.phone;
+      if (!foundName && parsed.name) foundName = parsed.name;
+      if (!foundAddress && parsed.address) foundAddress = parsed.address;
+    }
+    const lastMsg = messages[messages.length - 1];
+    if (!foundName && lastMsg?.sender_name && !lastMsg.sender_name.startsWith("Facebook User")) {
+      foundName = lastMsg.sender_name;
+    }
+  }
+
   // ১. ORDER_JSON মার্কার চেক
   const orderMatch = raw.match(/ORDER_JSON:\s*(\{[\s\S]*?\})/i);
   if (orderMatch) {
     try {
       const p = JSON.parse(orderMatch[1]);
-      if (p.order_confirmed || p.customer_phone) {
-        order_confirmed = true;
-        order_data = p;
+      if (p.customer_phone) {
+        const pPhone = extractBangladeshiPhone(p.customer_phone);
+        if (pPhone) foundPhone = pPhone;
       }
-    } catch (e) {
-      const name = (raw.match(/"customer_name":\s*"([^"]+)"/i) || [])[1] || "";
-      const phone = (raw.match(/"customer_phone":\s*"([^"]+)"/i) || [])[1] || "";
-      const address = (raw.match(/"delivery_address":\s*"([^"]+)"/i) || [])[1] || "";
-      const product = (raw.match(/"product_name":\s*"([^"]+)"/i) || [])[1] || "";
-      const total = parseFloat((raw.match(/"total_amount":\s*([0-9.]+)/i) || [])[1] || 0);
-      if (phone || name || address) {
-        order_confirmed = true;
-        order_data = { customer_name: name, customer_phone: phone, delivery_address: address, product_name: product, total_amount: total };
+      if (p.customer_name && !p.customer_name.startsWith("Facebook User") && p.customer_name !== "Customer" && p.customer_name !== "...") {
+        foundName = p.customer_name;
       }
-    }
+      if (p.delivery_address && p.delivery_address !== "..." && p.delivery_address !== "ইনবক্সে প্রদত্ত ঠিকানা") {
+        foundAddress = p.delivery_address;
+      }
+    } catch (e) {}
   }
 
-  // ২. প্রথম টার্নেই কনফার্মেশন ধরা (কখনোই যেন ২য় বারের অপেক্ষায় না থাকে বা মিস না হয়)
-  if (!order_confirmed) {
-    const isConfirmSpoken = /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম|অর্ডার\s*কনফার্ম|অর্ডার\s*নিশ্চিত|অর্ডারটি\s*নিশ্চিত|অর্ডার\s*গ্রহণ\s*করা\s*হয়েছে|অর্ডারটি\s*ইতিমধ্যে\s*সফলভাবে|অর্ডার\s*সম্পন্ন|অর্ডার\s*প্লেস|অর্ডার\s*গৃহীত|অর্ডার\s*বুক|অর্ডার\s*নেওয়া\s*হয়েছে|অর্ডারটি\s*প্রসেস)/i.test(replyText)
-      || /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম|অর্ডার\s*কনফার্ম|অর্ডার\s*নিশ্চিত|অর্ডারটি\s*নিশ্চিত|অর্ডার\s*গ্রহণ\s*করা\s*হয়েছে|অর্ডারটি\s*ইতিমধ্যে\s*সফলভাবে|অর্ডার\s*সম্পন্ন|অর্ডার\s*প্লেস|অর্ডার\s*গৃহীত|অর্ডার\s*বুক|অর্ডার\s*নেওয়া\s*হয়েছে|অর্ডারটি\s*প্রসেস)/i.test(raw);
+  // ২. প্রথম টার্নেই কনফার্মেশন যাচাই (কখনোই ট্র্যাকিং বা প্রসেস স্টেটাসকে অর্ডার ভাবা যাবে না)
+  const isConfirmSpoken = /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?কনফার্ম(?:\s*করা)?\s*হয়েছে|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?নিশ্চিত(?:\s*করা)?\s*হয়েছে|আপনার\s*অর্ডার(?:টি)?\s*গ্রহণ\s*করা\s*হয়েছে)/i.test(replyText);
 
-    if (isConfirmSpoken) {
-      order_confirmed = true;
+  // ৩. কঠোর সত্যতা যাচাই: ফোন নম্বর (১১ ডিজিট), ডেলিভারি ঠিকানা এবং বৈধ প্রোডাক্ট থাকলেই কেবল কনফার্ম হবে
+  const hasPhone = foundPhone && foundPhone.length >= 11;
+  const hasAddress = foundAddress && foundAddress.length >= 4 && foundAddress !== "ইনবক্সে প্রদত্ত ঠিকানা";
+  const hasValidProduct = activeProduct && activeProduct.name && activeProduct.name !== "Ranonex Store Product" && Number(activeProduct.price) > 0;
 
-      let foundPhone = "";
-      let foundName = "";
-      let foundAddress = "";
+  if (isConfirmSpoken && hasPhone && hasAddress && hasValidProduct) {
+    const isDhaka = /ঢাকা|dhaka/i.test(foundAddress) && !/ঢাকার\s*বাইরে|outside/i.test(foundAddress);
+    const deliveryCharge = isDhaka ? 70 : 130;
+    const basePrice = parseFloat(activeProduct.price || 0);
+    const total = basePrice + deliveryCharge;
 
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const text = messages[i].message_text || "";
-        if (!foundPhone) {
-          foundPhone = extractBangladeshiPhone(text);
-        }
-
-        // মাল্টি-লাইন বা কমা-সেপারেটেড টেক্সট পার্সিং
-        const segments = text.split(/[\r\n,;|]+/).map(l => l.trim()).filter(Boolean);
-        if (segments.length >= 2) {
-          for (const seg of segments) {
-            const p = extractBangladeshiPhone(seg);
-            if (p) {
-              if (!foundPhone) foundPhone = p;
-            } else if (/কুমিল্লা|ঢাকা|চট্টগ্রাম|রাজশাহী|সিলেট|খুলনা|বরিশাল|রংপুর|উপজেলা|থানা|জেলা|বাসা|রোড|গ্রাম|ঠিকানা|cumilla|dhaka|chittagong|road|house|bangladesh|village|sector|block|post/i.test(seg) || seg.length > 10) {
-              if (!foundAddress) foundAddress = seg;
-            } else if (!foundName && seg.length < 35 && !/অর্ডার|order|confirm|ক্যাশ|cash/i.test(seg)) {
-              foundName = seg;
-            }
-          }
-        } else if (segments.length === 1 && !foundAddress) {
-          if (/কুমিল্লা|ঢাকা|চট্টগ্রাম|রাজশাহী|সিলেট|খুলনা|বরিশাল|রংপুর|উপজেলা|থানা|জেলা|বাসা|রোড|গ্রাম|ঠিকানা|cumilla|dhaka|chittagong|road|house|bangladesh/i.test(text)) {
-            foundAddress = text;
-          }
-        }
-      }
-
-      const lastMsg = messages[messages.length - 1];
-      if (!foundName && lastMsg?.sender_name && !lastMsg.sender_name.startsWith("Facebook User")) {
-        foundName = lastMsg.sender_name;
-      }
-
-      const prodName = activeProduct ? activeProduct.name : "Ranonex Store Product";
-      const basePrice = activeProduct ? parseFloat(activeProduct.price || 0) : 0;
-      const isDhaka = /ঢাকা|dhaka/i.test(foundAddress || raw) && !/ঢাকার\s*বাইরে|outside/i.test(foundAddress || raw);
-      const deliveryCharge = isDhaka ? 70 : 130;
-      const total = basePrice > 0 ? (basePrice + deliveryCharge) : 0;
-
-      order_data = {
-        order_confirmed: true,
-        customer_name: foundName || lastMsg?.sender_name || "Customer",
-        customer_phone: foundPhone || "ইনবক্সে প্রদত্ত নম্বর",
-        delivery_address: foundAddress || "ইনবক্সে প্রদত্ত ঠিকানা",
-        product_name: prodName,
-        variant: "Standard",
-        total_amount: total
-      };
-      console.log(`🎉 [Auto-Detected First-Time Order Confirmation]: Customer "${order_data.customer_name}", Phone "${order_data.customer_phone}", Product "${prodName}", Total ৳${total}`);
-    }
+    order_confirmed = true;
+    order_data = {
+      order_confirmed: true,
+      customer_name: foundName || "Customer",
+      customer_phone: foundPhone,
+      delivery_address: foundAddress,
+      product_name: activeProduct.name,
+      variant: "Standard",
+      total_amount: total
+    };
+    console.log(`🎉 [Auto-Detected Real Order Confirmation]: Customer "${order_data.customer_name}", Phone "${foundPhone}", Product "${activeProduct.name}", Total ৳${total}`);
   }
 
   // ৩. ORDER_UPDATE_JSON (১৫ মিনিটের মধ্যে পরিবর্তন)
@@ -440,13 +476,48 @@ async function getStoreCatalog() {
   return productCatalogCache;
 }
 
-// টেক্সট থেকে প্রোডাক্ট খোঁজা
+// 🔍 বাংলা ও ইংরেজি সিনোনিম এবং কীওয়ার্ড তালিকা
+const BENGALI_PRODUCT_KEYWORDS = [
+  { matchWords: ['ঘড়ি', 'ঘড়ির', 'হাতঘড়ি', 'watch', 'ঘড়িটা', 'skeleton', 'wc-1001', 'ওয়াচ'], id: 'wc-1001' },
+  { matchWords: ['কুলার', 'মোবাইল কুলার', 'ফোন কুলার', 'cooler', 'ga6', 'hoco ga6', 'glacier', 'fan', 'ফ্যান'], id: 'prod_1' },
+  { matchWords: ['গেম কনসোল', 'গেম', 'গেমিং', 'console', 'game', 'handheld', 'retro', 'ভিডিও গেম', 'p6', 'j36', 'x9'], id: 'gc-1102' },
+  { matchWords: ['ইয়ারফোন', 'হেডফোন', 'হেডফন', 'headphone', 'earphone', 'গেমিং ইয়ারফোন', 'm105', 'hoco m105'], id: 'ep-1100' },
+  { matchWords: ['ইয়ারবাড', 'বাডস', 'earbuds', 'earbud', 'k8', 'wireless earbuds'], id: 'ep-1105' },
+  { matchWords: ['মাইক্রোফোন', 'মাইক', 'মাউথপিস', 'microphone', 'mic', 'boya', 'lavalier', 'by-mw6', 'mw6'], id: 'lm-1100' },
+  { matchWords: ['পাওয়ার ব্যাংক', 'পাওয়ারব্যাংক', 'power bank', 'powerbank', 'magsafe', 'vd-pb030', '10000mah'], id: 'pb_1100' },
+  { matchWords: ['নিয়ন লাইট', 'নিয়ন', 'রিমোট লাইট', 'লাইট', 'neon', 'rope', 'argb', 'rgb light', 'আলো', 'light'], id: 'prod_2' },
+  { matchWords: ['পেইজলি হুডি', 'paisley', 'hoodie', 'ড্রপশোল্ডার', 'কম্বো', 'dropshoulder', 'dropsoulder', 'হুডি'], id: 'ds-1100' },
+  { matchWords: ['সলিড হুডি', 'solid hoodie', 'pullover', 'উইন্টার হুডি', 'plain hoodie'], id: 'hd_1100' },
+  { matchWords: ['অলিভ পাঞ্জাবি', 'crinkle panjabi', 'crinkle', 'panjabi', 'পাঞ্জাবি', 'পাঞ্জাবী'], id: 'pj-101' },
+  { matchWords: ['সি গ্রিন পাঞ্জাবি', 'sea green', 'micro stick'], id: 'pj-100' },
+  { matchWords: ['পপকন পাঞ্জাবি', 'popcon', 'cream panjabi', 'ক্রিম কালার'], id: 'pj-104' },
+  { matchWords: ['সাদা পাঞ্জাবি', 'হোয়াইট পাঞ্জাবি', 'giza cotton', 'white panjabi'], id: 'pj-103' },
+  { matchWords: ['চেরি পাঞ্জাবি', 'cherry spandex'], id: 'pj-102' }
+];
+
+// টেক্সট থেকে প্রোডাক্ট খোঁজা (বাংলা, ইংরেজি, SKU ও সিনোনিম হ্যান্ডলিং)
 function findMatchingProduct(text, productsList) {
   if (!text || !Array.isArray(productsList) || productsList.length === 0) return null;
   const lower = text.toLowerCase();
+
+  // ১. সরাসরি আইডি বা SKU মিল
   for (const p of productsList) {
     if (lower.includes(p.id.toLowerCase())) return p;
     if (p.sku && lower.includes(p.sku.toLowerCase())) return p;
+  }
+
+  // ২. বাংলা সিনোনিম ও কীওয়ার্ড মিল
+  for (const item of BENGALI_PRODUCT_KEYWORDS) {
+    for (const kw of item.matchWords) {
+      if (lower.includes(kw.toLowerCase())) {
+        const found = productsList.find(p => p.id === item.id);
+        if (found) return found;
+      }
+    }
+  }
+
+  // ৩. প্রোডাক্টের নামের শব্দ মিল
+  for (const p of productsList) {
     const words = p.name.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !['with', 'control', 'original', 'retro', 'sharp'].includes(w));
     const matchCount = words.filter(w => lower.includes(w)).length;
     if (matchCount >= 2 || (words.length === 1 && matchCount === 1)) {
@@ -518,10 +589,12 @@ async function callGeminiSalesAI(
 
   const { data: catalog, productsList } = await getStoreCatalog();
 
-  // অর্ডার টাইম উইন্ডো চেক
+  // অর্ডার টাইম উইন্ডো চেক (কেবলমাত্র কাস্টমার পূর্বের অর্ডার নিয়ে কথা বললে বা ট্র্যাকিং/পরিবর্তন চাইলে কার্যকর হবে)
   let orderTimeContext = "";
   const now = Date.now();
-  if (session && session.last_order_data && session.last_order_time && !session.last_order_cancelled) {
+  const isOrderQuery = /(?:অর্ডার|কখন|দেরি|ট্র্যাকিং|কবে|ঠিকানা পরিবর্তন|বাতিল|ক্যান্সেল|cancel|edit|status|tracking|delivery)/i.test(incomingText);
+
+  if (isOrderQuery && session && session.last_order_data && session.last_order_data.total_amount > 0 && session.last_order_time && !session.last_order_cancelled) {
     const elapsedMinutes = Math.floor((now - session.last_order_time) / (60 * 1000));
     if (elapsedMinutes <= 15) {
       orderTimeContext = `
@@ -703,8 +776,8 @@ ${catalog}`;
         }
       };
 
-      // অডিও থাকলে পাঠানো
-      if (incomingAudioBuffer) {
+      // অডিও থাকলে পাঠানো (কেবলমাত্র র' পিসিএম ফরম্যাট অনুমোদিত)
+      if (incomingAudioBuffer && audioMimeType && audioMimeType.includes("pcm")) {
         cached.ws.send(JSON.stringify({
           realtimeInput: {
             mediaChunks: [{ mimeType: audioMimeType, data: incomingAudioBuffer.toString('base64') }]
@@ -871,7 +944,7 @@ ${catalog}`;
           socketEntry.isReady = true;
           socketEntry.lastActive = Date.now();
 
-          if (incomingAudioBuffer) {
+          if (incomingAudioBuffer && audioMimeType && audioMimeType.includes("pcm")) {
             ws.send(JSON.stringify({
               realtimeInput: {
                 mediaChunks: [
@@ -1613,7 +1686,7 @@ app.post('/webhook/meta', (req, res) => {
 
             let userPromptText = incomingText ? incomingText.trim() : "";
             if (userSentAudio) {
-              userPromptText = "The customer sent this voice note. Listen to their speech and directly answer their question, need, or inquiry in pure Bengali script like a friendly human conversation. DO NOT introduce yourself! Answer directly.";
+              userPromptText = "Customer sent a voice note. DO NOT mention previous order, order processing, or order tracking! Warmly and politely ask in pure Bengali script (বাংলা লিপি) how you can assist them with our Ranonex store products, or if an active product is under discussion, mention its exact price, features, and how to order.";
             } else if (userSentImage) {
               userPromptText = userPromptText
                 ? `The customer sent this photo/screenshot with the caption: "${userPromptText}". Carefully analyze this product image, match it with our Ranonex store catalog, state its exact name and price in pure Bengali script, and ask if they are looking for or want to order this product.`
@@ -1647,27 +1720,43 @@ app.post('/webhook/meta', (req, res) => {
             if (aiDecision && aiDecision.reply) {
               console.log(`🤖 [AI Reply to ${profile.name}]: ${aiDecision.reply.substring(0, 80)}...`);
 
-              // স্মার্ট কনটেক্সচুয়াল কুইক রিপ্লাই বাটন তৈরি
-              const quickReplies = buildContextualQuickReplies(session, aiDecision, aiDecision.audio_id);
-
-              // ইউজার ভয়েস চাইলে সরাসরি অডিও পাঠানো
-              if (isVoiceRequested && aiDecision.audio_url) {
-                await sendFacebookAudio(senderId, aiDecision.audio_url);
-              }
-
-              // টেক্সট মেসেজ পাঠানো
-              await sendFacebookMessage(senderId, aiDecision.reply, quickReplies);
-
-              // 🃏 প্রোডাক্ট কার্ড ভিউ (In-App WebView সহ)
+              // ১. ক্যাটালগ ও প্রোডাক্ট ম্যাচিং (ইনকামিং মেসেজ, এআই রিপ্লাই বা সেশন থেকে)
               const { productsList } = await getStoreCatalog();
-              const matchedProduct = findMatchingProduct(aiDecision.reply, productsList) || session.last_discussed_product || null;
+              const matchedProduct = findMatchingProduct(incomingText, productsList)
+                || findMatchingProduct(aiDecision.reply, productsList)
+                || session.last_discussed_product
+                || null;
 
               if (matchedProduct) {
                 session.last_discussed_product = matchedProduct;
                 session.last_inquiry_time = Date.now();
                 session.abandoned_reminder_sent = false;
+              }
 
-                if (userSentImage || /প্রোডাক্ট|কুলার|cooler|হেডফোন|earphone|game|console|neon|light|দাম|৳|অর্ডার|নিবেন/i.test(aiDecision.reply)) {
+              // ২. কাস্টমারকে প্রোডাক্ট তথ্য ও সরাসরি ওয়েবসাইট অর্ডার ইউআরএল দেওয়া নিশ্চিতকরণ
+              const isOrderConfirmedReply = aiDecision.order_confirmed 
+                || /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম\s*করা\s*হয়েছে|অর্ডার\s*কনফার্ম\s*হয়েছে|অর্ডার\s*নিশ্চিত\s*করা\s*হয়েছে)/i.test(aiDecision.reply);
+
+              if (!isOrderConfirmedReply && matchedProduct && !aiDecision.reply.includes("ranonex.shop")) {
+                const orderUrl = matchedProduct.url || `https://ranonex.shop/product.html?id=${encodeURIComponent(matchedProduct.id)}`;
+                const productInfoBlock = `\n\n📌 প্রোডাক্ট: ${matchedProduct.name}\n💰 বর্তমান অফার মূল্য: মাত্র ৳${matchedProduct.price}/-\n🚚 ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা (ক্যাশ অন ডেলিভারিতে পার্সেল চেক করে দেখে নেওয়ার শতভাগ নিশ্চয়তা)।\n🔗 সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক:\n👉 ${orderUrl}\n\n📩 অথবা ইনবক্সে অর্ডার করতে আপনার নাম, মোবাইল নম্বর ও সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।`;
+                aiDecision.reply = aiDecision.reply.trim() + productInfoBlock;
+              }
+
+              // ৩. স্মার্ট কনটেক্সচুয়াল কুইক রিপ্লাই বাটন তৈরি
+              const quickReplies = buildContextualQuickReplies(session, aiDecision, aiDecision.audio_id);
+
+              // ৪. ইউজার ভয়েস চাইলে সরাসরি অডিও পাঠানো
+              if (isVoiceRequested && aiDecision.audio_url) {
+                await sendFacebookAudio(senderId, aiDecision.audio_url);
+              }
+
+              // ৫. টেক্সট মেসেজ পাঠানো
+              await sendFacebookMessage(senderId, aiDecision.reply, quickReplies);
+
+              // ৬. 🃏 প্রোডাক্ট কার্ড ভিউ (In-App WebView সহ)
+              if (matchedProduct && !isOrderConfirmedReply) {
+                if (userSentImage || userSentAudio || /দাম|প্রোডাক্ট|price|কত|৳|নিবেন|অর্ডার|চাই|কুলার|ঘড়ি|watch|headphone|cooler|panjabi|hoodie|লাইট|light/i.test(incomingText + " " + aiDecision.reply)) {
                   await sendFacebookProductCard(senderId, matchedProduct);
                 }
               }
@@ -1681,9 +1770,12 @@ app.post('/webhook/meta', (req, res) => {
               });
             }
 
-            // ১. অর্ডার কনফার্মেশন -> প্রথমবারেই টেলিগ্রাম অ্যালার্ট (ফুলপ্রুফ ডিটেকশন)
+            // ==========================================
+            // ১. অর্ডার কনফার্মেশন -> টেলিগ্রাম অ্যালার্ট ও D1 ডাটাবেস সেভ
+            // (কঠোর ভ্যালিডেশন: কোনো ফেক/০ টাকার বা ইনকমপ্লিট অর্ডার যাবে না)
+            // ==========================================
             const isConfirmedReply = aiDecision.order_confirmed 
-              || /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম|অর্ডার\s*কনফার্ম|অর্ডার\s*নিশ্চিত|অর্ডারটি\s*নিশ্চিত|অর্ডার\s*গ্রহণ\s*করা\s*হয়েছে|অর্ডারটি\s*ইতিমধ্যে\s*সফলভাবে|অর্ডার\s*সম্পন্ন|অর্ডার\s*প্লেস|অর্ডার\s*গৃহীত|অর্ডার\s*বুক|অর্ডার\s*নেওয়া\s*হয়েছে|অর্ডারটি\s*প্রসেস)/i.test(aiDecision.reply || "");
+              || /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?কনফার্ম(?:\s*করা)?\s*হয়েছে|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?নিশ্চিত(?:\s*করা)?\s*হয়েছে|আপনার\s*অর্ডার(?:টি)?\s*গ্রহণ\s*করা\s*হয়েছে)/i.test(aiDecision.reply || "");
 
             if (isConfirmedReply) {
               if (!aiDecision.order_data) {
@@ -1691,36 +1783,67 @@ app.post('/webhook/meta', (req, res) => {
                 aiDecision.order_data = actions.order_data;
               }
 
+              const resolvedProduct = session.last_discussed_product;
+              const prodName = (aiDecision.order_data && aiDecision.order_data.product_name && aiDecision.order_data.product_name !== "Ranonex Store Product")
+                ? aiDecision.order_data.product_name
+                : (resolvedProduct?.name || "");
+
+              const basePrice = resolvedProduct ? parseFloat(resolvedProduct.price || 0) : (aiDecision.order_data?.total_amount || 0);
+              const isDhaka = /ঢাকা|dhaka/i.test(aiDecision.order_data?.delivery_address || "") && !/ঢাকার\s*বাইরে|outside/i.test(aiDecision.order_data?.delivery_address || "");
+              const deliveryCharge = isDhaka ? 70 : 130;
+              const totalAmount = basePrice > 0 ? (basePrice + deliveryCharge) : (aiDecision.order_data?.total_amount || 0);
+
               const orderInfo = {
-                ...(session.last_order_data || {}),
-                ...(aiDecision.order_data || {}),
-                customer_name: (aiDecision.order_data && aiDecision.order_data.customer_name) || profile.name || "Customer",
-                product_name: (aiDecision.order_data && aiDecision.order_data.product_name) || session.last_discussed_product?.name || "Ranonex Store Product"
+                customer_name: (aiDecision.order_data && aiDecision.order_data.customer_name && !aiDecision.order_data.customer_name.startsWith("Facebook User"))
+                  ? aiDecision.order_data.customer_name
+                  : (profile.name || "Customer"),
+                customer_phone: aiDecision.order_data?.customer_phone || "",
+                delivery_address: aiDecision.order_data?.delivery_address || "",
+                product_name: prodName,
+                variant: aiDecision.order_data?.variant || "Standard",
+                total_amount: totalAmount
               };
 
-              session.last_order_data = orderInfo;
-              session.last_order_time = Date.now();
-              session.last_order_cancelled = false;
+              // 🛡️ কঠোর ভ্যালিডেশন: ফোন নম্বর (১১ ডিজিট), সঠিক প্রোডাক্ট, সঠিক ঠিকানা ও মোট মূল্য > ০ হতে হবে
+              const hasValidPhone = orderInfo.customer_phone && orderInfo.customer_phone !== "ইনবক্সে প্রদত্ত নম্বর" && orderInfo.customer_phone.replace(/\D/g, '').length >= 11;
+              const hasValidProduct = orderInfo.product_name && orderInfo.product_name !== "Ranonex Store Product" && orderInfo.product_name.length > 3;
+              const hasValidAddress = orderInfo.delivery_address && orderInfo.delivery_address !== "ইনবক্সে প্রদত্ত ঠিকানা" && orderInfo.delivery_address.trim().length >= 4;
+              const hasValidAmount = Number(orderInfo.total_amount) > 0;
 
-              console.log(`🎉 [ORDER CONFIRMED FIRST TIME! Sending Telegram Alert...]`, JSON.stringify(session.last_order_data));
-              await sendTelegramAlert(session.last_order_data, "Facebook Messenger");
+              if (hasValidPhone && hasValidProduct && hasValidAddress && hasValidAmount) {
+                // ডুপ্লিকেট রোধ: একই ফোন ও প্রোডাক্টের জন্য বারবার অ্যালার্ট না পাঠানো
+                const dedupeKey = `${orderInfo.customer_phone}_${orderInfo.product_name}`;
+                if (session.last_alerted_order_key === dedupeKey) {
+                  console.log(`ℹ️ [Duplicate Order Alert Skipped]: ${dedupeKey}`);
+                } else {
+                  session.last_alerted_order_key = dedupeKey;
+                  session.last_order_data = orderInfo;
+                  session.last_order_time = Date.now();
+                  session.last_order_cancelled = false;
 
-              if (CONFIG.workerUrl) {
-                fetch(`${CONFIG.workerUrl}/api/orders`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    chat_id: chatId,
-                    platform: "facebook",
-                    customer_name: session.last_order_data.customer_name,
-                    customer_phone: session.last_order_data.customer_phone || "",
-                    delivery_address: session.last_order_data.delivery_address || "",
-                    product_name: session.last_order_data.product_name || "",
-                    variant: session.last_order_data.variant || "Standard",
-                    total_amount: session.last_order_data.total_amount || 0,
-                    status: "confirmed"
-                  })
-                }).catch(() => {});
+                  console.log(`🎉 [ORDER CONFIRMED! Sending Telegram Alert & Saving to D1...]`, JSON.stringify(orderInfo));
+                  await sendTelegramAlert(orderInfo, "Facebook Messenger");
+
+                  if (CONFIG.workerUrl) {
+                    fetch(`${CONFIG.workerUrl}/api/orders`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        chat_id: chatId,
+                        platform: "facebook",
+                        customer_name: orderInfo.customer_name,
+                        customer_phone: orderInfo.customer_phone,
+                        delivery_address: orderInfo.delivery_address,
+                        product_name: orderInfo.product_name,
+                        variant: orderInfo.variant || "Standard",
+                        total_amount: orderInfo.total_amount,
+                        status: "confirmed"
+                      })
+                    }).catch((err) => console.error("Worker order save error:", err.message));
+                  }
+                }
+              } else {
+                console.warn(`⚠️ [Order Alert Blocked]: Incomplete order details. Phone: "${orderInfo.customer_phone}", Product: "${orderInfo.product_name}", Address: "${orderInfo.delivery_address}", Total: ৳${orderInfo.total_amount}`);
               }
             }
 
@@ -1837,29 +1960,79 @@ app.post(['/api/send-reply', '/api/messages/send'], async (req, res) => {
 });
 
 // ==========================================
-// ✍️ AI POST GENERATOR API (For Cloudflare Worker & Web Dashboard)
 // ==========================================
-function generateTextViaLiveWebSocket(prompt) {
-  if (!CONFIG.geminiApiKey) return Promise.resolve(null);
+// ✍️ AI POST GENERATOR API (Gemini 3.8 Live Multimodal Vision + Persistent ws.send())
+// ==========================================
+
+// ইমেজ ইউআরএল থেকে Base64 ফেচ হেল্পার (Gemini 3.8 Live Vision এর জন্য)
+async function fetchImageAsBase64(url) {
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) return null;
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const res = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'SocialAutomate/1.0' } });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (buffer.length === 0 || buffer.length > 5 * 1024 * 1024) return null;
+    const rawMime = res.headers.get('content-type') || 'image/jpeg';
+    const mimeType = rawMime.split(';')[0].trim();
+    return {
+      mimeType: mimeType || 'image/jpeg',
+      data: buffer.toString('base64')
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+// ⚡ পারসিস্টেন্ট পোস্ট জেনারেশন লাইভ সকেট (WebSocket Session Reuse - ws.send() দিয়ে আনলিমিটেড পোস্ট ও টোকেন সেভিং)
+let persistentPostGenSocket = {
+  ws: null,
+  isReady: false,
+  lastActive: 0,
+  currentResolve: null,
+  accumulatedText: "",
+  activeTimeout: null
+};
+
+function getOrCreatePersistentPostGenSocket() {
+  if (persistentPostGenSocket.ws && persistentPostGenSocket.ws.readyState === WebSocket.OPEN && persistentPostGenSocket.isReady) {
+    return Promise.resolve(persistentPostGenSocket);
+  }
+
   return new Promise((resolve) => {
-    let finished = false;
-    let accumulatedText = "";
+    if (persistentPostGenSocket.ws) {
+      try { persistentPostGenSocket.ws.close(); } catch (e) {}
+    }
+
     const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
     const ws = new WebSocket(wsUrl);
 
-    const timer = setTimeout(() => {
-      if (!finished) {
-        finished = true;
+    persistentPostGenSocket = {
+      ws,
+      isReady: false,
+      lastActive: Date.now(),
+      currentResolve: null,
+      accumulatedText: "",
+      activeTimeout: null
+    };
+
+    const handshakeTimeout = setTimeout(() => {
+      if (!persistentPostGenSocket.isReady) {
         try { ws.close(); } catch (e) {}
-        resolve(accumulatedText.trim() || null);
+        resolve(null);
       }
-    }, 15000);
+    }, 12000);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({
         setup: {
           model: "models/gemini-3.8-live",
-          generationConfig: { responseModalities: ["AUDIO"] },
+          generationConfig: {
+            responseModalities: ["AUDIO"]
+          },
           outputAudioTranscription: {}
         }
       }));
@@ -1871,30 +2044,32 @@ function generateTextViaLiveWebSocket(prompt) {
         const msg = JSON.parse(raw);
 
         if (msg.setupComplete !== undefined) {
-          ws.send(JSON.stringify({
-            clientContent: {
-              turns: [{ role: "user", parts: [{ text: prompt }] }],
-              turnComplete: true
-            }
-          }));
+          clearTimeout(handshakeTimeout);
+          persistentPostGenSocket.isReady = true;
+          persistentPostGenSocket.lastActive = Date.now();
+          console.log("⚡ [Gemini 3.8 Live Post Generator] Handshake Complete! Persistent ws.send() ready.");
+          resolve(persistentPostGenSocket);
           return;
         }
 
         if (msg.serverContent) {
           if (msg.serverContent.outputTranscription?.text) {
-            accumulatedText += msg.serverContent.outputTranscription.text;
+            persistentPostGenSocket.accumulatedText += msg.serverContent.outputTranscription.text;
           }
           const parts = msg.serverContent.modelTurn?.parts || [];
           for (const p of parts) {
-            if (p.text) accumulatedText += p.text;
+            if (p.text) persistentPostGenSocket.accumulatedText += p.text;
           }
 
           if (msg.serverContent.turnComplete) {
-            if (!finished) {
-              finished = true;
-              clearTimeout(timer);
-              try { ws.close(); } catch (e) {}
-              resolve(accumulatedText.trim() || null);
+            if (persistentPostGenSocket.currentResolve) {
+              const resText = persistentPostGenSocket.accumulatedText.trim();
+              if (persistentPostGenSocket.activeTimeout) clearTimeout(persistentPostGenSocket.activeTimeout);
+              const cb = persistentPostGenSocket.currentResolve;
+              persistentPostGenSocket.currentResolve = null;
+              persistentPostGenSocket.accumulatedText = "";
+              persistentPostGenSocket.lastActive = Date.now();
+              cb(resText || null);
             }
           }
         }
@@ -1902,31 +2077,146 @@ function generateTextViaLiveWebSocket(prompt) {
     };
 
     ws.onerror = () => {
-      if (!finished) {
-        finished = true;
-        clearTimeout(timer);
-        resolve(accumulatedText.trim() || null);
+      clearTimeout(handshakeTimeout);
+      if (persistentPostGenSocket.currentResolve) {
+        const cb = persistentPostGenSocket.currentResolve;
+        persistentPostGenSocket.currentResolve = null;
+        cb(persistentPostGenSocket.accumulatedText.trim() || null);
       }
+      persistentPostGenSocket.isReady = false;
     };
 
     ws.onclose = () => {
-      if (!finished) {
-        finished = true;
-        clearTimeout(timer);
-        resolve(accumulatedText.trim() || null);
+      clearTimeout(handshakeTimeout);
+      if (persistentPostGenSocket.currentResolve) {
+        const cb = persistentPostGenSocket.currentResolve;
+        persistentPostGenSocket.currentResolve = null;
+        cb(persistentPostGenSocket.accumulatedText.trim() || null);
       }
+      persistentPostGenSocket.isReady = false;
+      persistentPostGenSocket.ws = null;
     };
   });
 }
 
+async function generateTextViaLiveWebSocket(prompt, imageParts = []) {
+  if (!CONFIG.geminiApiKey) return null;
+
+  try {
+    const socketEntry = await getOrCreatePersistentPostGenSocket();
+    if (!socketEntry || !socketEntry.ws || socketEntry.ws.readyState !== WebSocket.OPEN) {
+      return null;
+    }
+
+    return new Promise((resolve) => {
+      socketEntry.accumulatedText = "";
+      socketEntry.currentResolve = resolve;
+      socketEntry.lastActive = Date.now();
+
+      socketEntry.activeTimeout = setTimeout(() => {
+        if (socketEntry.currentResolve) {
+          const resText = socketEntry.accumulatedText.trim();
+          socketEntry.currentResolve = null;
+          socketEntry.accumulatedText = "";
+          resolve(resText || null);
+        }
+      }, 25000);
+
+      // ⚡ একই ওপেন লাইভ সকেটে ws.send() দিয়ে টার্ন পাঠানো (টোকেন ও কানেকশন সেভ)
+      const userParts = [];
+      if (Array.isArray(imageParts) && imageParts.length > 0) {
+        for (const img of imageParts) {
+          userParts.push({
+            inlineData: {
+              mimeType: img.mimeType || "image/jpeg",
+              data: img.data || img.base64
+            }
+          });
+        }
+      }
+      userParts.push({ text: prompt });
+
+      socketEntry.ws.send(JSON.stringify({
+        clientContent: {
+          turns: [{ role: "user", parts: userParts }],
+          turnComplete: true
+        }
+      }));
+      console.log(`⚡ [Gemini 3.8 Live WebSocket] Post Prompt + ${imageParts.length} photo(s) sent via ws.send()!`);
+    });
+  } catch (err) {
+    console.error("Error in generateTextViaLiveWebSocket:", err.message);
+    return null;
+  }
+}
+
+// 🌐 লাইভ টেস্টার এইচটিএমএল সার্ভিং রুট
+app.get('/tester', (req, res) => {
+  const testerPath = path.join(__dirname, 'gemini-live-tester.html');
+  if (fs.existsSync(testerPath)) {
+    return res.sendFile(testerPath);
+  }
+  res.send("Gemini 3.8 Live Tester ready.");
+});
+
+app.get('/gemini-live-tester.html', (req, res) => {
+  const testerPath = path.join(__dirname, 'gemini-live-tester.html');
+  if (fs.existsSync(testerPath)) {
+    return res.sendFile(testerPath);
+  }
+  res.send("Gemini 3.8 Live Tester ready.");
+});
+
 app.post('/api/generate-post', async (req, res) => {
-  const { product, angle } = req.body || {};
+  const { product, angle, images: customImages } = req.body || {};
   if (!product) return res.status(400).json({ error: "Missing product data" });
 
   try {
     const angleName = angle?.name || "Problem-Solution";
     const angleTheme = angle?.theme || "কাস্টমারের দৈনন্দিন সমস্যা ও নিখুঁত সমাধান";
     const angleInstruction = angle?.instruction || "Focus on relatable daily frustration and reveal this product as the solution.";
+
+    // প্রোডাক্টের সব ছবি সিরিয়াল অনুযায়ী সংগ্রহ (গ্যালারি ইমেজ, ইউআরএল ও কাস্টম ইমেজ)
+    const photoUrls = [];
+    if (Array.isArray(customImages)) {
+      photoUrls.push(...customImages.filter(Boolean));
+    }
+    if (product.image_url) photoUrls.push(product.image_url);
+    if (product.gallery_images) {
+      let gallery = [];
+      try {
+        gallery = typeof product.gallery_images === 'string' ? JSON.parse(product.gallery_images) : product.gallery_images;
+      } catch (e) {}
+      if (Array.isArray(gallery)) photoUrls.push(...gallery);
+    }
+    if (Array.isArray(product.photos)) photoUrls.push(...product.photos);
+    if (Array.isArray(product.images)) photoUrls.push(...product.images);
+
+    const uniquePhotoUrls = [...new Set(photoUrls.filter(u => typeof u === 'string' && u.startsWith('http')))].slice(0, 3);
+
+    // প্যারালালে সব ছবি ডাউনলোড ও Base64 কনভার্ট
+    const imageParts = [];
+    if (uniquePhotoUrls.length > 0) {
+      console.log(`📸 [Fetching ${uniquePhotoUrls.length} Product Photos for Gemini 3.8 Live Vision Analysis...]`);
+      const downloads = await Promise.allSettled(uniquePhotoUrls.map(url => fetchImageAsBase64(url)));
+      for (const d of downloads) {
+        if (d.status === 'fulfilled' && d.value) {
+          imageParts.push(d.value);
+        }
+      }
+      console.log(`✅ [Vision Ready] Converted ${imageParts.length} photo(s) for Gemini 3.8 Live!`);
+    }
+
+    if (product.image_base64) {
+      imageParts.push({
+        mimeType: product.image_mime || "image/jpeg",
+        data: product.image_base64
+      });
+    }
+
+    const visualInstruction = imageParts.length > 0
+      ? `VISUAL INSPECTION DIRECTIVE: You have been provided with ${imageParts.length} real photo(s) of this product in image parts. Carefully inspect the product's actual appearance, colors, finish, materials, buttons, display, ergonomics, and accessories in these photos. Describe these authentic visual details naturally in your Bengali copy so readers can instantly visualize the product in their hands.`
+      : "";
 
     const prompt = `You are an elite, highly persuasive Bangladeshi Direct-Response Copywriter and E-commerce Social Media Marketer for "Ranonex" (https://ranonex.shop).
 Your task is to write an irresistible, high-converting Facebook post in natural, engaging, pure Bengali script (বাংলা লিপি).
@@ -1942,6 +2232,7 @@ CRITICAL REQUIREMENTS:
 8. State accurate delivery charges: ঢাকা সিটির ভেতরে মাত্র ৭০ টাকা, এবং ঢাকার বাইরে ১৩০ টাকা।
 9. Clear Call to Action: ইনবক্সে মেসেজ দিন অথবা ভিজিট করুন: ${product.url || 'https://ranonex.shop'}.
 10. Include 4-6 relevant Bengali & English hashtags at the end (#Ranonex #GadgetBD etc.).
+${visualInstruction}
 
 Product Details:
 - Name: ${product.name || product.title}
@@ -1951,10 +2242,16 @@ Product Details:
 
 Output ONLY the final Facebook post caption, ready to publish. No conversational preamble.`;
 
-    // ১. Gemini 3.8 Live WebSocket ট্রাই (নো কোটা লিমিট)
-    const wsCaption = await generateTextViaLiveWebSocket(prompt);
+    // ১. Gemini 3.8 Live WebSocket ট্রাই (ws.send() সেশন রিউজ ও ফটো ভিশন সহ)
+    const wsCaption = await generateTextViaLiveWebSocket(prompt, imageParts);
     if (wsCaption && wsCaption.length > 50) {
-      return res.json({ success: true, caption: wsCaption, method: "gemini-3.8-live-ws" });
+      return res.json({ 
+        success: true, 
+        caption: wsCaption, 
+        method: "gemini-3.8-live-ws", 
+        photos_analyzed: imageParts.length,
+        session_reused: true 
+      });
     }
 
     // ২. REST ফলব্যাক (gemini-3.8-flash)
