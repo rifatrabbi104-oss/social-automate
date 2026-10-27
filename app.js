@@ -674,6 +674,43 @@ function initChatReply() {
   });
 }
 
+// 🤖 AI সেলস রিপ্লাই সাজেশন (অ্যাডমিন যখন চ্যাটে রিপ্লাই করতে চান)
+window.requestAiReplySuggestion = async function() {
+  const chatId = appState.activeChatId;
+  if (!chatId) {
+    showToast('⚠️ অনুগ্রহ করে প্রথমে বাম পাশ থেকে একটি চ্যাট সিলেক্ট করুন!');
+    return;
+  }
+  const inputEl = document.getElementById('admin-message-input');
+  const btnText = document.getElementById('btn-ai-suggest-text');
+  const btn = document.getElementById('btn-ai-suggest-reply');
+  if (btn) btn.disabled = true;
+  if (btnText) btnText.textContent = 'Thinking...';
+
+  try {
+    const res = await fetch(`${API_BASE}/ai-suggest-reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId })
+    });
+    const data = await res.json();
+    if (res.ok && data.success && data.suggested_reply) {
+      if (inputEl) {
+        inputEl.value = data.suggested_reply;
+        inputEl.focus();
+      }
+      showToast('✨ AI সেলস রিপ্লাই সাজেস্ট করেছে! দেখে Send চাপুন।');
+    } else {
+      showToast('⚠️ ' + (data.error || 'AI রিপ্লাই তৈরি করতে পারেনি'));
+    }
+  } catch (err) {
+    showToast('❌ এরর: ' + err.message);
+  } finally {
+    if (btn) btn.disabled = false;
+    if (btnText) btnText.textContent = 'AI Suggest';
+  }
+};
+
 function initHandoverToggle() {
   const btn = document.getElementById('btn-toggle-handover');
   if (!btn) return;
@@ -730,26 +767,28 @@ function renderProductsTable() {
       : `<strong>${escapeHtml(p.name)}</strong>`;
 
     // শিডিউল টেক্সট
-    let schedText = p.posting_time || '10:00';
+    let schedText = '⏱️ প্রতি ৪ ঘণ্টা পর পর';
     if (p.posting_time && p.posting_time.startsWith('interval_')) {
       const h = p.posting_time.replace('interval_', '');
       schedText = `⏱️ প্রতি ${h} ঘণ্টা পর পর`;
     } else if (p.schedule_type === 'interval') {
       schedText = `⏱️ প্রতি ${p.interval_hours || 4} ঘণ্টা পর পর`;
-    } else {
-      schedText = `⏰ ${p.posting_time || '10:00'}`;
+    } else if (p.posting_time && p.posting_time !== '10:00') {
+      schedText = `⏰ ${p.posting_time}`;
     }
 
-    const autoBadge = p.daily_auto_post != 0 
+    const autoBadge = (p.daily_auto_post === undefined || p.daily_auto_post != 0)
       ? `<span style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">${schedText} (🟢 চালু)</span>`
       : `<span style="background: rgba(255, 255, 255, 0.05); color: var(--text-dim); padding: 4px 8px; border-radius: 4px; font-size: 11px;">⚪ বন্ধ</span>`;
 
-    const platformBadge = p.target_platform === 'facebook'
+    const platform = p.target_platform || 'facebook';
+    const platformBadge = platform === 'facebook'
       ? `<span style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🔵 FB</span>`
-      : (p.target_platform === 'all'
+      : (platform === 'all'
         ? `<span style="background: rgba(139, 92, 246, 0.15); color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🌐 All</span>`
         : `<span style="background: rgba(254, 44, 85, 0.15); color: #fe2c55; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🎵 TikTok</span>`);
 
+    const isStockIn = (p.stock_status || 'in_stock') === 'in_stock';
     const skuDisplay = p.sku || p.id || 'N/A';
     const specsDisplay = p.specifications ? p.specifications : 'Standard / Single';
 
@@ -776,7 +815,7 @@ function renderProductsTable() {
       <td><span style="color: var(--emerald); font-weight: 700; font-size: 14px;">৳${p.price}</span></td>
       <td>${platformBadge}</td>
       <td>${autoBadge}</td>
-      <td><span class="badge-status ${p.stock_status === 'in_stock' ? 'published' : 'pending'}">${p.stock_status === 'in_stock' ? 'In Stock' : 'Out of Stock'}</span></td>
+      <td><span class="badge-status ${isStockIn ? 'published' : 'pending'}">${isStockIn ? 'In Stock' : 'Out of Stock'}</span></td>
       <td style="white-space: nowrap;">
         <button class="btn-primary" style="padding: 6px 12px; font-size: 11px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 6px; cursor: pointer; color: #fff; margin-right: 6px;" onclick="publishProductNow('${p.id}', this)" title="এই প্রোডাক্টটি ফেসবুক পেজে পোস্ট করুন">
           🚀 Post Now

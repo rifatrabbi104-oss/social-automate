@@ -188,6 +188,10 @@
               </div>
               <form class="input-form" id="chat-reply-form">
                 <input type="text" id="admin-message-input" placeholder="কাস্টমারকে উত্তর দিন (সরাসরি কাস্টমারের সোশ্যাল ইনবক্সে যাবে)..." autocomplete="off" required>
+                <button type="button" class="btn-secondary" id="btn-ai-suggest-reply" onclick="requestAiReplySuggestion()" style="padding: 10px 14px; font-weight: 700; background: rgba(99, 102, 241, 0.2); border: 1px solid rgba(99, 102, 241, 0.4); color: #c7d2fe; border-radius: var(--radius-md); cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap;" title="কাস্টমারের বার্তার প্রেক্ষিতে AI দিয়ে সেরা সেলস রিপ্লাই তৈরি করুন">
+                  <span>✨</span>
+                  <span id="btn-ai-suggest-text">AI Suggest</span>
+                </button>
                 <button type="submit" class="btn-send" id="btn-send-message">
                   <span>Send</span>
                   <span class="send-icon">➤</span>

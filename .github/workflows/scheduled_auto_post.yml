@@ -1,0 +1,17 @@
+name: 24/7 Cloud Auto-Post Scheduler
+
+on:
+  schedule:
+    # প্রতি ৩০ মিনিট পর পর স্বয়ংক্রিয়ভাবে ক্লাউড থেকে ওয়ার্কারকে জাগিয়ে চেক করবে
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  check-and-post:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Worker Auto-Posting Check
+        run: |
+          echo "⏰ [GitHub Cloud Scheduler] Checking scheduled auto-post queue on Cloudflare Worker..."
+          RESPONSE=$(curl -s "https://social-automate.rifatrabbi104.workers.dev/api/cron-status?run=true")
+          echo "Worker Response: $RESPONSE"

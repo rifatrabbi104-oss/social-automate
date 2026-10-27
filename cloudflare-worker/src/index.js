@@ -378,6 +378,28 @@ export default {
         return await handleSetupAI(body, env);
       }
 
+      // ৬.৫ AI স্মার্ট রিপ্লাই সাজেশন API (ড্যাশবোর্ড অ্যাডমিন বা অটো-অ্যাসিস্ট্যান্টের জন্য)
+      if (request.method === "POST" && path === "/api/ai-suggest-reply") {
+        const body = await request.json().catch(() => ({}));
+        const { chat_id } = body;
+        if (!chat_id) return jsonResponse({ error: "Missing chat_id" }, 400);
+        const cleanId = String(chat_id).replace(/^(tg_|fb_|wa_)/, '');
+        const session = await getSession(cleanId, env);
+        if (!session || !session.messages || session.messages.length === 0) {
+          return jsonResponse({ error: "No messages found in this chat session" }, 404);
+        }
+        const lastCustomerMsg = [...session.messages].reverse().find(m => m.sender_type === "customer" || m.sender_type === "user");
+        const incomingText = lastCustomerMsg ? lastCustomerMsg.message_text : "হ্যালো, আপনাদের প্রোডাক্ট সম্পর্কে জানতে চাই";
+        const businessContext = await getCachedBusinessContext(env.DB);
+        const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-8), businessContext, env);
+        return jsonResponse({
+          success: true,
+          suggested_reply: aiDecision.reply,
+          order_confirmed: aiDecision.order_confirmed,
+          order_data: aiDecision.order_data
+        });
+      }
+
       if (request.method === "GET" && path === "/api/messages") {
         const chatId = url.searchParams.get("chat_id") || url.searchParams.get("conversation_id");
         if (!chatId) return jsonResponse({ error: "Missing chat_id parameter" }, 400);
@@ -549,7 +571,7 @@ export default {
                 specifications, stock_status, daily_auto_post, target_platform, schedule_type,
                 posting_time, interval_hours, is_active
               )
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_stock', 1, 'facebook', 'daily', '10:00', 4, 1)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_stock', 1, 'facebook', 'interval', 'interval_4', 4, 1)
               ON CONFLICT(id) DO UPDATE SET
                 sku = excluded.sku,
                 name = excluded.name,
@@ -558,7 +580,12 @@ export default {
                 image_url = excluded.image_url,
                 product_url = excluded.product_url,
                 specifications = excluded.specifications,
-                stock_status = excluded.stock_status,
+                stock_status = 'in_stock',
+                target_platform = 'facebook',
+                schedule_type = 'interval',
+                posting_time = 'interval_4',
+                interval_hours = 4,
+                daily_auto_post = 1,
                 is_active = 1
             `).bind(
               prodId,
@@ -579,7 +606,13 @@ export default {
               price: finalPrice,
               image_url: r2Img,
               product_url: productUrl,
-              specifications: specsSummary
+              specifications: specsSummary,
+              target_platform: 'facebook',
+              schedule_type: 'interval',
+              interval_hours: 4,
+              posting_time: 'interval_4',
+              stock_status: 'in_stock',
+              daily_auto_post: 1
             });
           }
 
@@ -1857,7 +1890,11 @@ async function callGeminiStructured(userMessage, recentHistory, businessContext,
   if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
     apiKey = await getConfigValue(env.DB, "gemini_api_key", null);
   }
-  const model = env.GEMINI_MODEL || "gemini-2.0-flash";
+  let model = env.GEMINI_MODEL;
+  if (!model && env.DB) {
+    model = await getConfigValue(env.DB, "gemini_model", null);
+  }
+  if (!model) model = "gemini-2.0-flash";
 
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
     return {
@@ -2332,6 +2369,9 @@ async function ensureTables(db) {
     try { await db.prepare("ALTER TABLE live_conversations ADD COLUMN channel_type TEXT DEFAULT 'messenger'").run(); } catch (e) {}
     try { await db.prepare("DELETE FROM live_conversations WHERE chat_id = '0' OR chat_id LIKE 'fb_user_%' OR chat_id LIKE 'wa_01882%' OR chat_id LIKE 'test_%'").run(); } catch (e) {}
     try { await db.prepare("UPDATE live_conversations SET admin_takeover = 0").run(); } catch (e) {}
+    // পূর্ববর্তী টেস্ট ডামি প্রোডাক্ট রিমুভ ও সকল আসল প্রোডাক্টকে ৪ ঘণ্টা ফেসবুক ইন্টারভ্যালে আপডেট
+    try { await db.prepare("DELETE FROM products WHERE id LIKE 'p_1793%' AND sku IS NULL").run(); } catch (e) {}
+    try { await db.prepare("UPDATE products SET target_platform = 'facebook', schedule_type = 'interval', interval_hours = 4, posting_time = 'interval_4', stock_status = 'in_stock' WHERE target_platform != 'facebook' OR schedule_type != 'interval' OR posting_time != 'interval_4' OR stock_status != 'in_stock'").run(); } catch (e) {}
   } catch (e) {}
 }
 
@@ -2725,10 +2765,16 @@ async function getStorePolicies(db) {
 
 // ========================================================
 // ✍️ AI সেলস কপিরাইটার (ইউনিক, কনটেক্সট-ইন্ডিপেন্ডেন্ট ও ডায়নামিক পলিসি)
-// ========================================================
 async function generateAIPostCaption(product, angleObj, env) {
-  const apiKey = env.GEMINI_API_KEY;
-  const model = env.GEMINI_MODEL || "gemini-2.0-flash";
+  let apiKey = env.GEMINI_API_KEY;
+  if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
+    apiKey = await getConfigValue(env.DB, "gemini_api_key", null);
+  }
+  let model = env.GEMINI_MODEL;
+  if (!model && env.DB) {
+    model = await getConfigValue(env.DB, "gemini_model", null);
+  }
+  if (!model) model = "gemini-2.0-flash";
 
   // র‍্যান্ডম হুক সিলেক্টর
   const randomHook = angleObj.hook_starters[Math.floor(Math.random() * angleObj.hook_starters.length)];
@@ -2997,61 +3043,87 @@ async function handleScheduledAutoPosting(env) {
   const currentMinute = bdtDate.getUTCMinutes();
   const executionLog = [];
 
-  for (const p of prods) {
-    let isDue = false;
-    let reason = "";
+  const intervalProducts = prods.filter(p => p.schedule_type === 'interval' || (p.posting_time && p.posting_time.startsWith('interval_')));
+  const dailyProducts = prods.filter(p => !intervalProducts.includes(p));
 
-    // last_posted_at parsing (Strict UTC)
+  // --- ক. স্মার্ট ইন্টারভ্যাল কিউ রোটেশন (প্রতি ৪ ঘণ্টা পর পর ১টি প্রোডাক্ট ফেসবুকে পোস্ট) ---
+  if (intervalProducts.length > 0) {
+    let lastGlobalPostTime = 0;
+    try {
+      const lastHist = await env.DB.prepare("SELECT published_at FROM post_history WHERE platform = 'facebook' ORDER BY published_at DESC LIMIT 1").first();
+      if (lastHist && lastHist.published_at) {
+        const cleanStr = String(lastHist.published_at).replace(" ", "T");
+        lastGlobalPostTime = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z").getTime();
+        if (isNaN(lastGlobalPostTime)) lastGlobalPostTime = 0;
+      }
+    } catch (e) {}
+
+    const intervalHours = intervalProducts[0].interval_hours || 4;
+    const elapsedSinceLastPost = lastGlobalPostTime > 0 ? (now - lastGlobalPostTime) / (3600 * 1000) : 999;
+
+    // পরবর্তী প্রোডাক্ট নির্ধারণ (যেটি সবচেয়ে আগে বা কখনো পোস্ট হয়নি)
+    const sortedQueue = [...intervalProducts].sort((a, b) => {
+      const aTime = a.last_posted_at ? new Date(String(a.last_posted_at).replace(" ", "T") + "Z").getTime() : 0;
+      const bTime = b.last_posted_at ? new Date(String(b.last_posted_at).replace(" ", "T") + "Z").getTime() : 0;
+      return aTime - bTime;
+    });
+    const nextProduct = sortedQueue[0];
+
+    if (lastGlobalPostTime === 0 || elapsedSinceLastPost >= intervalHours) {
+      if (nextProduct) {
+        const reason = lastGlobalPostTime === 0 
+          ? "First scheduled auto-post cycle initiated" 
+          : `Interval of ${intervalHours}h passed (${elapsedSinceLastPost.toFixed(1)}h elapsed). Selected next product in queue.`;
+        console.log(`🚀 [Auto-Post Due] Publishing: ${nextProduct.name} (SKU: ${nextProduct.sku || nextProduct.id}) - Reason: ${reason}`);
+        try {
+          const pubRes = await handlePublishProductNow({ product_id: nextProduct.id, platform: nextProduct.target_platform || 'facebook' }, env);
+          executionLog.push({ product_id: nextProduct.id, name: nextProduct.name, sku: nextProduct.sku, status: "published", post_id: pubRes.post_id || null, reason });
+        } catch (err) {
+          executionLog.push({ product_id: nextProduct.id, name: nextProduct.name, sku: nextProduct.sku, status: "error", error: err.message, reason });
+        }
+      }
+    } else {
+      const hoursLeft = (intervalHours - elapsedSinceLastPost).toFixed(1);
+      executionLog.push({
+        status: "waiting",
+        reason: `Next interval post due in ${hoursLeft} hours (${intervalHours}h interval, ${elapsedSinceLastPost.toFixed(1)}h elapsed)`,
+        next_up: nextProduct ? `${nextProduct.name} (${nextProduct.sku || nextProduct.id})` : 'None'
+      });
+    }
+  }
+
+  // --- খ. নির্দিষ্ট দৈনিক সময় বেসিস (যেমন "10:00", "20:00") ---
+  for (const p of dailyProducts) {
     let lastPosted = 0;
     if (p.last_posted_at) {
       const cleanStr = String(p.last_posted_at).replace(" ", "T");
       lastPosted = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z").getTime();
       if (isNaN(lastPosted)) lastPosted = 0;
     }
+    const times = (p.posting_time || '10:00').split(',').map(t => t.trim());
+    const hoursSinceLast = (now - lastPosted) / (3600 * 1000);
+    let isDue = false;
+    let reason = "";
 
-    // ১. ইন্টারভ্যাল বেসিস (যেমন প্রতি ২, ৪, ৬, ৮, ১২, ২৪ ঘণ্টা পর পর)
-    if (p.schedule_type === 'interval' || (p.posting_time && p.posting_time.startsWith('interval_'))) {
-      let hours = p.interval_hours || 4;
-      if (p.posting_time && p.posting_time.startsWith('interval_')) {
-        hours = parseInt(p.posting_time.replace('interval_', '')) || 4;
-      }
-      const elapsedHours = (now - lastPosted) / (3600 * 1000);
-      if (lastPosted === 0 || elapsedHours >= hours) {
-        isDue = true;
-        reason = lastPosted === 0 ? "First-time post (never posted before)" : `Interval of ${hours}h passed (${elapsedHours.toFixed(1)}h elapsed)`;
-      } else {
-        reason = `Next post in ${(hours - elapsedHours).toFixed(1)} hours`;
-      }
-    } 
-    // ২. নির্দিষ্ট দৈনিক সময় বেসিস (যেমন "10:00", "20:00")
-    else {
-      const times = (p.posting_time || '10:00').split(',').map(t => t.trim());
-      const hoursSinceLast = (now - lastPosted) / (3600 * 1000);
-      if (lastPosted === 0 || hoursSinceLast >= 3.5) {
-        for (const t of times) {
-          const [tHour] = t.split(':').map(Number);
-          if (tHour === currentHour) {
-            isDue = true;
-            reason = `Scheduled daily hour match: ${tHour}:00 BDT`;
-            break;
-          }
+    if (lastPosted === 0 || hoursSinceLast >= 3.5) {
+      for (const t of times) {
+        const [tHour] = t.split(':').map(Number);
+        if (tHour === currentHour) {
+          isDue = true;
+          reason = `Scheduled daily hour match: ${tHour}:00 BDT`;
+          break;
         }
       }
-      if (!isDue && !reason) {
-        reason = `Scheduled for ${times.join(', ')} BDT (Current BDT: ${currentHour}:${String(currentMinute).padStart(2, '0')})`;
-      }
     }
-
     if (isDue) {
-      console.log(`🚀 [Auto-Post Due] Publishing product: ${p.name} (ID: ${p.id}) - Reason: ${reason}`);
       try {
         const pubRes = await handlePublishProductNow({ product_id: p.id, platform: p.target_platform || 'facebook' }, env);
         executionLog.push({ product_id: p.id, name: p.name, status: "published", post_id: pubRes.post_id || null, reason });
       } catch (err) {
-        console.error(`Auto-post failed for product ${p.id}:`, err.message);
         executionLog.push({ product_id: p.id, name: p.name, status: "error", error: err.message, reason });
       }
     } else {
+      reason = `Daily scheduled for ${times.join(', ')} BDT (Current BDT: ${currentHour}:${String(currentMinute).padStart(2, '0')})`;
       executionLog.push({ product_id: p.id, name: p.name, status: "skipped", reason });
     }
   }
