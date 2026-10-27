@@ -197,16 +197,32 @@
             </div>
             <p class="section-desc">প্রোডাক্ট যোগ করুন। কাস্টমার দাম বা বিবরণ জানতে চাইলে AI সরাসরি এই D1 টেবিল থেকে উত্তর দেবে:</p>
             
-            <!-- ⚡ পদ্ধতি ১: ওয়েবসাইট লিংক দিয়ে ১-ক্লিকে অটো-ফেচ -->
+            <!-- ⚡ ১-ক্লিকে পুরো ওয়েবসাইট সিঙ্ক -->
+            <div style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(5, 150, 105, 0.08)); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: var(--radius-md); padding: 18px; margin-bottom: 20px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; flex-wrap: wrap; gap: 8px;">
+                <h4 style="margin: 0; font-size: 15px; color: #6ee7b7; display: flex; align-items: center; gap: 8px;">
+                  <span>🛒</span> ১-ক্লিকে পুরো শপ সিঙ্ক (Sync All 11+ Products)
+                </h4>
+                <span class="badge-status published" style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 11px;">SKU + R2 + Variants</span>
+              </div>
+              <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">
+                আপনার ওয়েবসাইট (<strong>ranonex.shop</strong>)-এর সমস্ত লাইভ প্রোডাক্ট, <strong>SKU কোড</strong>, R2 ইমেজ, অফার মূল্য এবং <strong>সাইজ/কালার ভ্যারিয়েন্ট</strong> ১-ক্লিকে D1 ডেটাবেসে নিয়ে আসুন। AI স্বয়ংক্রিয়ভাবে SKU চিনবে ও কাস্টমারকে সঠিক ভ্যারিয়েন্ট ও লিঙ্ক অফার করবে:
+              </p>
+              <button type="button" class="btn-primary" id="btn-sync-all-store" onclick="syncAllStoreProducts()" style="padding: 12px 22px; font-weight: 700; background: linear-gradient(135deg, #10b981, #059669); color: #fff; border: none; border-radius: var(--radius-md); cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);">
+                <span>⚡</span> 1-Click Sync All Store Products (11 Products)
+              </button>
+            </div>
+
+            <!-- ⚡ পদ্ধতি ১: ওয়েবসাইট লিংক দিয়ে অটো-ফেচ -->
             <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: var(--radius-md); padding: 18px; margin-bottom: 24px;">
               <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
                 <h4 style="margin: 0; font-size: 14px; color: #93c5fd; display: flex; align-items: center; gap: 8px;">
-                  <span>⚡</span> পদ্ধতি ১: ওয়েবসাইট প্রোডাক্ট লিংক দিয়ে অটো-ফেচ (Auto-Fetch)
+                  <span>⚡</span> পদ্ধতি ১: একক প্রোডাক্ট লিংক দিয়ে অটো-ফেচ (Auto-Fetch Single)
                 </h4>
                 <span class="badge-status published" style="font-size: 11px;">100% Automatic</span>
               </div>
               <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">
-                আপনার শপের যেকোনো প্রোডাক্ট পেজের লিংক এখানে পেস্ট করে <strong>Auto-Fetch</strong> বাটনে চাপুন। Worker সাইটে গিয়ে নাম, মূল্য, বিবরণ ও <strong>পাবলিক R2 ইমেজ URL</strong> স্বয়ংক্রিয়ভাবে নিচে ফর্মে সাজিয়ে দেবে:
+                আপনার শপের যেকোনো প্রোডাক্ট পেজের লিংক এখানে পেস্ট করে <strong>Auto-Fetch</strong> বাটনে চাপুন। Worker সাইটে গিয়ে নাম, মূল্য, SKU, বিবরণ ও <strong>পাবলিক R2 ইমেজ URL</strong> স্বয়ংক্রিয়ভাবে নিচে ফর্মে সাজিয়ে দেবে:
               </p>
               <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <input type="url" id="input-quick-fetch-url" placeholder="যেমন: https://ranonex.shop/product.html?id=123" onkeypress="if(event.key==='Enter'){event.preventDefault();handleQuickFetchClick();}" style="flex: 1; min-width: 250px; padding: 12px 14px; background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: var(--radius-md); color: var(--text-main); font-family: inherit;">
@@ -234,6 +250,16 @@
                 <div class="form-group" style="flex: 1;">
                   <label>Price (৳ BDT)</label>
                   <input type="number" id="prod-price" placeholder="1450" required>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group" style="flex: 1;">
+                  <label>Product SKU (যেমন: GC-1102, HD_1100)</label>
+                  <input type="text" id="prod-sku" placeholder="GC-1102">
+                </div>
+                <div class="form-group" style="flex: 2;">
+                  <label>Specifications / Variants (সাইজ ও কালার বিবরণ)</label>
+                  <input type="text" id="prod-specs" placeholder="যেমন: Jet Black: L, XL | Off-White: L, XL">
                 </div>
               </div>
               <div class="form-row">
@@ -307,6 +333,7 @@
                 <thead>
                   <tr>
                     <th>Product & Photo</th>
+                    <th>SKU & Specs</th>
                     <th>Price</th>
                     <th>Platform</th>
                     <th>⏰ Auto Schedule</th>
@@ -619,11 +646,15 @@
           const p = data.product;
           const nameEl = document.getElementById('prod-name');
           const priceEl = document.getElementById('prod-price');
+          const skuEl = document.getElementById('prod-sku');
+          const specsEl = document.getElementById('prod-specs');
           const urlEl = document.getElementById('prod-url');
           const descEl = document.getElementById('prod-desc');
 
           if (nameEl) nameEl.value = p.name || '';
           if (priceEl) priceEl.value = p.price || '';
+          if (skuEl) skuEl.value = p.sku || '';
+          if (specsEl) specsEl.value = p.specifications || '';
           if (urlEl) urlEl.value = p.product_url || url;
           if (descEl) descEl.value = p.description || '';
 
@@ -657,6 +688,6 @@
       }
     };
   </script>
-  <script src="app.js?v=2.1.4"></script>
+  <script src="app.js?v=2.1.5"></script>
 </body>
 </html>

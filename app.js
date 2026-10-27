@@ -642,7 +642,7 @@ function renderProductsTable() {
   if (!tbody) return;
 
   if (appState.products.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 28px; color: var(--text-dim);">কোনো প্রোডাক্ট নেই। উপরে ওয়েবসাইট লিংক পেস্ট করে Auto-Fetch চাপুন অথবা 🔄 Sync করুন।</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 28px; color: var(--text-dim);">কোনো প্রোডাক্ট নেই। উপরে <strong>⚡ 1-Click Sync All Store Products</strong> বাটনে ক্লিক করে শপের ১১টি প্রোডাক্ট নিয়ে আসুন।</td></tr>`;
     return;
   }
 
@@ -680,14 +680,27 @@ function renderProductsTable() {
         ? `<span style="background: rgba(139, 92, 246, 0.15); color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🌐 All</span>`
         : `<span style="background: rgba(254, 44, 85, 0.15); color: #fe2c55; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;">🎵 TikTok</span>`);
 
+    const skuDisplay = p.sku || p.id || 'N/A';
+    const specsDisplay = p.specifications ? p.specifications : 'Standard / Single';
+
     tr.innerHTML = `
       <td>
         <div style="display: flex; align-items: center; gap: 10px;">
           ${imgThumb}
           <div>
             ${productTitle}
-            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(p.description || '').substring(0, 45)}...</div>
+            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">${escapeHtml(p.description || '').substring(0, 40)}...</div>
           </div>
+        </div>
+      </td>
+      <td>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-family: monospace; font-weight: 700; font-size: 11px; color: #93c5fd; background: rgba(59, 130, 246, 0.18); padding: 2px 6px; border-radius: 4px; display: inline-block; width: fit-content;">
+            ${escapeHtml(skuDisplay)}
+          </span>
+          <span style="font-size: 10px; color: var(--text-muted); line-height: 1.3;" title="${escapeHtml(specsDisplay)}">
+            ${escapeHtml(specsDisplay.slice(0, 36))}${specsDisplay.length > 36 ? '...' : ''}
+          </span>
         </div>
       </td>
       <td><span style="color: var(--emerald); font-weight: 700; font-size: 14px;">৳${p.price}</span></td>
@@ -704,6 +717,41 @@ function renderProductsTable() {
     tbody.appendChild(tr);
   });
 }
+
+// ⚡ ১-ক্লিকে পুরো ওয়েবসাইট (ranonex.shop) এর সমস্ত প্রোডাক্ট D1-এ সিঙ্ক
+window.syncAllStoreProducts = async function() {
+  const btn = document.getElementById('btn-sync-all-store');
+  const origText = btn ? btn.innerHTML : '<span>⚡</span> 1-Click Sync All Store Products (11 Products)';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳</span> শপের ১১টি প্রোডাক্ট ও SKU সিঙ্ক হচ্ছে...';
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/sync-all-store-products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const data = await res.json();
+    if (res.ok && data.success && data.products) {
+      appState.products = data.products;
+      setLocalCache(CACHE_KEYS.PRODUCTS, appState.products);
+      renderProductsTable();
+      showToast(`🎉 ${data.message || `${data.count}টি প্রোডাক্ট D1-এ সিঙ্ক সম্পন্ন!`}`);
+    } else {
+      showToast(`❌ সিঙ্ক ব্যর্থ: ${data.error || 'অজানা ত্রুটি'}`);
+      alert(`সিঙ্ক ব্যর্থ হয়েছে:\n${data.error || 'সার্ভার রেসপন্স চেক করুন'}`);
+    }
+  } catch (err) {
+    showToast(`❌ নেটওয়ার্ক এরর: ${err.message}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = origText;
+    }
+  }
+};
 
 // 🚀 ১-ক্লিক ডাইরেক্ট প্রোডাক্ট পোস্ট (Worker Engine)
 window.publishProductNow = async function(id, btn) {
@@ -857,6 +905,8 @@ function initBusinessDataForms() {
           // ফর্মে অটো-ফিল করা
           document.getElementById('prod-name').value = p.name || '';
           document.getElementById('prod-price').value = p.price || '';
+          if (document.getElementById('prod-sku')) document.getElementById('prod-sku').value = p.sku || '';
+          if (document.getElementById('prod-specs')) document.getElementById('prod-specs').value = p.specifications || '';
           if (document.getElementById('prod-url')) document.getElementById('prod-url').value = p.product_url || url;
           if (prodImgInput) {
             prodImgInput.value = p.image_url || '';
@@ -896,6 +946,8 @@ function initBusinessDataForms() {
       e.preventDefault();
       const name = document.getElementById('prod-name').value.trim();
       const price = document.getElementById('prod-price').value.trim();
+      const sku = document.getElementById('prod-sku') ? document.getElementById('prod-sku').value.trim() : '';
+      const specs = document.getElementById('prod-specs') ? document.getElementById('prod-specs').value.trim() : '';
       const url = document.getElementById('prod-url') ? document.getElementById('prod-url').value.trim() : '';
       const img = document.getElementById('prod-img') ? document.getElementById('prod-img').value.trim() : '';
       const postTime = document.getElementById('prod-post-time') ? document.getElementById('prod-post-time').value : 'interval_4';
@@ -911,8 +963,10 @@ function initBusinessDataForms() {
 
       const newProd = {
         id: 'p_' + Date.now(),
+        sku: sku || ('P_' + Date.now()),
         name,
         price: parseFloat(price) || 0,
+        specifications: specs,
         product_url: url,
         image_url: img,
         posting_time: postTime,

@@ -276,40 +276,46 @@ export default {
         await ensureTables(env.DB);
         const body = await request.json();
         const {
-          id, name, price, description, category, image_url, product_url,
-          posting_time, daily_auto_post, stock_status, target_platform,
+          id, sku, name, price, description, category, image_url, product_url,
+          specifications, posting_time, daily_auto_post, stock_status, target_platform,
           schedule_type, interval_hours
         } = body;
 
         const prodId = id || `prod_${Date.now()}`;
+        const prodSku = (sku && sku.trim()) ? sku.trim() : prodId.toUpperCase();
         await env.DB.prepare(`
           INSERT INTO products (
-            id, name, price, description, category, image_url, product_url,
-            posting_time, daily_auto_post, stock_status, target_platform,
+            id, sku, name, price, description, category, image_url, product_url,
+            specifications, posting_time, daily_auto_post, stock_status, target_platform,
             schedule_type, interval_hours, is_active
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
           ON CONFLICT(id) DO UPDATE SET
+            sku = excluded.sku,
             name = excluded.name,
             price = excluded.price,
             description = excluded.description,
             category = excluded.category,
             image_url = excluded.image_url,
             product_url = excluded.product_url,
+            specifications = excluded.specifications,
             posting_time = excluded.posting_time,
             daily_auto_post = excluded.daily_auto_post,
             stock_status = excluded.stock_status,
             target_platform = excluded.target_platform,
             schedule_type = excluded.schedule_type,
-            interval_hours = excluded.interval_hours
+            interval_hours = excluded.interval_hours,
+            is_active = 1
         `).bind(
           prodId,
+          prodSku,
           name,
           parseFloat(price) || 0,
           description || '',
           category || 'General',
           image_url || '',
           product_url || '',
+          specifications || '',
           posting_time || '10:00',
           daily_auto_post !== undefined ? Number(daily_auto_post) : 1,
           stock_status || 'in_stock',
@@ -319,7 +325,7 @@ export default {
         ).run();
 
         await invalidateBusinessCache();
-        return jsonResponse({ success: true, id: prodId, message: "Product saved to D1" });
+        return jsonResponse({ success: true, id: prodId, sku: prodSku, message: "Product saved to D1" });
       }
 
       if (request.method === "DELETE" && path === "/api/products") {
@@ -341,6 +347,127 @@ export default {
         if (!targetUrl) return jsonResponse({ error: "Missing product url" }, 400);
         const extracted = await extractProductFromUrl(targetUrl);
         return jsonResponse(extracted, extracted.success ? 200 : 400);
+      }
+
+      // ==========================================
+      // ৭.১.১ ১-ক্লিকে শপের সমস্ত ১১টি প্রোডাক্ট ও SKU সিঙ্ক API
+      // ==========================================
+      if (request.method === "POST" && (path === "/api/sync-all-store-products" || path === "/api/sync-store")) {
+        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+        await ensureTables(env.DB);
+
+        try {
+          const res = await fetch("https://ranonex.shop/api/public-data", {
+            headers: {
+              "Accept": "application/json",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SocialAutomate-Bot"
+            }
+          });
+
+          if (!res.ok) {
+            return jsonResponse({ success: false, error: `Store API responded with status ${res.status}` }, 400);
+          }
+
+          const json = await res.json();
+          const items = json?.data?.products || (Array.isArray(json?.data) ? json.data : []);
+          if (!items || items.length === 0) {
+            return jsonResponse({ success: false, error: "No products returned from store public API" }, 400);
+          }
+
+          const synced = [];
+          for (const p of items) {
+            let gallery = [];
+            try { gallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []); } catch(e) {}
+            let variants = [];
+            try { variants = typeof p.variants === 'string' ? JSON.parse(p.variants) : (p.variants || []); } catch(e) {}
+
+            let r2Img = "";
+            if (gallery.length > 0 && typeof gallery[0] === 'string' && gallery[0].startsWith('http')) {
+              r2Img = gallery[0];
+            } else if (variants.length > 0 && variants[0]?.imageUrl && variants[0].imageUrl.startsWith('http')) {
+              r2Img = variants[0].imageUrl;
+            } else {
+              for (const img of gallery) { if (typeof img === 'string' && img.startsWith('http')) { r2Img = img; break; } }
+            }
+
+            const basePrice = parseFloat(p.base_price || 0);
+            const flashPrice = parseFloat(p.flash_sale_price || 0);
+            const finalPrice = (flashPrice > 0 && flashPrice < basePrice) ? (basePrice - flashPrice) : basePrice;
+
+            const rawDesc = p.description || p.details || "";
+            const cleanDesc = rawDesc.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
+
+            const specsSummary = variants.map(v => {
+              const color = v.colorName || 'Default';
+              const sizes = (v.sizes || []).map(s => `${s.size}${s.stock <= 0 ? ' (Stock Out)' : ''}`).join(', ');
+              return sizes ? `${color}: ${sizes}` : color;
+            }).join(' | ') || 'Standard / One Size';
+
+            const prodId = p.id || `p_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+            const sku = (p.sku && p.sku.trim()) ? p.sku.trim() : prodId.toUpperCase();
+            const productUrl = `https://ranonex.shop/product.html?id=${encodeURIComponent(p.id)}`;
+
+            await env.DB.prepare(`
+              INSERT INTO products (
+                id, sku, name, price, description, category, image_url, product_url,
+                specifications, stock_status, daily_auto_post, target_platform, schedule_type,
+                posting_time, interval_hours, is_active
+              )
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_stock', 1, 'facebook', 'daily', '10:00', 4, 1)
+              ON CONFLICT(id) DO UPDATE SET
+                sku = excluded.sku,
+                name = excluded.name,
+                price = excluded.price,
+                description = excluded.description,
+                image_url = excluded.image_url,
+                product_url = excluded.product_url,
+                specifications = excluded.specifications,
+                stock_status = excluded.stock_status,
+                is_active = 1
+            `).bind(
+              prodId,
+              sku,
+              p.name || 'Store Product',
+              finalPrice,
+              cleanDesc,
+              p.category || 'General',
+              r2Img,
+              productUrl,
+              specsSummary
+            ).run();
+
+            synced.push({
+              id: prodId,
+              sku,
+              name: p.name,
+              price: finalPrice,
+              image_url: r2Img,
+              product_url: productUrl,
+              specifications: specsSummary
+            });
+          }
+
+          await invalidateBusinessCache();
+
+          return jsonResponse({
+            success: true,
+            count: synced.length,
+            message: `সফলভাবে আপনার শপের ${synced.length}টি প্রোডাক্ট D1-এ সিঙ্ক হয়েছে!`,
+            products: synced
+          });
+        } catch (err) {
+          return jsonResponse({ success: false, error: err.message }, 500);
+        }
+      }
+
+      // ==========================================
+      // ৭.১.২ কনফার্মড অর্ডার তালিকা API
+      // ==========================================
+      if (request.method === "GET" && path === "/api/orders") {
+        if (!env.DB) return jsonResponse([]);
+        await ensureTables(env.DB);
+        const { results } = await env.DB.prepare("SELECT * FROM orders ORDER BY created_at DESC LIMIT 50").all();
+        return jsonResponse(results || []);
       }
 
       // ==========================================
@@ -557,7 +684,7 @@ async function handleWhatsAppUpdate(body, env, ctx, workerOrigin) {
   const businessContext = await getCachedBusinessContext(env.DB);
 
   // Gemini AI কল (Structured Response)
-  const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-6), businessContext, env);
+  const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-8), businessContext, env);
 
   if (aiDecision.reply) {
     // হোয়াটসঅ্যাপে অটো-রিপ্লাই পাঠানো
@@ -565,7 +692,32 @@ async function handleWhatsAppUpdate(body, env, ctx, workerOrigin) {
     await appendMessageToSession(chatId, senderName, "assistant", aiDecision.reply, "whatsapp", env);
   }
 
-  return jsonResponse({ status: "success", reply_sent: Boolean(aiDecision.reply) });
+  // যদি চ্যাটে অর্ডার কনফার্ম হয়, D1 orders টেবিলে সেভ ও নোটিফিকেশন
+  if (aiDecision.order_confirmed && aiDecision.order_data && env.DB) {
+    try {
+      const od = aiDecision.order_data;
+      const orderId = `ord_${Date.now()}`;
+      await env.DB.prepare(`
+        INSERT INTO orders (id, chat_id, platform, customer_name, customer_phone, delivery_address, product_name, variant, total_amount, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')
+      `).bind(
+        orderId,
+        chatId,
+        "whatsapp",
+        od.customer_name || senderName || "Customer",
+        od.customer_phone || senderPhone || "",
+        od.delivery_address || "",
+        od.product_name || "",
+        od.variant || "",
+        parseFloat(od.total_amount || 0)
+      ).run();
+      await env.DB.prepare("UPDATE live_conversations SET needs_attention = 1 WHERE chat_id = ?").bind(chatId).run();
+    } catch (ordErr) {
+      console.warn("Order save error:", ordErr.message);
+    }
+  }
+
+  return jsonResponse({ status: "success", reply_sent: Boolean(aiDecision.reply), order_confirmed: Boolean(aiDecision.order_confirmed) });
 }
 
 // 📤 হোয়াটসঅ্যাপ মেসেজ সেন্ডার (Gateway / Cloud API)
@@ -955,7 +1107,7 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
     const businessContext = await getCachedBusinessContext(env.DB);
 
     // Gemini AI কল (Structured Response)
-    const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-6), businessContext, env);
+    const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-8), businessContext, env);
 
     if (aiDecision.reply) {
       // মেটা গ্রাফ API দিয়ে পেজ থেকে মেসেঞ্জারে উত্তর পাঠানো
@@ -971,6 +1123,31 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
         });
       }
       await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook", env);
+    }
+
+    // যদি চ্যাটে অর্ডার কনফার্ম হয়, D1 orders টেবিলে সেভ ও নোটিফিকেশন
+    if (aiDecision.order_confirmed && aiDecision.order_data && env.DB) {
+      try {
+        const od = aiDecision.order_data;
+        const orderId = `ord_${Date.now()}`;
+        await env.DB.prepare(`
+          INSERT INTO orders (id, chat_id, platform, customer_name, customer_phone, delivery_address, product_name, variant, total_amount, status)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')
+        `).bind(
+          orderId,
+          senderId,
+          "facebook",
+          od.customer_name || senderName || "Customer",
+          od.customer_phone || "",
+          od.delivery_address || "",
+          od.product_name || "",
+          od.variant || "",
+          parseFloat(od.total_amount || 0)
+        ).run();
+        await env.DB.prepare("UPDATE live_conversations SET needs_attention = 1 WHERE chat_id = ?").bind(senderId).run();
+      } catch (ordErr) {
+        console.warn("Order save error:", ordErr.message);
+      }
     }
 
     return new Response("EVENT_RECEIVED", { status: 200 });
@@ -1149,17 +1326,102 @@ async function callGeminiStructured(userMessage, recentHistory, businessContext,
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
     return {
       reply: "ধন্যবাদ আপনার বার্তার জন্য! আমাদের একজন প্রতিনিধি খুব শীঘ্রই আপনাকে সহায়তা করবেন। নির্দিষ্ট কোনো প্রোডাক্ট সম্পর্কে জানতে চাইলে নির্দ্বিধায় লিখুন।",
-      urgent_admin_alert: false
+      urgent_admin_alert: false,
+      order_confirmed: false
     };
   }
 
   const systemInstruction = 
-`You are an intelligent, polite customer support assistant for our business.
-Always respond warmly and accurately in Bengali or Banglish.
-Answer inquiries regarding products, prices, and delivery strictly based on this D1 Business Information:
+`You are the expert, polite, and friendly sales & customer support AI for 'Ranonex' online store in Bangladesh.
+Always respond warmly and naturally in Bengali (বাংলা) or Banglish (if customer writes in Banglish).
+
+CORE RESPONSIBILITIES:
+1. SKU & PRODUCT RECOGNITION:
+   - When a customer mentions a product name or sends a SKU code (e.g. GC-1102, HD_1100, EP-1100, LM-1100, etc.), immediately identify the exact product from the Store Products Catalog below.
+   - Mention the accurate price (৳) and stock status.
+
+2. SPECIFICATIONS & VARIANTS (SIZES & COLORS):
+   - When the customer asks about sizes, colors, or specifications, describe all available variants and explicitly state if any size/color is out of stock (Stock Out).
+
+3. RELATED PRODUCT SUGGESTIONS:
+   - Whenever discussing a product, politely recommend 1 or 2 relevant or related products with their direct order link (URL) from the catalog (e.g. "আপনি চাইলে আমাদের... দেখতে পারেন: [URL]").
+
+4. MULTI-TURN ORDER COLLECTION & CONFIRMATION:
+   - When a customer indicates they want to buy or order ('nibo', 'order korbo', 'kinbo', gives address, etc.):
+     Guide the customer step-by-step to provide:
+     a) Customer Full Name (নাম)
+     b) Active Mobile Number (১১ ডিজিটের ফোন নম্বর)
+     c) Complete Delivery Address (সম্পূর্ণ ঠিকানা - জেলা, থানা/উপজেলা, গ্রাম বা এলাকা)
+     d) Product Variant/Specification (পছন্দের সাইজ বা কালার, যদি প্রযোজ্য হয়)
+     Clearly mention:
+     - Payment: Cash on Delivery (ক্যাশ অন ডেলিভারি - পণ্য হাতে পেয়ে টাকা পরিশোধ)
+     - Delivery Charge: ঢাকার ভেতর ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা।
+   - ONCE ALL 4 DETAILS (Name, 11-digit Phone, Delivery Address, Product/Variant) ARE PROVIDED:
+     Warmly confirm the order in your reply message! Present a neat Order Summary:
+     🎉 আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে!
+     📦 প্রোডাক্ট: [Product Name] ([Variant])
+     💰 পণ্যের মূল্য: ৳[Price]
+     🚚 ডেলিভারি চার্জ: ৳[70 or 130]
+     💵 সর্বমোট: ৳[Total]
+     📍 ডেলিভারি ঠিকানা: [Address]
+     📞 মোবাইল নম্বর: [Phone]
+     "আমাদের প্রতিনিধি খুব শীঘ্রই কল দিয়ে ডেলিভারি প্রসেসিং শুরু করবেন। রেননেক্সের সাথে থাকার জন্য ধন্যবাদ!"
+     AND in the JSON response, set "order_confirmed": true and populate "order_data".
+
+D1 STORE & PRODUCTS CATALOG:
 ${businessContext}
 
-Respond ONLY with a JSON object: {"reply": "Your response", "urgent_admin_alert": false}`;
+RESPONSE FORMAT (JSON ONLY):
+Respond ONLY with a valid JSON object matching this schema:
+{
+  "reply": "Your Bengali response message to customer",
+  "order_confirmed": false,
+  "order_data": {
+    "customer_name": "...",
+    "customer_phone": "...",
+    "delivery_address": "...",
+    "product_name": "...",
+    "variant": "...",
+    "total_amount": 0
+  },
+  "urgent_admin_alert": false
+}`;
+
+  // Build Gemini multi-turn conversation history
+  const rawTurns = [];
+  if (Array.isArray(recentHistory)) {
+    for (const m of recentHistory) {
+      const role = (m.sender_type === "assistant" || m.sender_type === "ai") ? "model" : "user";
+      const text = (m.message_text || m.text || "").trim();
+      if (text) {
+        rawTurns.push({ role, parts: [{ text }] });
+      }
+    }
+  }
+
+  // Ensure userMessage is the final turn
+  if (rawTurns.length === 0 || rawTurns[rawTurns.length - 1].parts[0].text !== userMessage.trim()) {
+    rawTurns.push({ role: "user", parts: [{ text: userMessage.trim() }] });
+  }
+
+  // Gemini requires strictly alternating roles starting with user
+  const contents = [];
+  for (const turn of rawTurns) {
+    if (contents.length === 0) {
+      if (turn.role === "user") contents.push(turn);
+      continue;
+    }
+    const prevTurn = contents[contents.length - 1];
+    if (prevTurn.role === turn.role) {
+      prevTurn.parts[0].text += "\n" + turn.parts[0].text;
+    } else {
+      contents.push(turn);
+    }
+  }
+
+  if (contents.length === 0 || contents[contents.length - 1].role !== "user") {
+    contents.push({ role: "user", parts: [{ text: userMessage.trim() }] });
+  }
 
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
@@ -1167,7 +1429,7 @@ Respond ONLY with a JSON object: {"reply": "Your response", "urgent_admin_alert"
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         system_instruction: { parts: [{ text: systemInstruction }] },
-        contents: [{ role: "user", parts: [{ text: userMessage }] }],
+        contents,
         generationConfig: { temperature: 0.5, response_mime_type: "application/json" }
       })
     });
@@ -1177,12 +1439,23 @@ Respond ONLY with a JSON object: {"reply": "Your response", "urgent_admin_alert"
       const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (rawText) {
         const parsed = JSON.parse(rawText);
-        return { reply: parsed.reply || rawText, urgent_admin_alert: Boolean(parsed.urgent_admin_alert) };
+        return {
+          reply: parsed.reply || rawText,
+          urgent_admin_alert: Boolean(parsed.urgent_admin_alert || parsed.order_confirmed),
+          order_confirmed: Boolean(parsed.order_confirmed),
+          order_data: parsed.order_data || null
+        };
       }
     }
-  } catch (e) {}
+  } catch (e) {
+    console.warn("Gemini call error:", e.message);
+  }
 
-  return { reply: "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে উত্তর দেওয়া হবে।", urgent_admin_alert: false };
+  return {
+    reply: "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।",
+    urgent_admin_alert: false,
+    order_confirmed: false
+  };
 }
 
 // ========================================================
@@ -1196,30 +1469,51 @@ async function getCachedBusinessContext(db) {
     return localBusinessCache.data;
   }
 
-  if (!db) return "Standard Store Policies: Cash on Delivery available across the country.";
+  if (!db) return "Standard Store Policies: Cash on Delivery available across Bangladesh. Delivery: Dhaka 70 BDT, Outside Dhaka 130 BDT.";
 
   try {
     await ensureTables(db);
-    const { results: products } = await db.prepare("SELECT name, price, stock_status FROM products WHERE is_active = 1 LIMIT 30").all();
+    const { results: products } = await db.prepare(`
+      SELECT id, sku, name, price, description, category, stock_status, specifications, product_url 
+      FROM products 
+      WHERE is_active = 1 
+      ORDER BY created_at DESC 
+      LIMIT 50
+    `).all();
     const { results: profileRows } = await db.prepare("SELECT key, value FROM system_config").all();
 
-    let context = "=== STORE INFORMATION (D1 DATABASE) ===\n";
+    let context = "=== STORE POLICIES & INFORMATION ===\n";
+    context += "- Store Name: Ranonex (Website: https://ranonex.shop)\n";
+    let delDhaka = "70";
+    let delOutside = "130";
+    let payment = "Cash on Delivery (ক্যাশ অন ডেলিভারি - পণ্য হাতে পেয়ে টাকা পরিশোধ)";
+
     for (const r of (profileRows || [])) {
-      if (!r.key.includes("token") && !r.key.includes("key")) {
+      if (!r.key.includes("token") && !r.key.includes("key") && !r.key.includes("secret")) {
+        if (r.key === "delivery_inside_dhaka" && r.value) delDhaka = r.value;
+        if (r.key === "delivery_outside_dhaka" && r.value) delOutside = r.value;
+        if (r.key === "payment_methods" && r.value) payment = r.value;
         context += `- ${r.key}: ${r.value}\n`;
       }
     }
+    context += `- Delivery Charge: Dhaka City ৳${delDhaka}, Outside Dhaka ৳${delOutside}\n`;
+    context += `- Payment Method: ${payment}\n`;
+
     if (products && products.length > 0) {
-      context += "\n=== PRODUCTS ===\n";
+      context += "\n=== ALL AVAILABLE STORE PRODUCTS (WITH SKU, SPECS & DIRECT ORDER LINKS) ===\n";
       for (const p of products) {
-        context += `- ${p.name}: ৳${p.price} (${p.stock_status})\n`;
+        const skuStr = p.sku ? `[SKU: ${p.sku}] ` : `[ID: ${p.id}] `;
+        const specsStr = p.specifications ? `\n    * Available Specs/Variants: ${p.specifications}` : '';
+        const descSnippet = p.description ? `\n    * Details: ${p.description.slice(0, 160)}` : '';
+        const orderUrl = p.product_url || `https://ranonex.shop/product.html?id=${p.id}`;
+        context += `\n- ${skuStr}${p.name}\n    * Price: ৳${p.price} (${p.stock_status})${specsStr}\n    * Direct Order Link: ${orderUrl}${descSnippet}\n`;
       }
     }
 
-    localBusinessCache = { data: context, expiresAt: now + 10 * 60 * 1000 };
+    localBusinessCache = { data: context, expiresAt: now + 5 * 60 * 1000 };
     return context;
   } catch (e) {
-    return "Standard Store Support.";
+    return "Standard Store Support: Cash on Delivery available across Bangladesh.";
   }
 }
 
@@ -1398,11 +1692,13 @@ async function ensureTables(db) {
       db.prepare(`
         CREATE TABLE IF NOT EXISTS products (
           id TEXT PRIMARY KEY,
+          sku TEXT,
           name TEXT NOT NULL,
           price REAL NOT NULL,
           description TEXT,
           category TEXT DEFAULT 'General',
           stock_status TEXT DEFAULT 'in_stock',
+          specifications TEXT,
           is_active INTEGER DEFAULT 1,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -1440,10 +1736,27 @@ async function ensureTables(db) {
           post_id TEXT,
           published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+      `),
+      db.prepare(`
+        CREATE TABLE IF NOT EXISTS orders (
+          id TEXT PRIMARY KEY,
+          chat_id TEXT,
+          platform TEXT DEFAULT 'whatsapp',
+          customer_name TEXT,
+          customer_phone TEXT,
+          delivery_address TEXT,
+          product_name TEXT,
+          variant TEXT,
+          total_amount REAL,
+          status TEXT DEFAULT 'confirmed',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
       `)
     ]);
 
     // মাইগ্রেশন: পূর্বের টেবিলে নতুন কলাম থাকলে অ্যাড করা (safe ignore if exists)
+    try { await db.prepare("ALTER TABLE products ADD COLUMN sku TEXT").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE products ADD COLUMN specifications TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN image_url TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN product_url TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE products ADD COLUMN posting_time TEXT DEFAULT '10:00'").run(); } catch (e) {}
@@ -1638,10 +1951,19 @@ function formatExtractedProduct(p, url) {
   const rawDesc = p.description || p.details || "";
   const cleanDesc = rawDesc.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 600);
 
+  const specsSummary = variants.map(v => {
+    const color = v.colorName || 'Default';
+    const sizes = (v.sizes || []).map(s => `${s.size}${s.stock <= 0 ? ' (Stock Out)' : ''}`).join(', ');
+    return sizes ? `${color}: ${sizes}` : color;
+  }).join(' | ') || 'Standard / One Size';
+
+  const sku = (p.sku && p.sku.trim()) ? p.sku.trim() : (p.id ? String(p.id).toUpperCase() : '');
+
   return {
     success: true,
     product: {
       name: p.name || p.title || "প্রোডাক্ট",
+      sku: sku,
       price: finalPrice,
       original_price: basePrice,
       discount: flashSale,
@@ -1649,6 +1971,7 @@ function formatExtractedProduct(p, url) {
       image_url: r2Image,
       product_url: url,
       category: p.category || "General",
+      specifications: specsSummary,
       variants_count: variants.length
     }
   };
