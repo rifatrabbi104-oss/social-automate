@@ -630,13 +630,91 @@ export default {
       }
 
       // ==========================================
-      // ৭.১.২ কনফার্মড অর্ডার তালিকা API
+      // ৭.১.২ কনফার্মড অর্ডার তালিকা ও সেভ API
       // ==========================================
       if (request.method === "GET" && path === "/api/orders") {
         if (!env.DB) return jsonResponse([]);
         await ensureTables(env.DB);
         const { results } = await env.DB.prepare("SELECT * FROM orders ORDER BY created_at DESC LIMIT 50").all();
         return jsonResponse(results || []);
+      }
+
+      if (request.method === "POST" && path === "/api/orders") {
+        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+        await ensureTables(env.DB);
+        const b = await request.json().catch(() => ({}));
+        const orderId = `ord_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        await env.DB.prepare(`
+          INSERT INTO orders (id, chat_id, platform, customer_name, customer_phone, delivery_address, product_name, variant, total_amount, status, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', CURRENT_TIMESTAMP)
+        `).bind(
+          orderId,
+          b.chat_id || '',
+          b.platform || 'facebook',
+          b.customer_name || 'Customer',
+          b.customer_phone || '',
+          b.delivery_address || '',
+          b.product_name || '',
+          b.variant || 'Standard',
+          Number(b.total_amount || 0)
+        ).run();
+        return jsonResponse({ success: true, order_id: orderId });
+      }
+
+      // ==========================================
+      // ৭.১.৩ অলওয়েজডাটা থেকে চ্যাট হিস্ট্রি D1-এ সিঙ্ক API
+      // ==========================================
+      if (request.method === "POST" && path === "/api/sync-chat") {
+        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+        await ensureTables(env.DB);
+        const b = await request.json().catch(() => ({}));
+        const chatId = b.chat_id;
+        if (!chatId) return jsonResponse({ error: "Missing chat_id" }, 400);
+
+        let msgsJson = "[]";
+        if (b.messages && Array.isArray(b.messages)) {
+          try { msgsJson = JSON.stringify(b.messages); } catch (e) {}
+        } else {
+          try {
+            const existing = await env.DB.prepare("SELECT messages_json FROM live_conversations WHERE chat_id = ?").bind(chatId).first();
+            let parsed = [];
+            if (existing?.messages_json) parsed = JSON.parse(existing.messages_json);
+            parsed.push({
+              id: `msg_${Date.now()}`,
+              sender_type: "user",
+              sender_name: b.sender_name || "Customer",
+              message_text: b.last_message || "",
+              timestamp: new Date().toISOString()
+            });
+            msgsJson = JSON.stringify(parsed);
+          } catch (e) {}
+        }
+
+        await env.DB.prepare(`
+          INSERT INTO live_conversations (
+            chat_id, sender_name, sender_avatar, platform, channel_type, last_message, last_message_at, unread_count, admin_takeover, needs_attention, messages_json
+          ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, ?)
+          ON CONFLICT(chat_id) DO UPDATE SET
+            sender_name = excluded.sender_name,
+            sender_avatar = CASE WHEN excluded.sender_avatar != '' THEN excluded.sender_avatar ELSE live_conversations.sender_avatar END,
+            platform = excluded.platform,
+            channel_type = excluded.channel_type,
+            last_message = excluded.last_message,
+            last_message_at = CURRENT_TIMESTAMP,
+            unread_count = live_conversations.unread_count + 1,
+            messages_json = excluded.messages_json
+        `).bind(
+          chatId,
+          b.sender_name || 'Customer',
+          b.sender_avatar || '',
+          b.platform || 'facebook',
+          b.channel_type || 'messenger',
+          b.last_message || '',
+          b.unread_count || 1,
+          msgsJson
+        ).run();
+
+        return jsonResponse({ success: true, chat_id: chatId });
       }
 
       // ==========================================
@@ -1717,10 +1795,16 @@ async function handleSetupAI(body, env) {
     });
     if (!testRes.ok) {
       const errData = await testRes.json().catch(() => ({}));
-      return jsonResponse({
-        success: false,
-        error: "Google Gemini API Key সঠিক নয়: " + (errData?.error?.message || `HTTP ${testRes.status}`)
-      }, 400);
+      const errMsg = errData?.error?.message || '';
+      // যদি সাময়িক হাই ডিমান্ড (503) বা রেট লিমিট (429) থাকে, তার মানে API Key সঠিক!
+      if (testRes.status === 503 || testRes.status === 429 || errMsg.includes('high demand') || errMsg.includes('Resource has been exhausted')) {
+        console.log('Gemini API key is authenticated (temporary Google capacity spike).');
+      } else {
+        return jsonResponse({
+          success: false,
+          error: "Google Gemini API Key সঠিক নয়: " + (errMsg || `HTTP ${testRes.status}`)
+        }, 400);
+      }
     }
   } catch (netErr) {
     return jsonResponse({ success: false, error: "Gemini সার্ভারে কানেক্ট করা যায়নি: " + netErr.message }, 500);

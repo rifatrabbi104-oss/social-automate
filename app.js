@@ -280,9 +280,24 @@ window.fetchLatestConversations = async function(isManual = false) {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/conversations`);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const convs = await res.json();
+    let convs = null;
+    // ১. Alwaysdata লাইভ নোডজেএস গেটওয়ে থেকে রিয়েল-টাইম কনভারসেশন ফেচ
+    try {
+      const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations`, { signal: AbortSignal.timeout(2500) });
+      if (adRes.ok) {
+        const adData = await adRes.json();
+        if (Array.isArray(adData) && adData.length > 0) {
+          convs = adData;
+        }
+      }
+    } catch (adErr) {}
+
+    // ২. যদি Alwaysdata খালি বা আনরিচেবল থাকে, Cloudflare Worker D1 থেকে ফেচ
+    if (!convs) {
+      const res = await fetch(`${API_BASE}/conversations`);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      convs = await res.json();
+    }
 
     if (Array.isArray(convs)) {
       const topConv = convs[0];
@@ -358,9 +373,28 @@ function startZeroWasteLivePolling() {
 
 async function forceRefreshActiveChatMessages(chatId) {
   try {
-    const res = await fetch(`${API_BASE}/messages?chat_id=${encodeURIComponent(chatId)}`);
-    if (res.ok) {
-      const msgs = await res.json();
+    let msgs = null;
+    try {
+      const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(2500) });
+      if (adRes.ok) {
+        const adData = await adRes.json();
+        if (adData && Array.isArray(adData.messages)) {
+          msgs = adData.messages.map(m => ({
+            id: m.id,
+            sender_type: m.sender_type || (m.role === 'model' ? 'assistant' : 'customer'),
+            message_text: m.message_text || m.text || '',
+            created_at: m.timestamp || new Date().toISOString()
+          }));
+        }
+      }
+    } catch (e) {}
+
+    if (!msgs) {
+      const res = await fetch(`${API_BASE}/messages?chat_id=${encodeURIComponent(chatId)}`);
+      if (res.ok) msgs = await res.json();
+    }
+
+    if (msgs) {
       appState.messages[chatId] = msgs;
       setLocalCache(CACHE_KEYS.MESSAGES, appState.messages);
       renderMessageBubbles(chatId);
@@ -557,9 +591,29 @@ async function loadChatMessages(chatId) {
 
   // ২. লোকাল ক্যাশ খালি থাকলে ১-বার ব্যাকএন্ড থেকে ফেচ
   try {
-    const res = await fetch(`${API_BASE}/messages?chat_id=${encodeURIComponent(chatId)}`);
-    if (res.ok) {
-      const msgs = await res.json();
+    let msgs = null;
+    // প্রথমে Alwaysdata থেকে লাইভ সেশনের মেসেজ চেক
+    try {
+      const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(2500) });
+      if (adRes.ok) {
+        const adData = await adRes.json();
+        if (adData && Array.isArray(adData.messages)) {
+          msgs = adData.messages.map(m => ({
+            id: m.id,
+            sender_type: m.sender_type || (m.role === 'model' ? 'assistant' : 'customer'),
+            message_text: m.message_text || m.text || '',
+            created_at: m.timestamp || new Date().toISOString()
+          }));
+        }
+      }
+    } catch (e) {}
+
+    if (!msgs) {
+      const res = await fetch(`${API_BASE}/messages?chat_id=${encodeURIComponent(chatId)}`);
+      if (res.ok) msgs = await res.json();
+    }
+
+    if (msgs) {
       appState.messages[chatId] = msgs;
       setLocalCache(CACHE_KEYS.MESSAGES, appState.messages);
       renderMessageBubbles(chatId);
@@ -642,13 +696,22 @@ function initChatReply() {
     renderMessageBubbles(chatId);
     inputEl.value = '';
 
-    // ২. Worker-এ ১টি একক আউটবাউন্ড POST কল
+    // ২. Alwaysdata গেটওয়ে অথবা Worker-এ ১টি একক আউটবাউন্ড POST কল
     try {
-      const res = await fetch(`${API_BASE}/admin-reply`, {
+      let res = await fetch(`https://ranonex.alwaysdata.net/api/send-reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, message_text: text })
-      });
+        body: JSON.stringify({ chat_id: chatId, message_text: text }),
+        signal: AbortSignal.timeout(3500)
+      }).catch(() => null);
+
+      if (!res || !res.ok) {
+        res = await fetch(`${API_BASE}/admin-reply`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, message_text: text })
+        });
+      }
 
       const data = await res.json();
       if (res.ok && data.success) {
