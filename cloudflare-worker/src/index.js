@@ -880,6 +880,8 @@ async function handleGetSettings(env) {
         if (c.key === 'whatsapp_phone') settings.whatsapp.phone = c.value;
         if (c.key === 'whatsapp_gateway_url') settings.whatsapp.gateway_url = c.value;
         if (c.key === 'whatsapp_gateway_token') settings.whatsapp.gateway_token = c.value;
+        if (c.key === 'whatsapp_phone_id') settings.whatsapp.phone_number_id = c.value;
+        if (c.key === 'whatsapp_access_token') settings.whatsapp.access_token = c.value;
         if (c.key === 'github_token') {
           settings.github.connected = Boolean(c.value);
           settings.github.token = c.value;

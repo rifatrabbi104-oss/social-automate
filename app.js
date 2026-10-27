@@ -977,11 +977,51 @@ function initBusinessDataForms() {
 // ========================================================
 function initSettingsForm() {
   // ১. WhatsApp Connect Form
+  // 🟢 ১. WhatsApp Connect Form (Redesigned with QR Gateway vs Cloud API)
+  window.switchWaMode = function(mode) {
+    const inputMode = document.getElementById('input-wa-mode');
+    const btnGateway = document.getElementById('tab-btn-wa-gateway');
+    const btnCloud = document.getElementById('tab-btn-wa-cloud');
+    const secGateway = document.getElementById('section-wa-gateway');
+    const secCloud = document.getElementById('section-wa-cloud');
+
+    if (inputMode) inputMode.value = mode;
+
+    if (mode === 'gateway') {
+      if (btnGateway) {
+        btnGateway.style.background = 'rgba(16, 185, 129, 0.15)';
+        btnGateway.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+        btnGateway.style.color = 'var(--emerald)';
+        btnGateway.style.fontWeight = '700';
+      }
+      if (btnCloud) {
+        btnCloud.style.background = 'transparent';
+        btnCloud.style.borderColor = 'transparent';
+        btnCloud.style.color = 'var(--text-muted)';
+        btnCloud.style.fontWeight = '600';
+      }
+      if (secGateway) secGateway.style.display = 'block';
+      if (secCloud) secCloud.style.display = 'none';
+    } else {
+      if (btnCloud) {
+        btnCloud.style.background = 'rgba(59, 130, 246, 0.15)';
+        btnCloud.style.borderColor = 'rgba(59, 130, 246, 0.4)';
+        btnCloud.style.color = '#60a5fa';
+        btnCloud.style.fontWeight = '700';
+      }
+      if (btnGateway) {
+        btnGateway.style.background = 'transparent';
+        btnGateway.style.borderColor = 'transparent';
+        btnGateway.style.color = 'var(--text-muted)';
+        btnGateway.style.fontWeight = '600';
+      }
+      if (secGateway) secGateway.style.display = 'none';
+      if (secCloud) secCloud.style.display = 'block';
+    }
+  };
+
   const waForm = document.getElementById('whatsapp-connect-form');
   const waPhoneInput = document.getElementById('input-wa-phone');
-  const waModeInput = document.getElementById('input-wa-mode');
-  const waGatewayUrlInput = document.getElementById('input-wa-gateway-url');
-  const waTokenInput = document.getElementById('input-wa-token');
   const waSubmitBtn = document.getElementById('btn-save-whatsapp');
   const waResultBox = document.getElementById('wa-setup-result');
   const waCopyBtn = document.getElementById('btn-copy-wa-webhook');
@@ -999,9 +1039,11 @@ function initSettingsForm() {
     waForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const phone = waPhoneInput ? waPhoneInput.value.trim() : '';
-      const mode = waModeInput ? waModeInput.value : 'gateway';
-      const gatewayUrl = waGatewayUrlInput ? waGatewayUrlInput.value.trim() : '';
-      const token = waTokenInput ? waTokenInput.value.trim() : '';
+      const mode = document.getElementById('input-wa-mode')?.value || 'gateway';
+      const gatewayUrl = document.getElementById('input-wa-gateway-url')?.value.trim() || '';
+      const gatewayToken = document.getElementById('input-wa-gateway-token')?.value.trim() || '';
+      const phoneId = document.getElementById('input-wa-phone-id')?.value.trim() || '';
+      const cloudToken = document.getElementById('input-wa-cloud-token')?.value.trim() || '';
 
       if (waSubmitBtn) {
         waSubmitBtn.disabled = true;
@@ -1016,8 +1058,9 @@ function initSettingsForm() {
             phone: phone,
             mode: mode,
             gateway_url: gatewayUrl,
-            gateway_token: token,
-            access_token: token
+            gateway_token: gatewayToken,
+            phone_number_id: phoneId,
+            access_token: mode === 'gateway' ? gatewayToken : cloudToken
           })
         });
 
@@ -1028,10 +1071,11 @@ function initSettingsForm() {
             waResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
             waResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
             waResultBox.style.color = '#a7f3d0';
+            const modeText = mode === 'gateway' ? '📱 মোবাইল অ্যাপ + AI (QR Gateway)' : '☁️ Meta Cloud API';
             waResultBox.innerHTML = `
-              <strong>✅ WhatsApp সফলভাবে সংযুক্ত হয়েছে!</strong><br>
-              নম্বর: <strong>${escapeHtml(phone)}</strong> (মোড: ${mode === 'gateway' ? '🌐 Web Gateway' : '☁️ Cloud API'})<br>
-              স্ট্যাটাস: এখন থেকে কোনো কাস্টমার মেসেজ দিলে AI স্বয়ংক্রিয়ভাবে উত্তর দেবে।
+              <strong>✅ WhatsApp সেটিংস D1-এ সফলভাবে সেভ হয়েছে!</strong><br>
+              নম্বর: <strong>${escapeHtml(phone)}</strong> (${modeText})<br>
+              স্ট্যাটাস: এখন কাস্টমার হোয়াটসঅ্যাপে মেসেজ দিলে AI স্বয়ংক্রিয়ভাবে উত্তর দেবে।
             `;
           }
           showToast('🎉 WhatsApp সেটিংস D1-এ সেভ হয়েছে!');
@@ -1050,7 +1094,7 @@ function initSettingsForm() {
       } finally {
         if (waSubmitBtn) {
           waSubmitBtn.disabled = false;
-          waSubmitBtn.textContent = '💾 Connect WhatsApp to D1';
+          waSubmitBtn.textContent = '💾 Save WhatsApp Settings to D1';
         }
       }
     });
@@ -1422,16 +1466,20 @@ async function loadSettingsFromServer() {
       if (tkTokenInput && s.tiktok.access_token) tkTokenInput.value = s.tiktok.access_token;
     }
 
-    // ৩. WhatsApp প্রি-ফিল
+    // ৩. WhatsApp প্রি-ফিল (QR Gateway vs Cloud API)
     const waPhoneInput = document.getElementById('input-wa-phone');
-    const waModeInput = document.getElementById('input-wa-mode');
     const waGatewayUrlInput = document.getElementById('input-wa-gateway-url');
-    const waTokenInput = document.getElementById('input-wa-token');
+    const waGatewayTokenInput = document.getElementById('input-wa-gateway-token');
+    const waPhoneIdInput = document.getElementById('input-wa-phone-id');
+    const waCloudTokenInput = document.getElementById('input-wa-cloud-token');
+
     if (s.whatsapp) {
       if (waPhoneInput && s.whatsapp.phone) waPhoneInput.value = s.whatsapp.phone;
-      if (waModeInput && s.whatsapp.mode) waModeInput.value = s.whatsapp.mode;
+      if (s.whatsapp.mode) window.switchWaMode(s.whatsapp.mode);
       if (waGatewayUrlInput && s.whatsapp.gateway_url) waGatewayUrlInput.value = s.whatsapp.gateway_url;
-      if (waTokenInput && s.whatsapp.gateway_token) waTokenInput.value = s.whatsapp.gateway_token;
+      if (waGatewayTokenInput && s.whatsapp.gateway_token) waGatewayTokenInput.value = s.whatsapp.gateway_token;
+      if (waPhoneIdInput && s.whatsapp.phone_number_id) waPhoneIdInput.value = s.whatsapp.phone_number_id;
+      if (waCloudTokenInput && s.whatsapp.access_token) waCloudTokenInput.value = s.whatsapp.access_token;
     }
 
     // ৪. GitHub Actions প্রি-ফিল
