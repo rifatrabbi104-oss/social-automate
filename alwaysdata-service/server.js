@@ -125,7 +125,10 @@ async function getStoreCatalog() {
             ? (p.base_price - p.flash_sale_price)
             : (p.base_price || 0);
           const link = `https://ranonex.shop/product.html?id=${encodeURIComponent(p.id)}`;
-          catalog += `- [SKU: ${sku}] ${p.name}\n    * Price: ৳${price}\n    * Order Link: ${link}\n    * Specs: ${p.specifications || 'Standard'}\n`;
+          catalog += `- [SKU: ${sku}] ${p.name}
+    * EXACT PRICE: ৳${price} (${price} BDT)
+    * ORDER LINK: ${link}
+    * SPECS: ${p.specifications || 'Standard'}\n`;
         }
       }
     }
@@ -143,43 +146,99 @@ async function getStoreCatalog() {
 // Gemini 3.8 Live operates via Google's Multimodal Live API over WebSockets.
 // It connects directly to wss://generativelanguage.googleapis.com/...
 // and streams live audio + transcription with Unlimited RPM/RPD.
-async function callGeminiSalesAI(incomingText, chatHistory = []) {
+async function callGeminiSalesAI(incomingText, chatHistory = [], session = null) {
   if (!CONFIG.geminiApiKey || CONFIG.geminiApiKey === "YOUR_GEMINI_API_KEY") {
     return {
       reply: "ধন্যবাদ আপনার বার্তার জন্য! আমাদের একজন প্রতিনিধি খুব শীঘ্রই আপনাকে সহায়তা করবেন। নির্দিষ্ট কোনো প্রোডাক্ট সম্পর্কে জানতে চাইলে নির্দ্বিধায় লিখুন।",
       order_confirmed: false,
-      order_data: null
+      order_updated: false,
+      order_note: false,
+      order_data: null,
+      note: ""
     };
   }
 
   const catalog = await getStoreCatalog();
+
+  // অর্ডার টাইম উইন্ডো চেক (১৫ মিনিটের মধ্যে পরিবর্তন বনাম ১৫ মিনিট পর নোট)
+  let orderTimeContext = "";
+  const now = Date.now();
+  if (session && session.last_order_data && session.last_order_time) {
+    const elapsedMinutes = Math.floor((now - session.last_order_time) / (60 * 1000));
+    if (elapsedMinutes <= 15) {
+      orderTimeContext = `
+[ORDER STATUS CONTEXT: Customer confirmed an order ${elapsedMinutes} minute(s) ago:
+- Customer Name: ${session.last_order_data.customer_name || 'N/A'}
+- Phone: ${session.last_order_data.customer_phone || 'N/A'}
+- Address: ${session.last_order_data.delivery_address || 'N/A'}
+- Product: ${session.last_order_data.product_name || 'N/A'}
+Time remaining for direct edit: ${15 - elapsedMinutes} minute(s).
+RULE: If customer wants to edit/change address, phone, product, or variant, confirm the change politely and output:
+ORDER_UPDATE_JSON: {"order_updated": true, "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "product_name": "...", "variant": "...", "total_amount": 0}]`;
+    } else {
+      orderTimeContext = `
+[ORDER STATUS CONTEXT: Customer confirmed an order ${elapsedMinutes} minutes ago (more than 15 minutes have passed):
+- Customer Name: ${session.last_order_data.customer_name || 'N/A'}
+- Phone: ${session.last_order_data.customer_phone || 'N/A'}
+- Address: ${session.last_order_data.delivery_address || 'N/A'}
+- Product: ${session.last_order_data.product_name || 'N/A'}
+RULE: The 15-minute direct edit window has expired (order is in packaging/dispatch queue).
+If customer asks to modify details:
+Explain politely that the order is already in packaging/dispatch, so direct modification is locked. Reassure them that you have added their request as an urgent NOTE for the delivery team to call them and adjust.
+Output:
+ORDER_NOTE_JSON: {"order_note": true, "note": "Customer requested change details...", "customer_name": "${session.last_order_data.customer_name || 'Customer'}"}]`;
+    }
+  }
+
   const systemInstruction = `You are the expert, polite, and friendly sales & customer support AI for 'Ranonex' online store in Bangladesh (https://ranonex.shop).
-Respond warmly, politely, and naturally in pure Bengali (বাংলা) by default, or Banglish if the customer writes in Banglish.
 
 CRITICAL BRAND & LANGUAGE RULES:
-1. BRAND NAME IN ENGLISH ONLY:
-   - ALWAYS write the brand name in English letters as "Ranonex". NEVER write it in Bengali script (e.g., do not write 'র‌্যানোনেক্স' or 'রেনোনেক্স')!
+1. SCRIPT & BANGLISH RULES:
+   - DEFAULT: Pure Bengali (বাংলা লিপি).
+   - ONLY IF the customer types in Banglish (English letters for Bengali words, e.g. 'kemon achen', 'cooler ache?'), ONLY THEN reply in Banglish.
+   - If the customer writes in Bengali script (বাংলা লিপি), you MUST reply in pure Bengali script.
+2. BRAND NAME IN ENGLISH ONLY:
+   - ALWAYS write the brand name in English letters as "Ranonex". NEVER write it in Bengali script (do not write 'র‌্যানোনেক্স' or 'রেনোনেক্স')!
    - Website link: https://ranonex.shop
 
-2. SOFT CONSULTATIVE SELLING (NO DIRECT FORCING):
+3. STRICT PRODUCT PRICE INTEGRITY (দাম সংক্রান্ত কঠোর ও অলঙ্ঘনীয় নিয়ম):
+   - You MUST quote the EXACT numeric price listed under 'EXACT PRICE' in the catalog.
+   - NEVER misquote, drop zeros, calculate wrongly, or say wrong numbers!
+     For example, if EXACT PRICE is ৳650, you MUST state "৬৫০ টাকা (650 ৳)" or "দাম মাত্র ৬৫০ টাকা". NEVER say ৬৫ টাকা or any other number!
+   - Always state the price and include the product order link.
+
+4. SOFT CONSULTATIVE SELLING (NO DIRECT FORCING):
    - Never aggressively force or pressure the customer to buy.
-   - First empathize with their problem, need, or inquiry (e.g., phone heating, gaming, daily use, budget).
-   - Carefully check the STORE PRODUCTS CATALOG below. Recommend the best matching product with features, benefits, exact price (৳), and link.
+   - First empathize with their problem, need, or inquiry (e.g. phone heating, gaming, daily use, budget).
+   - Recommend the best matching product with features, benefits, exact price (৳), and link.
 
-3. COURTEOUS ORDER FOLLOW-UP:
-   - Whenever any product is discussed, always include a polite, gentle follow-up question at the end to guide the customer naturally toward ordering or clearing doubts without being pushy.
-   - Examples of polite follow-up:
-     "আপনি চাইলে পণ্যটি ক্যাশ অন ডেলিভারিতে হাতে পেয়ে চেক করে নেওয়ার সুবিধায় নিতে পারেন। আপনার কি এই প্রোডাক্টটি সম্পর্কে আরও কিছু জানার আছে, নাকি অর্ডার প্রসেস শুরু করে দেব?"
-     "আপনার পছন্দের কোনো নির্দিষ্ট কালার বা ভ্যারিয়েন্ট আছে কি? জানালে সুবিধা হতো।"
+5. COURTEOUS ORDER FOLLOW-UP (ইনবক্সে সহজে অর্ডারের নিয়ম উল্লেখ করা):
+   - When discussing any product, always politely follow up at the end of your message to explain how simple it is to order right inside the chat:
+     * If in Bengali script:
+       "আপনি চাইলে ওয়েবসাইট ছাড়াও এখানেই মেসেজে আপনার নাম, মোবাইল নম্বর এবং সম্পূর্ণ ডেলিভারি ঠিকানা পাঠিয়ে দিলেই আমরা ক্যাশ অন ডেলিভারিতে অর্ডার কনফার্ম করে দেব! আপনি কি প্রোডাক্টটি এখনই অর্ডার করতে চান, নাকি এ বিষয়ে আরও কিছু জানতে চান?"
+     * If in Banglish:
+       "Apni chaile website charao ekhanei inbox-e apnar Name, Mobile Number ar Delivery Address pathiye dilei amra Cash on Delivery-te order confirm kore debo! Apni ki ekhoni order korte chan, naki aro kichu janar ache?"
+   - Keep it polite, helpful, and completely frictionless.
 
-4. MULTI-TURN ORDER CONFIRMATION:
-   - When customer wants to buy ('হ্যাঁ নিতে চাই', 'অর্ডার করব', 'পাঠিয়ে দেন', 'nibo', 'kinbo'):
-     Ask politely step-by-step for: Full Name, Active 11-digit Phone, Delivery Address, Variant/Size.
-     State: Cash on Delivery available, Delivery Charge: Dhaka 70 BDT, Outside Dhaka 130 BDT, parcel inspection upon delivery.
-   - Once all 4 details (Name, Phone, Address, Product) are present:
-     Confirm the order enthusiastically with a neat summary.
-     AND at the very bottom of your response, output this exact marker:
+6. MULTI-TURN ORDER CONFIRMATION & MODIFICATION:
+   - INITIAL ORDER:
+     When customer provides: Name, Active 11-digit Phone, Delivery Address, Variant/Product:
+     Warmly confirm the order summary (Cash on delivery, Delivery: Dhaka 70 BDT, Outside Dhaka 130 BDT, parcel inspection upon delivery).
+     State to customer:
+     "আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে! আপনি চাইলে আগামী ১৫ মিনিটের মধ্যে যেকোনো তথ্য (ঠিকানা, ফোন নম্বর বা প্রোডাক্ট) পরিবর্তন করতে পারবেন।"
+     Output at the very bottom:
      ORDER_JSON: {"order_confirmed": true, "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "product_name": "...", "variant": "...", "total_amount": 0}
+
+   - EDIT WITHIN 15 MINUTES:
+     If customer wants to modify details within 15 minutes, confirm politely: "আপনার অর্ডারের তথ্য সফলভাবে পরিবর্তন করা হয়েছে!"
+     Output:
+     ORDER_UPDATE_JSON: {"order_updated": true, "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "product_name": "...", "variant": "...", "total_amount": 0}
+
+   - EDIT AFTER 15 MINUTES:
+     If customer wants to modify details after 15 minutes, explain order is in packaging/dispatch, reassure them that a note is added for the delivery agent, and output:
+     ORDER_NOTE_JSON: {"order_note": true, "note": "...", "customer_name": "..."}
+
+${orderTimeContext}
 
 STORE PRODUCTS CATALOG:
 ${catalog}`;
@@ -212,7 +271,10 @@ ${catalog}`;
         resolve({
           reply: accumulatedText.trim() || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।",
           order_confirmed: false,
-          order_data: null
+          order_updated: false,
+          order_note: false,
+          order_data: null,
+          note: ""
         });
       }
     }, 25000);
@@ -269,9 +331,13 @@ ${catalog}`;
               console.log(`🤖 [Gemini 3.8 Live] Turn complete in ${Date.now() - startTime}ms`);
 
               let orderConfirmed = false;
+              let orderUpdated = false;
+              let orderNote = false;
               let orderData = null;
+              let noteText = "";
               let reply = accumulatedText.trim();
 
+              // 1. ORDER_JSON
               const orderMatch = reply.match(/ORDER_JSON:\s*(\{[\s\S]*?\})/i);
               if (orderMatch) {
                 try {
@@ -284,7 +350,40 @@ ${catalog}`;
                 } catch (e) {}
               }
 
-              resolve({ reply, order_confirmed: orderConfirmed, order_data: orderData });
+              // 2. ORDER_UPDATE_JSON
+              const updateMatch = reply.match(/ORDER_UPDATE_JSON:\s*(\{[\s\S]*?\})/i);
+              if (updateMatch) {
+                try {
+                  const parsed = JSON.parse(updateMatch[1]);
+                  if (parsed.order_updated) {
+                    orderUpdated = true;
+                    orderData = parsed;
+                    reply = reply.replace(/ORDER_UPDATE_JSON:\s*\{[\s\S]*?\}/i, "").trim();
+                  }
+                } catch (e) {}
+              }
+
+              // 3. ORDER_NOTE_JSON
+              const noteMatch = reply.match(/ORDER_NOTE_JSON:\s*(\{[\s\S]*?\})/i);
+              if (noteMatch) {
+                try {
+                  const parsed = JSON.parse(noteMatch[1]);
+                  if (parsed.order_note) {
+                    orderNote = true;
+                    noteText = parsed.note;
+                    reply = reply.replace(/ORDER_NOTE_JSON:\s*\{[\s\S]*?\}/i, "").trim();
+                  }
+                } catch (e) {}
+              }
+
+              resolve({
+                reply,
+                order_confirmed: orderConfirmed,
+                order_updated: orderUpdated,
+                order_note: orderNote,
+                order_data: orderData,
+                note: noteText
+              });
             }
           }
         }
@@ -305,7 +404,10 @@ ${catalog}`;
         resolve({
           reply: accumulatedText.trim() || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।",
           order_confirmed: false,
-          order_data: null
+          order_updated: false,
+          order_note: false,
+          order_data: null,
+          note: ""
         });
       }
     };
@@ -342,6 +444,64 @@ async function sendTelegramAlert(order, platform = "Facebook") {
     });
   } catch (e) {
     console.warn("Telegram alert error:", e.message);
+  }
+}
+
+async function sendTelegramOrderUpdate(order, platform = "Facebook") {
+  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
+
+  const text = `🔄 [অর্ডার আপডেট / সংশোধিত - ${platform}]
+(⚠️ কাস্টমার ১৫ মিনিটের মধ্যে তথ্য পরিবর্তন করেছেন, পূর্বের অর্ডারটি এই তথ্য দিয়ে প্রতিস্থাপন করুন)
+━━━━━━━━━━━━━━━━━━━
+👤 কাস্টমার: ${order.customer_name || 'N/A'}
+📞 মোবাইল: ${order.customer_phone || 'N/A'}
+📍 নতুন ঠিকানা: ${order.delivery_address || 'N/A'}
+📦 প্রোডাক্ট: ${order.product_name || 'N/A'}
+🎨 ভ্যারিয়েন্ট: ${order.variant || 'Standard'}
+💰 সর্বমোট: ৳${order.total_amount || 0}/-
+🚚 ক্যাশ অন ডেলিভারি (হোম ডেলিভারি)
+━━━━━━━━━━━━━━━━━━━
+🚀 SocialAutomate Alwaysdata Engine`;
+
+  try {
+    await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: CONFIG.telegramChatId,
+        text,
+        parse_mode: "HTML"
+      })
+    });
+  } catch (e) {
+    console.warn("Telegram update alert error:", e.message);
+  }
+}
+
+async function sendTelegramOrderNote(noteText, customer, platform = "Facebook") {
+  if (!CONFIG.telegramBotToken || !CONFIG.telegramChatId) return;
+
+  const text = `⚠️ [কাস্টমার অর্ডার পরিবর্তনের অনুরোধ করেছেন - জরুরি নোট - ${platform}]
+(সময়সীমা ১৫ মিনিট অতিক্রান্ত হওয়ায় সরাসরি আপডেট হয়নি, ডেলিভারির সময় কাস্টমারের সাথে কথা বলুন)
+━━━━━━━━━━━━━━━━━━━
+👤 কাস্টমার: ${customer.customer_name || 'N/A'}
+📞 মোবাইল: ${customer.customer_phone || 'N/A'}
+📝 কাস্টমারের পরিবর্তনের অনুরোধ: ${noteText}
+━━━━━━━━━━━━━━━━━━━
+🚀 SocialAutomate Alwaysdata Engine`;
+
+  try {
+    await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: CONFIG.telegramChatId,
+        text,
+        parse_mode: "HTML"
+      })
+    });
+  } catch (e) {
+    console.warn("Telegram note alert error:", e.message);
   }
 }
 
@@ -483,8 +643,8 @@ app.post('/webhook/meta', (req, res) => {
               timestamp: new Date().toISOString()
             });
 
-            // Gemini AI দিয়ে সেলস রিপ্লাই জেনারেট
-            const aiDecision = await callGeminiSalesAI(incomingText, session.messages);
+            // Gemini AI দিয়ে সেলস রিপ্লাই জেনারেট (session সহ পাস করা হচ্ছে যাতে অর্ডার টাইম ট্র্যাক থাকে)
+            const aiDecision = await callGeminiSalesAI(incomingText, session.messages, session);
 
             if (aiDecision && aiDecision.reply) {
               console.log(`🤖 [AI Reply to ${profile.name}]: ${aiDecision.reply.substring(0, 80)}...`);
@@ -499,16 +659,16 @@ app.post('/webhook/meta', (req, res) => {
               });
             }
 
-            memorySessions.set(chatId, session);
-
-            // যদি অর্ডার কনফার্ম হয়, টেলিগ্রামে এডমিনকে মেসেজ পাঠানো ও D1 ডেটাবেজে সেভ করা
+            // ১. যদি নতুন অর্ডার কনফার্ম হয়
             if (aiDecision.order_confirmed && aiDecision.order_data) {
-              await sendTelegramAlert({
+              session.last_order_data = {
                 ...aiDecision.order_data,
                 customer_name: aiDecision.order_data.customer_name || profile.name
-              }, "Facebook Messenger");
+              };
+              session.last_order_time = Date.now();
 
-              // ক্লাউডফ্লেয়ার D1 orders টেবিলে সেভ
+              await sendTelegramAlert(session.last_order_data, "Facebook Messenger");
+
               if (CONFIG.workerUrl) {
                 fetch(`${CONFIG.workerUrl}/api/orders`, {
                   method: "POST",
@@ -516,16 +676,52 @@ app.post('/webhook/meta', (req, res) => {
                   body: JSON.stringify({
                     chat_id: chatId,
                     platform: "facebook",
-                    customer_name: aiDecision.order_data.customer_name || profile.name,
-                    customer_phone: aiDecision.order_data.customer_phone || "",
-                    delivery_address: aiDecision.order_data.delivery_address || "",
-                    product_name: aiDecision.order_data.product_name || "",
-                    variant: aiDecision.order_data.variant || "Standard",
-                    total_amount: aiDecision.order_data.total_amount || 0
+                    customer_name: session.last_order_data.customer_name,
+                    customer_phone: session.last_order_data.customer_phone || "",
+                    delivery_address: session.last_order_data.delivery_address || "",
+                    product_name: session.last_order_data.product_name || "",
+                    variant: session.last_order_data.variant || "Standard",
+                    total_amount: session.last_order_data.total_amount || 0
                   })
                 }).catch(() => {});
               }
             }
+
+            // ২. যদি ১৫ মিনিটের মধ্যে কাস্টমার অর্ডার পরিবর্তন / সংশোধন করে
+            if (aiDecision.order_updated && aiDecision.order_data) {
+              session.last_order_data = {
+                ...aiDecision.order_data,
+                customer_name: aiDecision.order_data.customer_name || profile.name
+              };
+              session.last_order_time = Date.now();
+
+              await sendTelegramOrderUpdate(session.last_order_data, "Facebook Messenger");
+
+              if (CONFIG.workerUrl) {
+                fetch(`${CONFIG.workerUrl}/api/orders`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    chat_id: chatId,
+                    platform: "facebook",
+                    customer_name: session.last_order_data.customer_name,
+                    customer_phone: session.last_order_data.customer_phone || "",
+                    delivery_address: session.last_order_data.delivery_address || "",
+                    product_name: session.last_order_data.product_name || "",
+                    variant: session.last_order_data.variant || "Standard",
+                    total_amount: session.last_order_data.total_amount || 0,
+                    status: "updated"
+                  })
+                }).catch(() => {});
+              }
+            }
+
+            // ৩. যদি ১৫ মিনিট পর কাস্টমার পরিবর্তন করতে চায় (জরুরি নোট অ্যালার্ট)
+            if (aiDecision.order_note && aiDecision.note) {
+              await sendTelegramOrderNote(aiDecision.note, session.last_order_data || { customer_name: profile.name }, "Facebook Messenger");
+            }
+
+            memorySessions.set(chatId, session);
 
             // ক্লাউডফ্লেয়ার ড্যাশবোর্ডের সাথে চ্যাট হিস্ট্রি সিঙ্ক (যাতে automate.ranonex.shop-এ দেখা যায়)
             if (CONFIG.workerUrl) {
