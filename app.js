@@ -252,6 +252,131 @@ async function syncWithBackend(isSilent = false) {
 }
 
 // ========================================================
+// 📡 লাইভ পোলিং ও ম্যানুয়াল D1 ফেচ কন্ট্রোলার
+// ========================================================
+let livePollingTimer = null;
+let lastKnownTopMessage = '';
+
+// সাউন্ড প্লেয়ার (Web Audio API - কোনো বাহ্যিক ফাইল লাগে না)
+function playMessageChime() {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+    osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.15); // A5
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.3);
+  } catch (e) {}
+}
+
+window.fetchLatestConversations = async function(isManual = false) {
+  const btn = document.getElementById('btn-fetch-d1-convs');
+  if (isManual && btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Fetching...';
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/conversations`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const convs = await res.json();
+
+    if (Array.isArray(convs)) {
+      const topConv = convs[0];
+      const currentTopMsg = topConv ? `${topConv.id}_${topConv.last_message_at}_${topConv.last_message}` : '';
+
+      // নতুন মেসেজ ডিটেকশন
+      if (lastKnownTopMessage && currentTopMsg && currentTopMsg !== lastKnownTopMessage) {
+        playMessageChime();
+        const pLabel = topConv.platform === 'facebook' ? '🔵 FB' : (topConv.platform === 'whatsapp' ? '🟢 WA' : '💬');
+        showToast(`💬 [${pLabel}] ${topConv.name}: "${(topConv.last_message || '').substring(0, 35)}..."`);
+
+        // যদি এই চ্যাটটি বর্তমানে ওপেন থাকে, তবে রিয়েল-টাইমে মেসেজগুলো রিফ্রেশ করা
+        if (String(appState.activeChatId) === String(topConv.id)) {
+          await forceRefreshActiveChatMessages(topConv.id);
+        }
+      }
+
+      lastKnownTopMessage = currentTopMsg;
+      appState.conversations = convs;
+      setLocalCache(CACHE_KEYS.CONVERSATIONS, convs);
+      renderConversationList();
+
+      if (isManual) {
+        showToast(`✅ D1 থেকে ${convs.length} টি কনভারসেশন সিঙ্ক হয়েছে!`);
+      }
+    }
+  } catch (err) {
+    if (isManual) showToast('❌ চ্যাট ফেচ ব্যর্থ: ' + err.message);
+  } finally {
+    if (isManual && btn) {
+      btn.disabled = false;
+      btn.textContent = '🔄 Fetch D1';
+    }
+  }
+};
+
+window.toggleLivePolling = function() {
+  const btn = document.getElementById('btn-toggle-live-polling');
+  const badge = document.getElementById('live-polling-badge');
+
+  if (livePollingTimer) {
+    // টার্ন অফ
+    clearInterval(livePollingTimer);
+    livePollingTimer = null;
+    if (btn) {
+      btn.textContent = '📡 Live: OFF';
+      btn.style.background = '';
+      btn.style.color = '#60a5fa';
+      btn.style.borderColor = 'rgba(59, 130, 246, 0.4)';
+    }
+    if (badge) {
+      badge.textContent = '⚪ Manual Sync';
+      badge.style.background = 'rgba(255,255,255,0.06)';
+      badge.style.color = 'var(--text-muted)';
+    }
+    showToast('⚪ Live Auto-Sync বন্ধ (Worker 0 Request Mode)');
+  } else {
+    // টার্ন অন
+    window.fetchLatestConversations(false);
+    livePollingTimer = setInterval(() => {
+      window.fetchLatestConversations(false);
+    }, 4000);
+
+    if (btn) {
+      btn.textContent = '🟢 Live: ON (4s)';
+      btn.style.background = 'rgba(16, 185, 129, 0.15)';
+      btn.style.color = 'var(--emerald)';
+      btn.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+    }
+    if (badge) {
+      badge.textContent = '🟢 Live Active (4s)';
+      badge.style.background = 'rgba(16, 185, 129, 0.2)';
+      badge.style.color = 'var(--emerald)';
+    }
+    showToast('🟢 Live Auto-Sync চালু (নতুন মেসেজ আসামাত্র প্রতি ৪ সেকেন্ডে স্ক্রিনে দেখাবে)');
+  }
+};
+
+async function forceRefreshActiveChatMessages(chatId) {
+  try {
+    const res = await fetch(`${API_BASE}/messages?chat_id=${encodeURIComponent(chatId)}`);
+    if (res.ok) {
+      const msgs = await res.json();
+      appState.messages[chatId] = msgs;
+      setLocalCache(CACHE_KEYS.MESSAGES, appState.messages);
+      renderMessageBubbles(chatId);
+    }
+  } catch (e) {}
+}
+
+// ========================================================
 // ৩. কনভারসেশন ও চ্যাট লিস্ট (লোকাল স্টোরেজ থেকে রেন্ডার)
 // ========================================================
 function renderConversationList() {
