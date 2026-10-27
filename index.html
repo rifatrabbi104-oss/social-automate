@@ -117,20 +117,32 @@
         <div class="inbox-container">
           <!-- Conversation List -->
           <div class="conv-sidebar">
-            <div class="conv-header" style="flex-direction: column; align-items: stretch; gap: 8px;">
+            <div class="conv-header" style="flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 16px;">
               <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                <h3 style="margin: 0; font-size: 14px; font-weight: 700;">Social Conversations</h3>
-                <span id="live-polling-badge" style="font-size: 10px; padding: 2px 7px; border-radius: 4px; background: rgba(255,255,255,0.06); color: var(--text-muted); font-weight: 600;">⚪ Manual Sync</span>
-              </div>
-              <div style="display: flex; gap: 6px; align-items: center; justify-content: space-between; width: 100%; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <h3 style="margin: 0; font-size: 15px; font-weight: 700;">All Inbox</h3>
+                  <span id="live-polling-badge" class="live-status-pill"><span class="pulse-dot"></span> Live</span>
+                </div>
                 <div style="display: flex; gap: 6px;">
-                  <button id="btn-fetch-d1-convs" type="button" class="btn-refresh" style="font-size: 11px; padding: 4px 8px; font-weight: 600;" onclick="fetchLatestConversations(true)" title="D1 ডাটাবেস থেকে মেসেজ ফেচ করুন">🔄 Fetch D1</button>
-                  <button id="btn-toggle-live-polling" type="button" class="btn-secondary" style="font-size: 11px; padding: 4px 8px; cursor: pointer; border-color: rgba(59, 130, 246, 0.4); color: #60a5fa; font-weight: 600;" onclick="toggleLivePolling()" title="লাইভ পোলিং অন/অফ করুন">📡 Live: OFF</button>
+                  <button id="btn-sync-fb-inbox" type="button" class="btn-refresh" style="font-size: 11px; padding: 5px 10px; font-weight: 700; background: linear-gradient(135deg, #1877f2, #0d6efd); border: none; color: #fff; cursor: pointer; border-radius: var(--radius-sm);" title="ফেসবুক পেজ থেকে ইনবক্স মেসেজ সিঙ্ক করুন">🔄 Sync FB</button>
+                  <button id="btn-fetch-d1-convs" type="button" class="btn-secondary" style="font-size: 11px; padding: 5px 8px; cursor: pointer;" title="D1 রিফ্রেশ">↻</button>
                 </div>
-                <div style="display: flex; gap: 4px;">
-                  <button id="btn-quick-test-wa" type="button" class="btn-secondary" style="padding: 3px 6px; font-size: 10px; cursor: pointer; border-color: rgba(16, 185, 129, 0.4); color: var(--emerald);" title="টেস্ট হোয়াটসঅ্যাপ মেসেজ">🟢 WA</button>
-                  <button id="btn-quick-test" type="button" class="btn-secondary" style="padding: 3px 6px; font-size: 10px; cursor: pointer;" title="টেস্ট ফেসবুক মেসেজ">🔵 FB</button>
-                </div>
+              </div>
+
+              <!-- Channel Filter Tabs -->
+              <div class="channel-filter-bar" id="channel-filters">
+                <button class="chan-pill active" data-chan="all">All <span class="pill-badge" id="pill-count-all">0</span></button>
+                <button class="chan-pill" data-chan="facebook">🔵 Messenger <span class="pill-badge" id="pill-count-fb">0</span></button>
+                <button class="chan-pill" data-chan="fb_comment">💬 Comments <span class="pill-badge" id="pill-count-comm">0</span></button>
+                <button class="chan-pill" data-chan="whatsapp">🟢 WhatsApp <span class="pill-badge" id="pill-count-wa">0</span></button>
+                <button class="chan-pill" data-chan="instagram">📸 Instagram <span class="pill-badge" id="pill-count-ig">0</span></button>
+              </div>
+
+              <!-- Status Filter Tabs (Read / Unread) -->
+              <div class="status-filter-bar" id="status-filters">
+                <button class="stat-pill active" data-stat="all">All</button>
+                <button class="stat-pill unread-pill" data-stat="unread">🔴 Unread <span class="pill-badge danger" id="pill-count-unread">0</span></button>
+                <button class="stat-pill" data-stat="read">⚪ Read</button>
               </div>
             </div>
             <div class="conv-list" id="conversation-list">
@@ -593,6 +605,41 @@
             </form>
 
             <div id="telegram-setup-result" style="display: none; margin-top: 16px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
+          </div>
+
+          <!-- 🤖 CARD 3.6: Google Gemini AI Sales Engine -->
+          <div class="card">
+            <div class="card-header">
+              <h3>🤖 Google Gemini AI Sales Engine</h3>
+              <span class="badge-status" id="badge-ai-status" style="background: rgba(16, 185, 129, 0.2); color: var(--emerald); font-weight: 700;">Checking...</span>
+            </div>
+            <p class="section-desc">ফেসবুক মেসেঞ্জার, ফেসবুক কমেন্ট এবং হোয়াটসঅ্যাপে কাস্টমারের সাথে বাংলায় কথা বলে পণ্য সাজেস্ট এবং অর্ডার কনফার্ম করার জন্য আপনার Gemini API Key এখানে সেভ করুন:</p>
+
+            <form id="ai-connect-form">
+              <div class="form-group">
+                <label>Gemini API Key (Google AI Studio থেকে প্রাপ্ত)</label>
+                <div style="display: flex; gap: 8px;">
+                  <input type="password" id="input-gemini-api-key" placeholder="যেমন: AIzaSyBxxxxxxxxxxxxxxxxxxxxxxxxxxx" style="flex: 1;">
+                  <button type="button" class="btn-secondary" id="btn-toggle-show-ai-key" style="padding: 0 12px; cursor: pointer;">👁️</button>
+                </div>
+                <small class="help-text">Google AI Studio (aistudio.google.com) থেকে ফ্রি API Key নিয়ে এখানে বসান।</small>
+              </div>
+
+              <div class="form-group">
+                <label>Gemini Model</label>
+                <select id="select-gemini-model" style="width: 100%; padding: 10px 12px; background: rgba(18, 24, 38, 0.8); border: 1px solid var(--border-color); border-radius: var(--radius-md); color: var(--text-main);">
+                  <option value="gemini-2.0-flash">gemini-2.0-flash (সুপার ফাস্ট ও স্মার্ট - রেকমেন্ডেড)</option>
+                  <option value="gemini-1.5-flash">gemini-1.5-flash (লাইটওয়েট ও দ্রুত)</option>
+                  <option value="gemini-1.5-pro">gemini-1.5-pro (অ্যাডভান্সড রিজনিং)</option>
+                </select>
+              </div>
+
+              <div style="display: flex; gap: 10px;">
+                <button type="submit" class="btn-primary" id="btn-save-ai-key" style="flex: 1; background: linear-gradient(135deg, #10b981, #059669); border: none; font-weight: 700; color: #fff; cursor: pointer; padding: 12px 16px;">💾 Save & Test Gemini AI</button>
+              </div>
+            </form>
+
+            <div id="ai-setup-result" style="display: none; margin-top: 16px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
           </div>
 
           <!-- 🐙 CARD 4: GitHub Actions Posting Engine -->

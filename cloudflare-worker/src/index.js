@@ -284,7 +284,7 @@ export default {
           try {
             await ensureTables(env.DB);
             const { results } = await env.DB.prepare(
-              "SELECT chat_id as id, chat_id as sender_id, sender_name as name, sender_avatar, platform, last_message, last_message_at, admin_takeover, needs_attention, messages_json FROM live_conversations ORDER BY last_message_at DESC LIMIT 50"
+              "SELECT chat_id as id, chat_id as sender_id, sender_name as name, sender_avatar, platform, channel_type, last_message, last_message_at, unread_count, admin_takeover, needs_attention, messages_json FROM live_conversations ORDER BY last_message_at DESC LIMIT 50"
             ).all();
             if (results && results.length > 0) {
               list = results.map(r => {
@@ -296,8 +296,10 @@ export default {
                   name: r.name,
                   sender_avatar: r.sender_avatar || "",
                   platform: r.platform || "facebook",
+                  channel_type: r.channel_type || (r.platform === "whatsapp" ? "whatsapp" : "messenger"),
                   last_message: r.last_message,
                   last_message_at: r.last_message_at,
+                  unread_count: Number(r.unread_count || 0),
                   admin_takeover: r.admin_takeover,
                   needs_attention: r.needs_attention,
                   messages_count: count
@@ -314,9 +316,12 @@ export default {
             id: s.chat_id,
             sender_id: s.chat_id,
             name: s.sender_name,
+            sender_avatar: s.sender_avatar || "",
             platform: s.platform || "facebook",
+            channel_type: s.channel_type || (s.platform === "whatsapp" ? "whatsapp" : "messenger"),
             last_message: s.last_message,
             last_message_at: s.last_message_at,
+            unread_count: Number(s.unread_count || 0),
             admin_takeover: s.admin_takeover ? 1 : 0,
             needs_attention: s.needs_attention ? 1 : 0,
             messages_count: s.messages ? s.messages.length : 0
@@ -324,6 +329,53 @@ export default {
         }
 
         return jsonResponse(list);
+      }
+
+      // ৬.১ ফেসবুক পেজের রিয়েল ইনবক্স ও কনভারসেশন ফেচ / সিঙ্ক API
+      if (request.method === "POST" && (path === "/api/sync-fb-conversations" || path === "/api/sync-conversations")) {
+        return await handleSyncFacebookConversations(env);
+      }
+
+      // ৬.২ জিরো-কোটা লাইভ চেক API (প্রতি ৫-৮ সেকেন্ডে হালকা টাইমস্ট্যাম্প চেক)
+      if (request.method === "GET" && path === "/api/conversations-check") {
+        if (!env.DB) return jsonResponse({ changed: false, latest_time: "", total_count: 0 });
+        try {
+          const since = url.searchParams.get("since") || "";
+          const row = await env.DB.prepare(
+            "SELECT MAX(last_message_at) as latest_time, COUNT(*) as total_count FROM live_conversations"
+          ).first();
+          const latestTime = row?.latest_time || "";
+          const totalCount = Number(row?.total_count || 0);
+          const hasChanged = !since || (latestTime && latestTime > since);
+          return jsonResponse({
+            changed: Boolean(hasChanged),
+            latest_time: latestTime,
+            total_count: totalCount
+          });
+        } catch (e) {
+          return jsonResponse({ changed: false, error: e.message });
+        }
+      }
+
+      // ৬.৩ কনভারসেশন পঠিত (Mark as Read) করার API
+      if (request.method === "POST" && path === "/api/conversations/read") {
+        const body = await request.json().catch(() => ({}));
+        const { chat_id } = body;
+        if (!chat_id) return jsonResponse({ error: "Missing chat_id" }, 400);
+        const cleanId = String(chat_id).replace(/^(tg_|fb_|wa_)/, '');
+        if (env.DB) {
+          await ensureTables(env.DB);
+          await env.DB.prepare("UPDATE live_conversations SET unread_count = 0 WHERE chat_id = ?").bind(cleanId).run().catch(() => {});
+        }
+        const session = memorySessions.get(cleanId);
+        if (session) session.unread_count = 0;
+        return jsonResponse({ success: true, chat_id: cleanId, unread_count: 0 });
+      }
+
+      // ৬.৪ Gemini AI ইঞ্জিন কনফিগার ও টেস্ট API
+      if (request.method === "POST" && path === "/api/setup-ai") {
+        const body = await request.json().catch(() => ({}));
+        return await handleSetupAI(body, env);
       }
 
       if (request.method === "GET" && path === "/api/messages") {
@@ -335,20 +387,11 @@ export default {
         return jsonResponse(session ? session.messages : []);
       }
 
-      // টেস্ট ইনকামিং মেসেজ (ড্যাশবোর্ড বা কার্ল দিয়ে সরাসরি টেস্ট করার জন্য)
+      // টেস্ট ইনকামিং মেসেজ (ডামি ইউজার ইনজেকশন বন্ধ - নিরাপদ হেলথ চেক)
       if (request.method === "POST" && path === "/api/test-incoming") {
-        const body = await request.json().catch(() => ({}));
-        const platform = body.platform || "whatsapp";
-        const testSenderId = body.sender_id || (platform === "whatsapp" ? `wa_01882${Math.floor(Math.random() * 899999 + 100000)}` : `fb_user_${Math.floor(Math.random() * 89999 + 10000)}`);
-        const testName = body.sender_name || (platform === "whatsapp" ? "WhatsApp Customer (+88018...)" : "Facebook Customer");
-        const testMsg = body.message || "Assalamu alaikum, product er dam koto?";
-        const session = await appendMessageToSession(testSenderId, testName, "customer", testMsg, platform, env);
         return jsonResponse({
           success: true,
-          message: `Test message for ${platform} stored successfully in D1!`,
-          chat_id: testSenderId,
-          platform: platform,
-          last_message: testMsg
+          message: "Social Automate API is healthy and online."
         });
       }
 
@@ -1094,8 +1137,14 @@ async function handleGetSettings(env, url = null) {
     tiktok: { connected: false, account_name: '', account_id: '', access_token: '', client_key: 'awq5kzk0rv01o6z0', client_secret: '' },
     whatsapp: { connected: false, phone: '', mode: 'gateway', gateway_url: '', gateway_token: '', phone_number_id: '', access_token: '' },
     telegram: { connected: false, bot_token: '', admin_chat_id: '' },
-    github: { connected: false, repo: 'rifatrabbi104-oss/social-automate', token: '' }
+    github: { connected: false, repo: 'rifatrabbi104-oss/social-automate', token: '' },
+    ai: { connected: false, key_preview: '', model: env.GEMINI_MODEL || 'gemini-2.0-flash' }
   };
+
+  if (env.GEMINI_API_KEY && env.GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY") {
+    settings.ai.connected = true;
+    settings.ai.key_preview = `${env.GEMINI_API_KEY.slice(0, 6)}...${env.GEMINI_API_KEY.slice(-4)}`;
+  }
 
   let verifyToken = "social_automate_verify_token_2026";
   let accsList = [];
@@ -1150,6 +1199,13 @@ async function handleGetSettings(env, url = null) {
         }
         if (c.key === 'github_repo') settings.github.repo = c.value;
         if (c.key === 'meta_verify_token') verifyToken = c.value;
+        if (c.key === 'gemini_api_key' && c.value) {
+          settings.ai.connected = true;
+          settings.ai.key_preview = `${c.value.slice(0, 6)}...${c.value.slice(-4)}`;
+        }
+        if (c.key === 'gemini_model' && c.value) {
+          settings.ai.model = c.value;
+        }
       }
     } catch (e) {
       console.warn("Could not load settings from D1:", e);
@@ -1205,10 +1261,19 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
   for (const entry of entries) {
     const rawList = entry.messaging || entry.standby || [];
     for (const messaging of rawList) {
-      if (messaging && messaging.message && messaging.message.text && !messaging.message.is_echo) {
-        const senderId = String(messaging.sender.id);
-        const recipientId = String(messaging.recipient.id);
-        const incomingText = messaging.message.text.trim();
+      const isPostback = Boolean(messaging && messaging.postback && (messaging.postback.payload || messaging.postback.title));
+      const hasMessage = Boolean(messaging && messaging.message && messaging.message.text && !messaging.message.is_echo);
+
+      if (messaging && (hasMessage || isPostback)) {
+        const senderId = String(messaging.sender?.id || "");
+        const recipientId = String(messaging.recipient?.id || "");
+
+        // মেটা ডেভেলপার কনসোল থেকে টেস্ট পিং বা ডামি ইভেন্ট আসলে ড্যাশবোর্ডে ডামি চ্যাট না বানিয়ে শুধু 200 রেসপন্স দেওয়া
+        if (!senderId || senderId === "0" || recipientId === "0" || senderId === recipientId) {
+          return new Response("TEST_IGNORED", { status: 200 });
+        }
+
+        const incomingText = (hasMessage ? messaging.message.text : (messaging.postback.title || messaging.postback.payload || "")).trim();
         let senderName = `User (${senderId.slice(-4)})`;
         let senderAvatar = "";
 
@@ -1228,7 +1293,7 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
         // অ্যান্টি-স্প্যাম ডিবাউন্স
         const now = Date.now();
         const lastTime = userLastMessageTime.get(senderId) || 0;
-        if (now - lastTime < 2500) {
+        if (now - lastTime < 2000) {
           await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env, senderAvatar);
           continue;
         }
@@ -1236,14 +1301,14 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
 
         const session = await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env, senderAvatar);
 
-        // হ্যান্ডওভার চেক (যদি অ্যাডমিন টেকওভার থাকে এবং তা ২ ঘণ্টার বেশি পুরনো না হয়)
+        // হ্যান্ডওভার চেক (অ্যাডমিন টেকওভার যদি ১৫ মিনিটের বেশি আগের হয় তবে স্বয়ংক্রিয়ভাবে আবার AI সক্রিয় করা)
         const isTakeoverExpired = session.takeover_until 
           ? (now > session.takeover_until) 
-          : (session.last_message_at ? (now - new Date(session.last_message_at).getTime() > 2 * 3600 * 1000) : true);
+          : (session.last_message_at ? (now - new Date(session.last_message_at).getTime() > 15 * 60 * 1000) : true);
 
         if (session.admin_takeover) {
           if (isTakeoverExpired) {
-            // ২ ঘণ্টা পুরনো টেকওভার হলে স্বয়ংক্রিয়ভাবে আবার AI সক্রিয় করা
+            // ১৫ মিনিট পুরনো টেকওভার হলে স্বয়ংক্রিয়ভাবে আবার AI সক্রিয় করা
             session.admin_takeover = false;
             if (env.DB) {
               env.DB.prepare("UPDATE live_conversations SET admin_takeover = 0 WHERE chat_id = ?").bind(senderId).run().catch(() => {});
@@ -1262,14 +1327,24 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
         if (aiDecision.reply) {
           // মেটা গ্রাফ API দিয়ে পেজ থেকে মেসেঞ্জারে উত্তর পাঠানো
           if (token) {
-            await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                recipient: { id: senderId },
-                message: { text: aiDecision.reply }
-              })
-            });
+            try {
+              const fbSendRes = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  recipient: { id: senderId },
+                  message: { text: aiDecision.reply }
+                })
+              });
+              const fbSendData = await fbSendRes.json().catch(() => ({}));
+              if (!fbSendRes.ok) {
+                console.error("Facebook Send Error:", JSON.stringify(fbSendData));
+              } else {
+                console.log("Facebook Message sent successfully to", senderId);
+              }
+            } catch (fbErr) {
+              console.error("Facebook Send Fetch Exception:", fbErr.message);
+            }
           }
           await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook", env, senderAvatar);
         }
@@ -1454,12 +1529,182 @@ Response Format (JSON ONLY):
 
       // চ্যাট সেশনে সেভ করা যেন ড্যাশবোর্ডে সাথে সাথে চলে আসে
       const chatId = commenterId || `fb_comm_${commentId.slice(-6)}`;
-      await appendMessageToSession(chatId, commenterName, "customer", `[পোস্টে কমেন্ট করেছেন]: "${commentText}"`, "facebook", env);
-      await appendMessageToSession(chatId, commenterName, "assistant", aiDecision.private_reply, "facebook", env);
+      await appendMessageToSession(chatId, commenterName, "customer", `[পোস্টে কমেন্ট]: "${commentText}"`, "fb_comment", env);
+      await appendMessageToSession(chatId, commenterName, "assistant", aiDecision.private_reply, "fb_comment", env);
     } catch (privErr) {
       console.warn("Private comment DM error:", privErr.message);
     }
   }
+}
+
+// ========================================================
+// 🔄 ফেসবুক পেজের রিয়েল ইনবক্স ও কনভারসেশন ফেচ / সিঙ্ক ইঞ্জিন
+// ========================================================
+async function handleSyncFacebookConversations(env) {
+  const token = await getMetaPageToken(env);
+  if (!token) {
+    return jsonResponse({ success: false, error: "Facebook Page Access Token পাওয়া যায়নি। অনুগ্রহ করে কানেক্ট করুন।" }, 400);
+  }
+
+  let pageId = null;
+  if (env.DB) {
+    try {
+      const row = await env.DB.prepare("SELECT account_id FROM social_accounts WHERE platform = 'facebook' AND status = 'active' ORDER BY created_at DESC").first();
+      if (row && row.account_id) pageId = row.account_id;
+    } catch (e) {}
+  }
+  if (!pageId) pageId = "me";
+
+  try {
+    const url = `https://graph.facebook.com/v19.0/${pageId}/conversations?fields=id,snippet,updated_time,unread_count,senders,participants,messages{id,message,from,created_time}&access_token=${token}`;
+    const fbRes = await fetch(url);
+    const fbData = await fbRes.json();
+    if (!fbRes.ok || !fbData.data) {
+      return jsonResponse({ success: false, error: fbData?.error?.message || "Facebook Graph API কল ব্যর্থ হয়েছে" }, 400);
+    }
+
+    const conversations = fbData.data || [];
+    let syncedCount = 0;
+
+    if (env.DB) {
+      await ensureTables(env.DB);
+    }
+
+    for (const conv of conversations) {
+      // Find customer
+      const participants = conv.participants?.data || conv.senders?.data || [];
+      const customer = participants.find(p => String(p.id) !== String(pageId) && !String(p.name || '').toLowerCase().includes('ranonex')) || participants[0];
+      if (!customer || !customer.id) continue;
+
+      const customerId = String(customer.id);
+      let customerName = customer.name || `User (${customerId.slice(-4)})`;
+      let customerAvatar = "";
+
+      // Try fetching customer avatar from Graph API
+      try {
+        const uRes = await fetch(`https://graph.facebook.com/v19.0/${customerId}?fields=name,profile_pic&access_token=${token}`);
+        if (uRes.ok) {
+          const uData = await uRes.json();
+          if (uData.name) customerName = uData.name;
+          if (uData.profile_pic) customerAvatar = uData.profile_pic;
+        }
+      } catch (e) {}
+
+      // Messages in this conversation
+      const rawMsgs = conv.messages?.data || [];
+      const messages = rawMsgs.slice().reverse().map(m => {
+        const isFromPage = String(m.from?.id) === String(pageId) || String(m.from?.name || '').toLowerCase().includes('ranonex');
+        return {
+          sender_type: isFromPage ? "assistant" : "customer",
+          sender_name: m.from?.name || (isFromPage ? "Ranonex" : customerName),
+          message_text: m.message || "",
+          created_at: m.created_time || new Date().toISOString()
+        };
+      });
+
+      const lastMessageText = conv.snippet || (messages.length > 0 ? messages[messages.length - 1].message_text : "");
+      const lastMessageAt = conv.updated_time ? new Date(conv.updated_time).toISOString().replace("T", " ").replace("Z", "") : new Date().toISOString().replace("T", " ").slice(0, 19);
+      const unreadCount = Number(conv.unread_count || 0);
+
+      // Save to D1
+      if (env.DB) {
+        try {
+          await env.DB.prepare(`
+            INSERT INTO live_conversations (
+              chat_id, sender_name, sender_avatar, platform, channel_type, last_message, last_message_at, unread_count, admin_takeover, needs_attention, messages_json
+            ) VALUES (?, ?, ?, 'facebook', 'messenger', ?, ?, ?, 0, 0, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+              sender_name = excluded.sender_name,
+              sender_avatar = CASE WHEN excluded.sender_avatar != '' THEN excluded.sender_avatar ELSE live_conversations.sender_avatar END,
+              last_message = excluded.last_message,
+              last_message_at = excluded.last_message_at,
+              unread_count = excluded.unread_count,
+              messages_json = excluded.messages_json
+          `).bind(
+            customerId,
+            customerName,
+            customerAvatar,
+            lastMessageText,
+            lastMessageAt,
+            unreadCount,
+            JSON.stringify(messages)
+          ).run();
+        } catch (dbErr) {
+          console.warn("DB save error during FB sync:", dbErr);
+        }
+      }
+
+      // Memory session update
+      memorySessions.set(customerId, {
+        chat_id: customerId,
+        sender_name: customerName,
+        sender_avatar: customerAvatar,
+        platform: "facebook",
+        channel_type: "messenger",
+        last_message: lastMessageText,
+        last_message_at: lastMessageAt,
+        unread_count: unreadCount,
+        admin_takeover: false,
+        needs_attention: false,
+        messages: messages
+      });
+
+      syncedCount++;
+    }
+
+    return jsonResponse({
+      success: true,
+      message: `ফেসবুক পেজ থেকে ${syncedCount} টি রিয়েল কনভারসেশন ও মেসেজ সিঙ্ক সম্পন্ন হয়েছে!`,
+      synced_count: syncedCount
+    });
+  } catch (err) {
+    return jsonResponse({ success: false, error: err.message }, 500);
+  }
+}
+
+// ========================================================
+// 🤖 GEMINI AI কনফিগার ও লাইভ টেস্ট ইঞ্জিন
+// ========================================================
+async function handleSetupAI(body, env) {
+  const { gemini_api_key, gemini_model } = body;
+  if (!gemini_api_key || !gemini_api_key.trim()) {
+    return jsonResponse({ success: false, error: "Gemini API Key খালি রাখা যাবে না!" }, 400);
+  }
+  const cleanKey = gemini_api_key.trim();
+  const cleanModel = gemini_model ? gemini_model.trim() : "gemini-2.0-flash";
+
+  // টেস্ট রিকোয়েস্ট পাঠিয়ে ভ্যালিডেশন
+  try {
+    const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${cleanKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: "Hello" }] }]
+      })
+    });
+    if (!testRes.ok) {
+      const errData = await testRes.json().catch(() => ({}));
+      return jsonResponse({
+        success: false,
+        error: "Google Gemini API Key সঠিক নয়: " + (errData?.error?.message || `HTTP ${testRes.status}`)
+      }, 400);
+    }
+  } catch (netErr) {
+    return jsonResponse({ success: false, error: "Gemini সার্ভারে কানেক্ট করা যায়নি: " + netErr.message }, 500);
+  }
+
+  // D1-এ সেভ করা
+  if (env.DB) {
+    await ensureTables(env.DB);
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('gemini_api_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(cleanKey).run();
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('gemini_model', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(cleanModel).run();
+  }
+
+  return jsonResponse({
+    success: true,
+    message: "Google Gemini AI সফলভাবে কানেক্ট ও D1 ডেটাবেসে সেভ হয়েছে!",
+    model: cleanModel
+  });
 }
 
 // ========================================================
@@ -1872,15 +2117,19 @@ async function saveSession(chatId, session, env = null) {
   if (env && env.DB) {
     try {
       await ensureTables(env.DB);
+      const unread = Number(session.unread_count || 0);
+      const chType = session.channel_type || (session.platform === 'whatsapp' ? 'whatsapp' : (session.platform === 'fb_comment' ? 'comment' : 'messenger'));
       await env.DB.prepare(`
-        INSERT INTO live_conversations (chat_id, sender_name, sender_avatar, platform, last_message, last_message_at, admin_takeover, needs_attention, messages_json)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?)
+        INSERT INTO live_conversations (chat_id, sender_name, sender_avatar, platform, channel_type, last_message, last_message_at, unread_count, admin_takeover, needs_attention, messages_json)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
         ON CONFLICT(chat_id) DO UPDATE SET
           sender_name = excluded.sender_name,
-          sender_avatar = COALESCE(excluded.sender_avatar, live_conversations.sender_avatar),
+          sender_avatar = CASE WHEN excluded.sender_avatar != '' THEN excluded.sender_avatar ELSE live_conversations.sender_avatar END,
           platform = excluded.platform,
+          channel_type = excluded.channel_type,
           last_message = excluded.last_message,
           last_message_at = CURRENT_TIMESTAMP,
+          unread_count = excluded.unread_count,
           admin_takeover = excluded.admin_takeover,
           needs_attention = excluded.needs_attention,
           messages_json = excluded.messages_json
@@ -1889,7 +2138,9 @@ async function saveSession(chatId, session, env = null) {
         session.sender_name || `User (${chatId.slice(-4)})`,
         session.sender_avatar || "",
         session.platform || "facebook",
+        chType,
         session.last_message || "",
+        unread,
         session.admin_takeover ? 1 : 0,
         session.needs_attention ? 1 : 0,
         JSON.stringify(session.messages || [])
@@ -1910,8 +2161,10 @@ async function appendMessageToSession(chatId, senderName, senderType, text, plat
       sender_name: senderName,
       sender_avatar: senderAvatar || "",
       platform: platform,
+      channel_type: platform === "whatsapp" ? "whatsapp" : (platform === "fb_comment" ? "comment" : "messenger"),
       admin_takeover: false,
       takeover_until: 0,
+      unread_count: 0,
       needs_attention: false,
       last_message: text,
       last_message_at: nowStr,
@@ -1923,6 +2176,14 @@ async function appendMessageToSession(chatId, senderName, senderType, text, plat
   if (senderAvatar) session.sender_avatar = senderAvatar;
   session.last_message = text;
   session.last_message_at = nowStr;
+  session.platform = platform || session.platform;
+  if (platform === "fb_comment") session.channel_type = "comment";
+
+  if (senderType === "customer") {
+    session.unread_count = (session.unread_count || 0) + 1;
+  } else {
+    session.unread_count = 0;
+  }
 
   session.messages.push({
     id: `m_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -2067,7 +2328,10 @@ async function ensureTables(db) {
     try { await db.prepare("ALTER TABLE products ADD COLUMN last_posted_at TIMESTAMP").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE post_history ADD COLUMN image_url TEXT").run(); } catch (e) {}
     try { await db.prepare("ALTER TABLE live_conversations ADD COLUMN sender_avatar TEXT").run(); } catch (e) {}
-    try { await db.prepare("UPDATE live_conversations SET admin_takeover = 0 WHERE admin_takeover = 1 AND last_message_at < datetime('now', '-2 hours')").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE live_conversations ADD COLUMN unread_count INTEGER DEFAULT 0").run(); } catch (e) {}
+    try { await db.prepare("ALTER TABLE live_conversations ADD COLUMN channel_type TEXT DEFAULT 'messenger'").run(); } catch (e) {}
+    try { await db.prepare("DELETE FROM live_conversations WHERE chat_id = '0' OR chat_id LIKE 'fb_user_%' OR chat_id LIKE 'wa_01882%' OR chat_id LIKE 'test_%'").run(); } catch (e) {}
+    try { await db.prepare("UPDATE live_conversations SET admin_takeover = 0").run(); } catch (e) {}
   } catch (e) {}
 }
 

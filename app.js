@@ -29,6 +29,8 @@ const CACHE_KEYS = {
 
 let appState = {
   activeChatId: null,
+  channelFilter: 'all', // 'all', 'facebook', 'fb_comment', 'whatsapp', 'instagram'
+  statusFilter: 'all',  // 'all', 'unread', 'read'
   conversations: getLocalCache(CACHE_KEYS.CONVERSATIONS, []),
   messages: getLocalCache(CACHE_KEYS.MESSAGES, {}),
   products: getLocalCache(CACHE_KEYS.PRODUCTS, []),
@@ -54,11 +56,18 @@ document.addEventListener('DOMContentLoaded', () => {
   initBusinessDataForms();
   initSettingsForm();
   initManualSync();
+  initConversationFilters();
 
   // ⚡ 0-Worker Request Init: Render directly from localStorage!
   renderConversationList();
   renderProductsTable();
   populateBusinessProfileUI();
+
+  // 📡 Zero-Quota Waste Live Polling (pauses when tab is background/minimized)
+  startZeroWasteLivePolling();
+
+  // Initial Sync from server
+  syncWithBackend(true);
 
   if (appState.activeChatId) {
     renderActiveChat();
@@ -129,7 +138,7 @@ function initNavigation() {
 }
 
 // ========================================================
-// ২. ম্যানুয়াল অন-ডিমান্ড সিঙ্ক (০ অটো-পোলিং)
+// ২. ম্যানুয়াল অন-ডিমান্ড সিঙ্ক ও প্ল্যাটফর্ম ফিল্টারিং
 // ========================================================
 function initManualSync() {
   const btn = document.getElementById('btn-manual-sync');
@@ -142,67 +151,54 @@ function initManualSync() {
     });
   }
 
-  const testWaBtn = document.getElementById('btn-quick-test-wa');
-  if (testWaBtn) {
-    testWaBtn.addEventListener('click', async () => {
-      testWaBtn.disabled = true;
-      testWaBtn.textContent = '⏳ Sending...';
+  // ফেসবুক পেজের রিয়েল ইনবক্স ও মেসেজ সিঙ্ক বাটন
+  const syncFbBtn = document.getElementById('btn-sync-fb-inbox');
+  if (syncFbBtn) {
+    syncFbBtn.addEventListener('click', async () => {
+      syncFbBtn.disabled = true;
+      syncFbBtn.textContent = '⏳ Syncing FB...';
       try {
-        const res = await fetch(`${API_BASE}/test-incoming`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            platform: 'whatsapp',
-            sender_name: 'WhatsApp Buyer (+88018...)',
-            message: 'আসসালামু আলাইকুম ভাইয়া, পণ্যটি কি স্টকে আছে? ঢাকা সিটিতে ডেলিভারি কত দিনে পাবো?'
-          })
-        });
+        const res = await fetch(`${API_BASE}/sync-fb-conversations`, { method: 'POST' });
         const data = await res.json();
         if (data.success) {
-          showToast('✅ WhatsApp টেস্ট মেসেজ ক্লাউড D1-এ তৈরি হয়েছে!');
-          await syncWithBackend();
-          if (data.chat_id) {
-            openConversation(data.chat_id);
-          }
+          showToast(data.message || '✅ ফেসবুক পেজ থেকে মেসেজ সফলভাবে সিঙ্ক হয়েছে!');
+          await window.fetchLatestConversations(false);
+        } else {
+          showToast('❌ সিঙ্ক ব্যর্থ: ' + (data.error || 'Unknown error'));
         }
       } catch (e) {
-        showToast('❌ টেস্ট মেসেজ পাঠানো যায়নি: ' + e.message);
+        showToast('❌ সিঙ্ক এরর: ' + e.message);
       } finally {
-        testWaBtn.disabled = false;
-        testWaBtn.textContent = '🟢 Test WA';
+        syncFbBtn.disabled = false;
+        syncFbBtn.textContent = '🔄 Sync FB';
       }
     });
   }
+}
 
-  const testBtn = document.getElementById('btn-quick-test');
-  if (testBtn) {
-    testBtn.addEventListener('click', async () => {
-      testBtn.disabled = true;
-      testBtn.textContent = '⏳ Sending...';
-      try {
-        const res = await fetch(`${API_BASE}/test-incoming`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            platform: 'facebook',
-            sender_name: 'Mr. Rafiq (Test Customer)',
-            message: 'আসসালামু আলাইকুম, আপনাদের এই প্রোডাক্টের ডেলিভারি চার্জ কত?'
-          })
-        });
-        const data = await res.json();
-        if (data.success) {
-          showToast('✅ Facebook টেস্ট মেসেজ ক্লাউড D1-এ তৈরি হয়েছে!');
-          await syncWithBackend();
-          if (data.chat_id) {
-            openConversation(data.chat_id);
-          }
-        }
-      } catch (e) {
-        showToast('❌ টেস্ট মেসেজ পাঠানো যায়নি: ' + e.message);
-      } finally {
-        testBtn.disabled = false;
-        testBtn.textContent = '🔵 Test FB';
-      }
+// সোশ্যাল চ্যানেল ও রিড/আনরিড ফিল্টার হ্যান্ডলার
+function initConversationFilters() {
+  const chanContainer = document.getElementById('channel-filters');
+  if (chanContainer) {
+    chanContainer.addEventListener('click', (e) => {
+      const btn = e.target.closest('.chan-pill');
+      if (!btn) return;
+      chanContainer.querySelectorAll('.chan-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      appState.channelFilter = btn.dataset.chan || 'all';
+      renderConversationList();
+    });
+  }
+
+  const statContainer = document.getElementById('status-filters');
+  if (statContainer) {
+    statContainer.addEventListener('click', (e) => {
+      const btn = e.target.closest('.stat-pill');
+      if (!btn) return;
+      statContainer.querySelectorAll('.stat-pill').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      appState.statusFilter = btn.dataset.stat || 'all';
+      renderConversationList();
     });
   }
 }
@@ -252,9 +248,10 @@ async function syncWithBackend(isSilent = false) {
 }
 
 // ========================================================
-// 📡 লাইভ পোলিং ও ম্যানুয়াল D1 ফেচ কন্ট্রোলার
+// 📡 ৩. জিরো-কোটা লাইভ পোলিং ও কনভারসেশন সিঙ্ক ইঞ্জিন
 // ========================================================
 let livePollingTimer = null;
+let lastKnownLatestTime = '';
 let lastKnownTopMessage = '';
 
 // সাউন্ড প্লেয়ার (Web Audio API - কোনো বাহ্যিক ফাইল লাগে না)
@@ -279,7 +276,7 @@ window.fetchLatestConversations = async function(isManual = false) {
   const btn = document.getElementById('btn-fetch-d1-convs');
   if (isManual && btn) {
     btn.disabled = true;
-    btn.textContent = '⏳ Fetching...';
+    btn.textContent = '⏳';
   }
 
   try {
@@ -297,19 +294,21 @@ window.fetchLatestConversations = async function(isManual = false) {
         const pLabel = topConv.platform === 'facebook' ? '🔵 FB' : (topConv.platform === 'whatsapp' ? '🟢 WA' : '💬');
         showToast(`💬 [${pLabel}] ${topConv.name}: "${(topConv.last_message || '').substring(0, 35)}..."`);
 
-        // যদি এই চ্যাটটি বর্তমানে ওপেন থাকে, তবে রিয়েল-টাইমে মেসেজগুলো রিফ্রেশ করা
         if (String(appState.activeChatId) === String(topConv.id)) {
           await forceRefreshActiveChatMessages(topConv.id);
         }
       }
 
       lastKnownTopMessage = currentTopMsg;
+      if (topConv && topConv.last_message_at) {
+        lastKnownLatestTime = topConv.last_message_at;
+      }
       appState.conversations = convs;
       setLocalCache(CACHE_KEYS.CONVERSATIONS, convs);
       renderConversationList();
 
       if (isManual) {
-        showToast(`✅ D1 থেকে ${convs.length} টি কনভারসেশন সিঙ্ক হয়েছে!`);
+        showToast(`✅ ${convs.length} টি কনভারসেশন লোড হয়েছে!`);
       }
     }
   } catch (err) {
@@ -317,52 +316,45 @@ window.fetchLatestConversations = async function(isManual = false) {
   } finally {
     if (isManual && btn) {
       btn.disabled = false;
-      btn.textContent = '🔄 Fetch D1';
+      btn.textContent = '↻';
     }
   }
 };
 
-window.toggleLivePolling = function() {
-  const btn = document.getElementById('btn-toggle-live-polling');
-  const badge = document.getElementById('live-polling-badge');
+// ⚡ জিরো-কোটা লাইভ পোলিং (ট্যাব মিনিমাইজ বা ব্যাকগ্রাউন্ডে থাকলে অটো-পজ, কোনো কুয়েরি অপচয় হবে না)
+function startZeroWasteLivePolling() {
+  if (livePollingTimer) clearInterval(livePollingTimer);
 
-  if (livePollingTimer) {
-    // টার্ন অফ
-    clearInterval(livePollingTimer);
-    livePollingTimer = null;
-    if (btn) {
-      btn.textContent = '📡 Live: OFF';
-      btn.style.background = '';
-      btn.style.color = '#60a5fa';
-      btn.style.borderColor = 'rgba(59, 130, 246, 0.4)';
-    }
-    if (badge) {
-      badge.textContent = '⚪ Manual Sync';
-      badge.style.background = 'rgba(255,255,255,0.06)';
-      badge.style.color = 'var(--text-muted)';
-    }
-    showToast('⚪ Live Auto-Sync বন্ধ (Worker 0 Request Mode)');
-  } else {
-    // টার্ন অন
-    window.fetchLatestConversations(false);
-    livePollingTimer = setInterval(() => {
-      window.fetchLatestConversations(false);
-    }, 4000);
+  const checkLive = async () => {
+    // ১. ব্রাউজার ট্যাব ব্যাকগ্রাউন্ডে থাকলে রিকোয়েস্ট পাঠানো সম্পূর্ণ বন্ধ
+    if (document.hidden) return;
 
-    if (btn) {
-      btn.textContent = '🟢 Live: ON (4s)';
-      btn.style.background = 'rgba(16, 185, 129, 0.15)';
-      btn.style.color = 'var(--emerald)';
-      btn.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+    try {
+      const url = lastKnownLatestTime
+        ? `${API_BASE}/conversations-check?since=${encodeURIComponent(lastKnownLatestTime)}`
+        : `${API_BASE}/conversations-check`;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      // ২. শুধুমাত্র ডেটাবেসে পরিবর্তন আসলেই সম্পূর্ণ কনভারসেশন রিলোড হবে (০ কুয়েরি ড্রেন)
+      if (data && data.changed) {
+        lastKnownLatestTime = data.latest_time || '';
+        await window.fetchLatestConversations(false);
+      }
+    } catch (e) {}
+  };
+
+  // প্রতি ৬ সেকেন্ডে শুধুমাত্র হালকা টাইমস্ট্যাম্প চেক
+  livePollingTimer = setInterval(checkLive, 6000);
+
+  // ট্যাব অ্যাক্টিভ হলে সাথে সাথে চেক করা
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      checkLive();
     }
-    if (badge) {
-      badge.textContent = '🟢 Live Active (4s)';
-      badge.style.background = 'rgba(16, 185, 129, 0.2)';
-      badge.style.color = 'var(--emerald)';
-    }
-    showToast('🟢 Live Auto-Sync চালু (নতুন মেসেজ আসামাত্র প্রতি ৪ সেকেন্ডে স্ক্রিনে দেখাবে)');
-  }
-};
+  });
+}
 
 async function forceRefreshActiveChatMessages(chatId) {
   try {
@@ -377,38 +369,86 @@ async function forceRefreshActiveChatMessages(chatId) {
 }
 
 // ========================================================
-// ৩. কনভারসেশন ও চ্যাট লিস্ট (লোকাল স্টোরেজ থেকে রেন্ডার)
+// ৪. কনভারসেশন ও চ্যাট লিস্ট (ফিল্টারড রেন্ডার ও রিড/আনরিড)
 // ========================================================
 function renderConversationList() {
   const listEl = document.getElementById('conversation-list');
   const badge = document.getElementById('unread-badge');
   const statActive = document.getElementById('stat-active-sessions');
 
-  if (badge) badge.textContent = appState.conversations.length;
-  if (statActive) statActive.textContent = appState.conversations.length;
-
   if (!listEl) return;
 
-  if (appState.conversations.length === 0) {
+  // ১. কাউন্টার আপডেট (চ্যানেল এবং আনরিড ব্যাজ)
+  const convs = appState.conversations || [];
+  const countAll = convs.length;
+  const countFb = convs.filter(c => c.platform === 'facebook' && (c.channel_type === 'messenger' || !c.channel_type || c.channel_type === 'facebook')).length;
+  const countComm = convs.filter(c => c.channel_type === 'comment' || c.platform === 'fb_comment').length;
+  const countWa = convs.filter(c => c.platform === 'whatsapp').length;
+  const countIg = convs.filter(c => c.platform === 'instagram').length;
+  const countUnread = convs.filter(c => Number(c.unread_count || 0) > 0).length;
+
+  const elAll = document.getElementById('pill-count-all'); if (elAll) elAll.textContent = countAll;
+  const elFb = document.getElementById('pill-count-fb'); if (elFb) elFb.textContent = countFb;
+  const elComm = document.getElementById('pill-count-comm'); if (elComm) elComm.textContent = countComm;
+  const elWa = document.getElementById('pill-count-wa'); if (elWa) elWa.textContent = countWa;
+  const elIg = document.getElementById('pill-count-ig'); if (elIg) elIg.textContent = countIg;
+  const elUnread = document.getElementById('pill-count-unread'); if (elUnread) elUnread.textContent = countUnread;
+
+  if (badge) badge.textContent = countUnread > 0 ? countUnread : countAll;
+  if (statActive) statActive.textContent = countAll;
+
+  // ২. ফিল্টারিং লজিক (প্ল্যাটফর্ম ও রিড/আনরিড ফিল্টার)
+  const filteredList = convs.filter(c => {
+    // চ্যানেল ফিল্টার
+    if (appState.channelFilter === 'facebook') {
+      if (!(c.platform === 'facebook' && (c.channel_type === 'messenger' || !c.channel_type || c.channel_type === 'facebook'))) return false;
+    } else if (appState.channelFilter === 'fb_comment') {
+      if (!(c.channel_type === 'comment' || c.platform === 'fb_comment')) return false;
+    } else if (appState.channelFilter === 'whatsapp') {
+      if (c.platform !== 'whatsapp') return false;
+    } else if (appState.channelFilter === 'instagram') {
+      if (c.platform !== 'instagram') return false;
+    }
+
+    // স্ট্যাটাস ফিল্টার (রিড / আনরিড)
+    const isUnread = Number(c.unread_count || 0) > 0;
+    if (appState.statusFilter === 'unread' && !isUnread) return false;
+    if (appState.statusFilter === 'read' && isUnread) return false;
+
+    return true;
+  });
+
+  if (filteredList.length === 0) {
     listEl.innerHTML = `
       <div style="padding: 40px 16px; text-align: center; color: var(--text-dim); font-size: 13px;">
         <div style="font-size: 36px; margin-bottom: 8px;">💬</div>
-        <div style="color: var(--text-muted); font-weight: 600;">কোনো চ্যাট ক্যাশ করা নেই</div>
-        <p style="font-size: 11px; margin-top: 4px; line-height: 1.5;">কাস্টমার মেসেজ পাঠালে অথবা 🔄 Sync চাপলে চ্যাট দেখা যাবে।</p>
+        <div style="color: var(--text-muted); font-weight: 600;">এই ফিল্টারে কোনো চ্যাট নেই</div>
+        <p style="font-size: 11px; margin-top: 4px; line-height: 1.5;">অন্য ফিল্টার সিলেক্ট করুন অথবা উপরে <strong>🔄 Sync FB</strong> বাটনে চাপ দিন।</p>
       </div>
     `;
     return;
   }
 
   listEl.innerHTML = '';
-  appState.conversations.forEach(c => {
+  filteredList.forEach(c => {
     const item = document.createElement('div');
     const isActive = String(c.id) === String(appState.activeChatId);
-    item.className = `conv-item ${isActive ? 'active' : ''}`;
+    const isUnread = Number(c.unread_count || 0) > 0;
+    item.className = `conv-item ${isActive ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
 
     const initial = (c.name || 'U').charAt(0).toUpperCase();
     const timeFormatted = formatTime(c.last_message_at);
-    const platformLabel = c.platform === 'facebook' ? '🔵 FB' : (c.platform === 'whatsapp' ? '🟢 WA' : '💬 Chat');
+
+    // চ্যানেল ব্যাজ ও আইকন
+    let platformLabel = '🔵 Messenger';
+    if (c.channel_type === 'comment' || c.platform === 'fb_comment') {
+      platformLabel = '💬 FB Comment';
+    } else if (c.platform === 'whatsapp') {
+      platformLabel = '🟢 WhatsApp';
+    } else if (c.platform === 'instagram') {
+      platformLabel = '📸 Instagram';
+    }
+
     const avatarHtml = c.sender_avatar 
       ? `<img src="${escapeHtml(c.sender_avatar)}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;" onerror="this.onerror=null;this.parentElement.textContent='${initial}';">` 
       : initial;
@@ -424,12 +464,25 @@ function renderConversationList() {
         <div class="conv-badges">
           <span class="badge-tag platform">${platformLabel}</span>
           ${c.admin_takeover ? '<span class="badge-tag takeover">👤 Handover</span>' : '<span class="badge-tag ai">🤖 AI Active</span>'}
+          ${isUnread ? `<span class="unread-count-badge">🔴 ${c.unread_count}</span>` : ''}
         </div>
       </div>
     `;
 
-    item.addEventListener('click', () => {
+    item.addEventListener('click', async () => {
       appState.activeChatId = c.id;
+
+      // রিড স্ট্যাটাস আপডেট
+      if (Number(c.unread_count || 0) > 0) {
+        c.unread_count = 0;
+        item.classList.remove('unread');
+        fetch(`${API_BASE}/conversations/read`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: c.id })
+        }).catch(() => {});
+      }
+
       renderConversationList();
       renderActiveChat();
       loadChatMessages(c.id);
@@ -1586,6 +1639,79 @@ function initSettingsForm() {
       }
     });
   }
+
+  // ৫.২ Google Gemini AI Connect Form
+  const aiForm = document.getElementById('ai-connect-form');
+  const aiKeyInput = document.getElementById('input-gemini-api-key');
+  const aiModelSelect = document.getElementById('select-gemini-model');
+  const aiSubmitBtn = document.getElementById('btn-save-ai-key');
+  const aiResultBox = document.getElementById('ai-setup-result');
+  const aiBadgeStatus = document.getElementById('badge-ai-status');
+  const btnToggleShowAiKey = document.getElementById('btn-toggle-show-ai-key');
+
+  if (btnToggleShowAiKey && aiKeyInput) {
+    btnToggleShowAiKey.addEventListener('click', () => {
+      aiKeyInput.type = aiKeyInput.type === 'password' ? 'text' : 'password';
+    });
+  }
+
+  if (aiForm) {
+    aiForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const apiKey = aiKeyInput ? aiKeyInput.value.trim() : '';
+      const model = aiModelSelect ? aiModelSelect.value : 'gemini-2.0-flash';
+
+      if (!apiKey) {
+        showToast('⚠️ Gemini API Key দিন!');
+        return;
+      }
+
+      if (aiSubmitBtn) {
+        aiSubmitBtn.disabled = true;
+        aiSubmitBtn.textContent = '⏳ Testing & Saving AI Key...';
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/setup-ai`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gemini_api_key: apiKey, gemini_model: model })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (aiResultBox) {
+            aiResultBox.style.display = 'block';
+            aiResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            aiResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            aiResultBox.style.color = '#a7f3d0';
+            aiResultBox.innerHTML = `<strong>🎉 ${escapeHtml(data.message)}</strong><br>মডেল: <code>${escapeHtml(data.model || model)}</code> - এখন কাস্টমার মেসেজ বা কমেন্ট করলে AI স্বয়ংক্রিয়ভাবে রিপ্লাই দেবে।`;
+          }
+          if (aiBadgeStatus) {
+            aiBadgeStatus.textContent = '🟢 Connected';
+            aiBadgeStatus.style.background = 'rgba(16, 185, 129, 0.2)';
+            aiBadgeStatus.style.color = '#34d399';
+          }
+          showToast('🎉 Gemini AI সফলভাবে সক্রিয় হয়েছে!');
+        } else {
+          if (aiResultBox) {
+            aiResultBox.style.display = 'block';
+            aiResultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+            aiResultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+            aiResultBox.style.color = '#fca5a5';
+            aiResultBox.innerHTML = `<strong>❌ সংযোগ ব্যর্থ:</strong> ${escapeHtml(data.error || 'Gemini API Error')}`;
+          }
+          showToast('❌ Gemini AI কী সেভ করা যায়নি।');
+        }
+      } catch (err) {
+        showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
+      } finally {
+        if (aiSubmitBtn) {
+          aiSubmitBtn.disabled = false;
+          aiSubmitBtn.textContent = '💾 Save & Test Gemini AI';
+        }
+      }
+    });
+  }
 }
 
 // 🌐 সেটিংস ও ক্রেডেনশিয়াল সার্ভার থেকে ফেচ করে ফর্ম পূরণ করা
@@ -1671,6 +1797,28 @@ async function loadSettingsFromServer() {
         tgBadge.textContent = '🟢 Connected';
         tgBadge.style.background = 'rgba(16, 185, 129, 0.2)';
         tgBadge.style.color = '#34d399';
+      }
+    }
+
+    // ৬. Gemini AI প্রি-ফিল
+    const aiKeyInput = document.getElementById('input-gemini-api-key');
+    const aiModelSelect = document.getElementById('select-gemini-model');
+    const aiBadge = document.getElementById('badge-ai-status');
+    if (s.ai) {
+      if (s.ai.model && aiModelSelect) aiModelSelect.value = s.ai.model;
+      if (s.ai.connected) {
+        if (aiKeyInput && s.ai.key_preview) aiKeyInput.placeholder = `সংরক্ষিত চাবি: ${s.ai.key_preview}`;
+        if (aiBadge) {
+          aiBadge.textContent = '🟢 Connected';
+          aiBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+          aiBadge.style.color = '#34d399';
+        }
+      } else {
+        if (aiBadge) {
+          aiBadge.textContent = '⚪ Not Configured';
+          aiBadge.style.background = 'rgba(245, 158, 11, 0.2)';
+          aiBadge.style.color = '#fbbf24';
+        }
       }
     }
   } catch (e) {
