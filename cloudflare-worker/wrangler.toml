@@ -2,6 +2,9 @@ name = "social-automate"
 main = "src/index.js"
 compatibility_date = "2024-04-01"
 
+[triggers]
+crons = ["*/15 * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "social_automate_db"

@@ -352,6 +352,13 @@ export default {
       }
 
       // ==========================================
+      // ৭.২.১ ক্রন শিডিউল স্ট্যাটাস ও ম্যানুয়াল রান ডায়াগনস্টিক API
+      // ==========================================
+      if (request.method === "GET" && (path === "/api/cron-status" || path === "/api/check-schedule")) {
+        return await handleCronStatusCheck(url, env);
+      }
+
+      // ==========================================
       // ৭.৩ অটো-পোস্টিং টাস্ক ও হিস্ট্রি API (GitHub Actions এর জন্য)
       // ==========================================
       if (request.method === "GET" && path === "/api/auto-post-task") {
@@ -1911,6 +1918,7 @@ async function publishToFacebookPage(product, caption, env) {
         body: JSON.stringify({
           url: product.image_url,
           caption: caption,
+          published: true,
           access_token: token
         })
       });
@@ -1939,6 +1947,7 @@ async function publishToFacebookPage(product, caption, env) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       message: caption,
+      published: true,
       access_token: token
     })
   });
@@ -2015,7 +2024,7 @@ async function handlePublishProductNow(body, env) {
 // ⏰ শিডিউল্ড অটো-পোস্টিং এক্সিকিউটর (Ultra-Low CPU)
 // ========================================================
 async function handleScheduledAutoPosting(env) {
-  if (!env.DB) return;
+  if (!env.DB) return { total_active: 0, published_count: 0, log: ["D1 Database missing"] };
   await ensureTables(env.DB);
 
   // ১. সক্রিয় অটো-পোস্ট প্রোডাক্টগুলো নেওয়া
@@ -2023,15 +2032,28 @@ async function handleScheduledAutoPosting(env) {
     "SELECT * FROM products WHERE is_active = 1 AND daily_auto_post = 1"
   ).all();
 
-  if (!prods || prods.length === 0) return;
+  if (!prods || prods.length === 0) {
+    return { total_active: 0, published_count: 0, log: ["No active auto-post products in D1"] };
+  }
 
   const now = Date.now();
   // বাংলাদেশ সময় (UTC+6)
   const bdtDate = new Date(now + 6 * 3600 * 1000);
   const currentHour = bdtDate.getUTCHours();
+  const currentMinute = bdtDate.getUTCMinutes();
+  const executionLog = [];
 
   for (const p of prods) {
     let isDue = false;
+    let reason = "";
+
+    // last_posted_at parsing (Strict UTC)
+    let lastPosted = 0;
+    if (p.last_posted_at) {
+      const cleanStr = String(p.last_posted_at).replace(" ", "T");
+      lastPosted = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z").getTime();
+      if (isNaN(lastPosted)) lastPosted = 0;
+    }
 
     // ১. ইন্টারভ্যাল বেসিস (যেমন প্রতি ২, ৪, ৬, ৮, ১২, ২৪ ঘণ্টা পর পর)
     if (p.schedule_type === 'interval' || (p.posting_time && p.posting_time.startsWith('interval_'))) {
@@ -2039,35 +2061,127 @@ async function handleScheduledAutoPosting(env) {
       if (p.posting_time && p.posting_time.startsWith('interval_')) {
         hours = parseInt(p.posting_time.replace('interval_', '')) || 4;
       }
-      const lastPosted = p.last_posted_at ? new Date(p.last_posted_at).getTime() : 0;
-      if (now - lastPosted >= hours * 3600 * 1000) {
+      const elapsedHours = (now - lastPosted) / (3600 * 1000);
+      if (lastPosted === 0 || elapsedHours >= hours) {
         isDue = true;
+        reason = lastPosted === 0 ? "First-time post (never posted before)" : `Interval of ${hours}h passed (${elapsedHours.toFixed(1)}h elapsed)`;
+      } else {
+        reason = `Next post in ${(hours - elapsedHours).toFixed(1)} hours`;
       }
     } 
     // ২. নির্দিষ্ট দৈনিক সময় বেসিস (যেমন "10:00", "20:00")
     else {
       const times = (p.posting_time || '10:00').split(',').map(t => t.trim());
-      const lastPosted = p.last_posted_at ? new Date(p.last_posted_at).getTime() : 0;
       const hoursSinceLast = (now - lastPosted) / (3600 * 1000);
-      if (hoursSinceLast >= 3.5) {
+      if (lastPosted === 0 || hoursSinceLast >= 3.5) {
         for (const t of times) {
           const [tHour] = t.split(':').map(Number);
           if (tHour === currentHour) {
             isDue = true;
+            reason = `Scheduled daily hour match: ${tHour}:00 BDT`;
             break;
           }
         }
       }
+      if (!isDue && !reason) {
+        reason = `Scheduled for ${times.join(', ')} BDT (Current BDT: ${currentHour}:${String(currentMinute).padStart(2, '0')})`;
+      }
     }
 
     if (isDue) {
-      console.log(`🚀 [Auto-Post Due] Publishing product: ${p.name} (ID: ${p.id})`);
+      console.log(`🚀 [Auto-Post Due] Publishing product: ${p.name} (ID: ${p.id}) - Reason: ${reason}`);
       try {
-        await handlePublishProductNow({ product_id: p.id, platform: p.target_platform || 'facebook' }, env);
+        const pubRes = await handlePublishProductNow({ product_id: p.id, platform: p.target_platform || 'facebook' }, env);
+        executionLog.push({ product_id: p.id, name: p.name, status: "published", post_id: pubRes.post_id || null, reason });
       } catch (err) {
         console.error(`Auto-post failed for product ${p.id}:`, err.message);
+        executionLog.push({ product_id: p.id, name: p.name, status: "error", error: err.message, reason });
       }
+    } else {
+      executionLog.push({ product_id: p.id, name: p.name, status: "skipped", reason });
     }
   }
+
+  return {
+    total_active: prods.length,
+    published_count: executionLog.filter(e => e.status === "published").length,
+    log: executionLog
+  };
 }
+
+// ========================================================
+// 🔍 ক্রন ডায়াগনস্টিক ও স্ট্যাটাস চেকার
+// ========================================================
+async function handleCronStatusCheck(url, env) {
+  if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+  await ensureTables(env.DB);
+
+  const shouldRun = url.searchParams.get("run") === "true" || url.searchParams.get("execute") === "1";
+  if (shouldRun) {
+    const result = await handleScheduledAutoPosting(env);
+    return jsonResponse({
+      success: true,
+      action: "Executed auto-post check",
+      timestamp: new Date().toISOString(),
+      ...result
+    });
+  }
+
+  const { results: prods } = await env.DB.prepare(
+    "SELECT * FROM products WHERE is_active = 1 AND daily_auto_post = 1"
+  ).all();
+
+  const now = Date.now();
+  const bdtDate = new Date(now + 6 * 3600 * 1000);
+  const currentHour = bdtDate.getUTCHours();
+  const currentMinute = bdtDate.getUTCMinutes();
+
+  const report = (prods || []).map(p => {
+    let lastPosted = 0;
+    if (p.last_posted_at) {
+      const cleanStr = String(p.last_posted_at).replace(" ", "T");
+      lastPosted = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z").getTime();
+      if (isNaN(lastPosted)) lastPosted = 0;
+    }
+    const elapsedHours = lastPosted ? (now - lastPosted) / (3600 * 1000) : null;
+    let isDue = false;
+    let intervalHours = p.interval_hours || 4;
+    if (p.posting_time && p.posting_time.startsWith('interval_')) {
+      intervalHours = parseInt(p.posting_time.replace('interval_', '')) || 4;
+    }
+
+    if (p.schedule_type === 'interval' || (p.posting_time && p.posting_time.startsWith('interval_'))) {
+      isDue = lastPosted === 0 || (elapsedHours !== null && elapsedHours >= intervalHours);
+    } else {
+      const times = (p.posting_time || '10:00').split(',').map(t => t.trim());
+      if (lastPosted === 0 || (elapsedHours !== null && elapsedHours >= 3.5)) {
+        for (const t of times) {
+          const [tHour] = t.split(':').map(Number);
+          if (tHour === currentHour) { isDue = true; break; }
+        }
+      }
+    }
+
+    return {
+      id: p.id,
+      name: p.name,
+      schedule_type: p.schedule_type,
+      posting_time: p.posting_time,
+      interval_hours: intervalHours,
+      last_posted_at: p.last_posted_at || "Never",
+      hours_since_last_post: elapsedHours !== null ? Number(elapsedHours.toFixed(2)) : null,
+      is_due_now: isDue,
+      status: isDue ? "DUE FOR POSTING" : (elapsedHours !== null ? `Next in ${(intervalHours - elapsedHours).toFixed(1)}h` : "Ready")
+    };
+  });
+
+  return jsonResponse({
+    current_time_utc: new Date().toISOString(),
+    current_time_bdt: `${bdtDate.toISOString().replace('T', ' ').substring(0, 19)} (UTC+6)`,
+    cron_setup_instruction: "Cloudflare Dashboard > Workers & Pages > social-automate > Settings > Triggers > Cron Triggers-এ '*/15 * * * *' শিডিউল যোগ করুন।",
+    active_scheduled_products: report.length,
+    products: report
+  });
+}
+
 

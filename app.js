@@ -634,6 +634,46 @@ window.deleteProduct = async function(id) {
   } catch (e) {}
 };
 
+// ⏱️ ক্রন শিডিউল স্ট্যাটাস ও টেস্ট রান
+window.checkCronSchedule = async function(triggerNow = false) {
+  try {
+    const url = triggerNow ? `${API_BASE}/cron-status?run=true` : `${API_BASE}/cron-status`;
+    showToast(triggerNow ? '⏳ অটো-পোস্ট চেক চলছে...' : '🔍 শিডিউল স্ট্যাটাস লোড হচ্ছে...');
+    const res = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+
+    if (triggerNow) {
+      alert(`⏰ শিডিউল রান সম্পন্ন!\n\nমোট সক্রিয় প্রোডাক্ট: ${data.total_active || 0}\nপোস্ট পাবলিশ হয়েছে: ${data.published_count || 0}\n\nলগ:\n` + JSON.stringify(data.log, null, 2));
+      return;
+    }
+
+    let msg = `⏰ সোশ্যাল অটোমেট ক্রন শিডিউল স্ট্যাটাস:\n`;
+    msg += `------------------------------------\n`;
+    msg += `বাংলাদেশ সময়: ${data.current_time_bdt || 'N/A'}\n`;
+    msg += `মোট সক্রিয় শিডিউল প্রোডাক্ট: ${data.active_scheduled_products || 0}\n\n`;
+
+    if (!data.products || data.products.length === 0) {
+      msg += `কোনো প্রোডাক্ট সক্রিয় নেই। Product ফর্মে "Auto-Post Status: 🟢 চালু" সিলেক্ট করে সেভ করুন।`;
+    } else {
+      data.products.forEach((p, idx) => {
+        msg += `${idx + 1}. ${p.name}\n`;
+        msg += `   • শিডিউল: প্রতি ${p.interval_hours} ঘণ্টা পর পর (Time: ${p.posting_time})\n`;
+        msg += `   • পূর্বের পোস্ট: ${p.last_posted_at} (${p.hours_since_last_post !== null ? p.hours_since_last_post + ' ঘণ্টা আগে' : 'কখনোই পোস্ট হয়নি'})\n`;
+        msg += `   • স্ট্যাটাস: ${p.status}\n\n`;
+      });
+    }
+
+    msg += `\n⚠️ গুরুত্বপূর্ণ নোট:\nক্লাউডফ্লেয়ার ড্যাশবোর্ডে Worker Triggers-এ '*/15 * * * *' Cron Trigger যোগ করা থাকতে হবে যাতে ক্লাউডফ্লেয়ার ব্যাকগ্রাউন্ডে স্বয়ংক্রিয়ভাবে চালায়।\n\nআপনি কি এখনই শিডিউল রান টেস্ট করতে চান?`;
+
+    if (confirm(msg)) {
+      window.checkCronSchedule(true);
+    }
+  } catch (err) {
+    alert('❌ ক্রন স্ট্যাটাস লোড ব্যর্থ: ' + err.message);
+  }
+};
+
 function populateBusinessProfileUI() {
   const data = appState.businessProfile;
   if (data.store_name) document.getElementById('store-name').value = data.store_name;

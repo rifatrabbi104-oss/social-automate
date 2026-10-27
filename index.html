@@ -290,7 +290,10 @@
               <button type="submit" class="btn-primary" id="btn-add-product">💾 Save Product & Schedule to D1</button>
             </form>
 
-            <h4 style="font-size: 14px; margin-bottom: 12px; color: var(--text-main);">D1 প্রোডাক্ট তালিকা ও ১-ক্লিক পোস্ট কন্ট্রোল:</h4>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+              <h4 style="font-size: 14px; margin: 0; color: var(--text-main);">D1 প্রোডাক্ট তালিকা ও ১-ক্লিক পোস্ট কন্ট্রোল:</h4>
+              <button type="button" class="btn-refresh" style="font-size: 11px; padding: 5px 12px; background: rgba(59, 130, 246, 0.1); border-color: rgba(59, 130, 246, 0.3); color: #60a5fa;" onclick="checkCronSchedule()">⏱️ Check Cron Schedule Status</button>
+            </div>
             <div class="posts-table-wrapper">
               <table class="data-table">
                 <thead>
@@ -617,6 +620,6 @@
       }
     };
   </script>
-  <script src="app.js?v=2.1.1"></script>
+  <script src="app.js?v=2.1.2"></script>
 </body>
 </html>
