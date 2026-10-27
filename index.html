@@ -565,6 +565,36 @@
             </div>
           </div>
 
+          <!-- 📢 CARD 3.5: Telegram Instant Admin Order Alert -->
+          <div class="card">
+            <div class="card-header">
+              <h3>📢 Telegram Instant Order Alert Bot</h3>
+              <span class="badge-status published" id="badge-tg-status">Instant Notifications</span>
+            </div>
+            <p class="section-desc">AI চ্যাটে কাস্টমারের সাথে কথা বলে কোনো অর্ডার কনফার্ম করলেই সাথে সাথে আপনার টেলিগ্রামে সম্পূর্ণ কাস্টমার ডিটেইলস (নাম, ফোন, ঠিকানা, প্রোডাক্ট, ভ্যারিয়েন্ট) সহ নোটিফিকেশন পাঠাবে:</p>
+
+            <form id="telegram-connect-form">
+              <div class="form-group">
+                <label>Telegram Bot Token (BotFather থেকে পাওয়া)</label>
+                <input type="password" id="input-tg-bot-token" placeholder="যেমন: 7123456789:AAHxxxxxxxxxxxxxxxxxxxx">
+                <small class="help-text">@BotFather থেকে একটি ফ্রি বট খুলে যে HTTP API Token পাবেন তা এখানে দিন।</small>
+              </div>
+
+              <div class="form-group">
+                <label>Telegram Admin Chat ID (আপনার ইউজার আইডি বা চ্যানেলের আইডি)</label>
+                <input type="text" id="input-tg-chat-id" placeholder="যেমন: 123456789 বা -100xxxxxxxxxx">
+                <small class="help-text">@userinfobot বা @getmyid_bot দিয়ে আপনার নিজের Telegram Chat ID পেয়ে যাবেন।</small>
+              </div>
+
+              <div style="display: flex; gap: 10px;">
+                <button type="submit" class="btn-secondary" id="btn-save-telegram" style="flex: 1;">💾 Save Telegram Keys to D1</button>
+                <button type="button" class="btn-primary" id="btn-test-telegram" style="flex: 1.2; background: linear-gradient(135deg, #0088cc, #00aced); border: none; font-weight: 700; color: #fff;">🔔 Send Test Order Alert</button>
+              </div>
+            </form>
+
+            <div id="telegram-setup-result" style="display: none; margin-top: 16px; padding: 14px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.6;"></div>
+          </div>
+
           <!-- 🐙 CARD 4: GitHub Actions Posting Engine -->
           <div class="card">
             <div class="card-header">

@@ -1470,6 +1470,105 @@ function initSettingsForm() {
       }
     });
   }
+
+  // ৫.১ Telegram Instant Admin Order Alert Form
+  const tgForm = document.getElementById('telegram-connect-form');
+  const tgTokenInput = document.getElementById('input-tg-bot-token');
+  const tgChatIdInput = document.getElementById('input-tg-chat-id');
+  const tgSubmitBtn = document.getElementById('btn-save-telegram');
+  const tgTestBtn = document.getElementById('btn-test-telegram');
+  const tgResultBox = document.getElementById('telegram-setup-result');
+  const tgBadgeStatus = document.getElementById('badge-tg-status');
+
+  if (tgForm) {
+    tgForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const bot_token = tgTokenInput ? tgTokenInput.value.trim() : '';
+      const chat_id = tgChatIdInput ? tgChatIdInput.value.trim() : '';
+
+      if (!bot_token || !chat_id) {
+        showToast('⚠️ Telegram Bot Token এবং Chat ID উভয়ই প্রয়োজন!');
+        return;
+      }
+
+      if (tgSubmitBtn) {
+        tgSubmitBtn.disabled = true;
+        tgSubmitBtn.textContent = '⏳ Saving Telegram Keys...';
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/setup-telegram`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bot_token, chat_id })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (tgResultBox) {
+            tgResultBox.style.display = 'block';
+            tgResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            tgResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            tgResultBox.style.color = '#a7f3d0';
+            tgResultBox.innerHTML = `<strong>✅ Telegram ক্রেডেনশিয়ালস D1-এ সেভ হয়েছে!</strong> এখন AI কোনো অর্ডার কনফার্ম করলে সাথে সাথে আপনার টেলিগ্রাম আইডিতে বিস্তারিত অ্যালার্ট চলে যাবে।`;
+          }
+          if (tgBadgeStatus) {
+            tgBadgeStatus.textContent = '🟢 Connected';
+            tgBadgeStatus.style.background = 'rgba(16, 185, 129, 0.2)';
+            tgBadgeStatus.style.color = '#34d399';
+          }
+          showToast('✅ Telegram Keys D1-এ সেভ হয়েছে!');
+        } else {
+          showToast('❌ সেভ করতে ব্যর্থ: ' + (data.error || 'Error'));
+        }
+      } catch (e) {
+        showToast('❌ নেটওয়ার্ক এরর: ' + e.message);
+      } finally {
+        if (tgSubmitBtn) {
+          tgSubmitBtn.disabled = false;
+          tgSubmitBtn.textContent = '💾 Save Telegram Keys to D1';
+        }
+      }
+    });
+  }
+
+  if (tgTestBtn) {
+    tgTestBtn.addEventListener('click', async () => {
+      tgTestBtn.disabled = true;
+      tgTestBtn.textContent = '⏳ Sending Test Alert...';
+
+      try {
+        const res = await fetch(`${API_BASE}/test-telegram`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (tgResultBox) {
+            tgResultBox.style.display = 'block';
+            tgResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            tgResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            tgResultBox.style.color = '#a7f3d0';
+            tgResultBox.innerHTML = `<strong>🎉 টেস্ট অর্ডার নোটিফিকেশন সফলভাবে আপনার টেলিগ্রামে পাঠানো হয়েছে!</strong><br>আপনার টেলিগ্রাম অ্যাপ ওপেন করে চেক করুন।`;
+          }
+          showToast('🎉 টেলিগ্রামে টেস্ট অর্ডার অ্যালার্ট পৌঁছেছে!');
+        } else {
+          if (tgResultBox) {
+            tgResultBox.style.display = 'block';
+            tgResultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+            tgResultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+            tgResultBox.style.color = '#fca5a5';
+            tgResultBox.innerHTML = `<strong>❌ টেলিগ্রাম মেসেজ পাঠাতে ব্যর্থ:</strong> ${escapeHtml(data.error || data.reason || 'Telegram API Error')}<br><small>অনুগ্রহ করে Bot Token ও Admin Chat ID সঠিক কিনা চেক করুন এবং বটকে টেলিগ্রামে একবার <code>/start</code> দিয়ে মেসেজ চালু করেছেন কিনা নিশ্চিত করুন।</small>`;
+          }
+          showToast('❌ টেস্ট অ্যালার্ট পাঠাতে ব্যর্থ হয়েছে।');
+        }
+      } catch (err) {
+        showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
+      } finally {
+        tgTestBtn.disabled = false;
+        tgTestBtn.textContent = '🔔 Send Test Order Alert';
+      }
+    });
+  }
 }
 
 // 🌐 সেটিংস ও ক্রেডেনশিয়াল সার্ভার থেকে ফেচ করে ফর্ম পূরণ করা
@@ -1542,6 +1641,20 @@ async function loadSettingsFromServer() {
     if (s.github) {
       if (ghTokenInput && s.github.token) ghTokenInput.value = s.github.token;
       if (ghRepoInput && s.github.repo) ghRepoInput.value = s.github.repo;
+    }
+
+    // ৫. Telegram প্রি-ফিল
+    const tgTokenInput = document.getElementById('input-tg-bot-token');
+    const tgChatIdInput = document.getElementById('input-tg-chat-id');
+    const tgBadge = document.getElementById('badge-tg-status');
+    if (s.telegram) {
+      if (tgTokenInput && s.telegram.bot_token) tgTokenInput.value = s.telegram.bot_token;
+      if (tgChatIdInput && s.telegram.admin_chat_id) tgChatIdInput.value = s.telegram.admin_chat_id;
+      if (tgBadge && s.telegram.bot_token && s.telegram.admin_chat_id) {
+        tgBadge.textContent = '🟢 Connected';
+        tgBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+        tgBadge.style.color = '#34d399';
+      }
     }
   } catch (e) {
     console.warn('Could not load settings from server:', e);

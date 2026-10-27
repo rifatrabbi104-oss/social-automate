@@ -168,11 +168,73 @@ export default {
       }
 
       // ==========================================
-      // ৬. টেলিগ্রাম Webhook (ঐচ্ছিক ব্যাকআপ)
+      // ৫.১ মেটা পেজ ওয়েববুক সাবস্ক্রিপশন চেক ও ডায়াগনস্টিক API
       // ==========================================
-      if (request.method === "POST" && (path === "/webhook/telegram" || path === "/api/telegram/webhook")) {
-        const update = await request.json();
-        return await handleTelegramUpdate(update, env, ctx, url.origin);
+      if (request.method === "GET" && (path === "/api/subscribe-page" || path === "/api/check-meta-subscription")) {
+        const token = await getMetaPageToken(env);
+        if (!token) return jsonResponse({ success: false, error: "No Meta Page token found in D1 or env" }, 400);
+
+        try {
+          const checkRes = await fetch(`https://graph.facebook.com/v19.0/me/subscribed_apps?access_token=${token}`);
+          const checkData = await checkRes.json();
+
+          const subRes = await fetch(`https://graph.facebook.com/v19.0/me/subscribed_apps?subscribed_fields=messages,messaging_postbacks,feed&access_token=${token}`, {
+            method: "POST"
+          });
+          const subData = await subRes.json();
+
+          const pageRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name&access_token=${token}`);
+          const pageData = await pageRes.json();
+
+          return jsonResponse({
+            success: true,
+            page: pageData,
+            current_subscriptions: checkData,
+            subscribe_attempt: subData,
+            webhook_url: `${url.origin}/webhook/meta`
+          });
+        } catch (err) {
+          return jsonResponse({ success: false, error: err.message }, 500);
+        }
+      }
+
+      // ==========================================
+      // ৬.১ টেলিগ্রাম অ্যাডমিন অ্যালার্ট সেটআপ ও টেস্ট API
+      // ==========================================
+      if (request.method === "POST" && path === "/api/setup-telegram") {
+        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+        await ensureTables(env.DB);
+        const body = await request.json().catch(() => ({}));
+        const { bot_token, chat_id } = body;
+        if (!bot_token || !chat_id) {
+          return jsonResponse({ error: "Bot token and Chat ID are required" }, 400);
+        }
+
+        await env.DB.prepare(`
+          INSERT INTO system_config (key, value) VALUES ('telegram_bot_token', ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).bind(bot_token.trim()).run();
+
+        await env.DB.prepare(`
+          INSERT INTO system_config (key, value) VALUES ('telegram_admin_chat_id', ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).bind(chat_id.trim()).run();
+
+        return jsonResponse({ success: true, message: "Telegram Bot Token ও Chat ID সফলভাবে D1-এ সেভ হয়েছে!" });
+      }
+
+      if (request.method === "POST" && path === "/api/test-telegram") {
+        const testRes = await sendTelegramOrderNotification({
+          platform: "facebook",
+          customer_name: "Test Customer (এডমিন টেস্ট)",
+          customer_phone: "01874600203",
+          delivery_address: "ঢাকা, বাংলাদেশ",
+          product_name: "P6 Retro Game Console (GC-1102)",
+          variant: "Standard",
+          total_amount: 920
+        }, env);
+
+        return jsonResponse(testRes, testRes.success ? 200 : 400);
       }
 
       // ==========================================
@@ -584,25 +646,7 @@ export default {
       // ৯. সেটিংস ও সোশ্যাল অ্যাকাউন্টস
       // ==========================================
       if (request.method === "GET" && path === "/api/settings") {
-        let accounts = [];
-        let verifyToken = "social_automate_verify_token_2026";
-
-        if (env.DB) {
-          await ensureTables(env.DB);
-          const { results } = await env.DB.prepare("SELECT id, platform, account_name, status FROM social_accounts").all();
-          accounts = results || [];
-          const vt = await getConfigValue(env.DB, "meta_verify_token", null);
-          if (vt) verifyToken = vt;
-        }
-
-        return jsonResponse({
-          d1_connected: Boolean(env.DB),
-          connected_accounts: accounts,
-          meta_webhook_url: `${url.origin}/webhook/meta`,
-          whatsapp_webhook_url: `${url.origin}/webhook/whatsapp`,
-          meta_verify_token: verifyToken,
-          whatsapp_verify_token: verifyToken
-        });
+        return await handleGetSettings(env, url);
       }
 
       return jsonResponse({ error: "Endpoint not found", path }, 404);
@@ -712,6 +756,31 @@ async function handleWhatsAppUpdate(body, env, ctx, workerOrigin) {
         parseFloat(od.total_amount || 0)
       ).run();
       await env.DB.prepare("UPDATE live_conversations SET needs_attention = 1 WHERE chat_id = ?").bind(chatId).run();
+
+      // 📢 টেলিগ্রামে এডমিনকে সাথে সাথে বিস্তারিত অর্ডার পাঠানো
+      if (ctx && typeof ctx.waitUntil === 'function') {
+        ctx.waitUntil(sendTelegramOrderNotification({
+          platform: "whatsapp",
+          chat_id: chatId,
+          customer_name: od.customer_name || senderName || "Customer",
+          customer_phone: od.customer_phone || senderPhone || "",
+          delivery_address: od.delivery_address || "",
+          product_name: od.product_name || "",
+          variant: od.variant || "",
+          total_amount: parseFloat(od.total_amount || 0)
+        }, env));
+      } else {
+        await sendTelegramOrderNotification({
+          platform: "whatsapp",
+          chat_id: chatId,
+          customer_name: od.customer_name || senderName || "Customer",
+          customer_phone: od.customer_phone || senderPhone || "",
+          delivery_address: od.delivery_address || "",
+          product_name: od.product_name || "",
+          variant: od.variant || "",
+          total_amount: parseFloat(od.total_amount || 0)
+        }, env);
+      }
     } catch (ordErr) {
       console.warn("Order save error:", ordErr.message);
     }
@@ -988,13 +1057,17 @@ async function handleTriggerPost(body, env) {
 }
 
 // ⚙️ ড্যাশবোর্ড সেটিংস ও ক্রেডেনশিয়াল ফেচ API (রিফ্রেশ মারলে ফর্ম পূরণ রাখার জন্য)
-async function handleGetSettings(env) {
+async function handleGetSettings(env, url = null) {
   const settings = {
     facebook: { connected: false, account_name: '', account_id: '', access_token: '' },
     tiktok: { connected: false, account_name: '', account_id: '', access_token: '', client_key: 'awq5kzk0rv01o6z0', client_secret: '' },
-    whatsapp: { connected: false, phone: '', mode: 'gateway', gateway_url: '', gateway_token: '' },
+    whatsapp: { connected: false, phone: '', mode: 'gateway', gateway_url: '', gateway_token: '', phone_number_id: '', access_token: '' },
+    telegram: { connected: false, bot_token: '', admin_chat_id: '' },
     github: { connected: false, repo: 'rifatrabbi104-oss/social-automate', token: '' }
   };
+
+  let verifyToken = "social_automate_verify_token_2026";
+  let accsList = [];
 
   if (env.DB) {
     try {
@@ -1002,6 +1075,7 @@ async function handleGetSettings(env) {
       const { results: accs } = await env.DB.prepare(
         "SELECT platform, account_name, account_id, access_token, status FROM social_accounts WHERE status = 'active'"
       ).all();
+      accsList = accs || [];
 
       for (const a of (accs || [])) {
         if (a.platform === 'facebook') {
@@ -1034,18 +1108,34 @@ async function handleGetSettings(env) {
         if (c.key === 'whatsapp_gateway_token') settings.whatsapp.gateway_token = c.value;
         if (c.key === 'whatsapp_phone_id') settings.whatsapp.phone_number_id = c.value;
         if (c.key === 'whatsapp_access_token') settings.whatsapp.access_token = c.value;
+        if (c.key === 'telegram_bot_token') {
+          settings.telegram.connected = Boolean(c.value);
+          settings.telegram.bot_token = c.value;
+        }
+        if (c.key === 'telegram_admin_chat_id') settings.telegram.admin_chat_id = c.value;
         if (c.key === 'github_token') {
           settings.github.connected = Boolean(c.value);
           settings.github.token = c.value;
         }
         if (c.key === 'github_repo') settings.github.repo = c.value;
+        if (c.key === 'meta_verify_token') verifyToken = c.value;
       }
     } catch (e) {
       console.warn("Could not load settings from D1:", e);
     }
   }
 
-  return jsonResponse({ success: true, settings });
+  const origin = url ? url.origin : 'https://social-automate.rifatrabbi104.workers.dev';
+  return jsonResponse({
+    success: true,
+    settings,
+    d1_connected: Boolean(env.DB),
+    connected_accounts: accsList,
+    meta_webhook_url: `${origin}/webhook/meta`,
+    whatsapp_webhook_url: `${origin}/webhook/whatsapp`,
+    meta_verify_token: verifyToken,
+    whatsapp_verify_token: verifyToken
+  });
 }
 
 // 🐙 GitHub Actions সেটিংস সেভ API
@@ -1080,77 +1170,105 @@ async function handleMetaUpdate(body, env, ctx, workerOrigin) {
   }
 
   // ১. ফেসবুক পেজ / মেসেঞ্জার মেসেজ
-  const messaging = body.entry?.[0]?.messaging?.[0];
-  if (messaging && messaging.message && messaging.message.text && !messaging.message.is_echo) {
-    const senderId = String(messaging.sender.id);
-    const recipientId = String(messaging.recipient.id);
-    const incomingText = messaging.message.text.trim();
-    const senderName = `User (${senderId.slice(-4)})`;
+  const entries = Array.isArray(body.entry) ? body.entry : (body.entry ? [body.entry] : []);
+  for (const entry of entries) {
+    const rawList = entry.messaging || entry.standby || [];
+    for (const messaging of rawList) {
+      if (messaging && messaging.message && messaging.message.text && !messaging.message.is_echo) {
+        const senderId = String(messaging.sender.id);
+        const recipientId = String(messaging.recipient.id);
+        const incomingText = messaging.message.text.trim();
+        const senderName = `User (${senderId.slice(-4)})`;
 
-    // অ্যান্টি-স্প্যাম ডিবাউন্স
-    const now = Date.now();
-    const lastTime = userLastMessageTime.get(senderId) || 0;
-    if (now - lastTime < 2500) {
-      await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env);
-      return new Response("EVENT_RECEIVED", { status: 200 });
-    }
-    userLastMessageTime.set(senderId, now);
+        // অ্যান্টি-স্প্যাম ডিবাউন্স
+        const now = Date.now();
+        const lastTime = userLastMessageTime.get(senderId) || 0;
+        if (now - lastTime < 2500) {
+          await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env);
+          continue;
+        }
+        userLastMessageTime.set(senderId, now);
 
-    const session = await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env);
+        const session = await appendMessageToSession(senderId, senderName, "customer", incomingText, "facebook", env);
 
-    // হ্যান্ডওভার চেক
-    if (session.admin_takeover && (session.takeover_until ? session.takeover_until > now : true)) {
-      return new Response("EVENT_RECEIVED", { status: 200 });
-    }
+        // হ্যান্ডওভার চেক
+        if (session.admin_takeover && (session.takeover_until ? session.takeover_until > now : true)) {
+          continue;
+        }
 
-    // D1 বিজনেস ডেটা রিড (১০ মিনিটের ক্যাশ API)
-    const businessContext = await getCachedBusinessContext(env.DB);
+        // D1 বিজনেস ডেটা রিড (৫ মিনিটের ক্যাশ API)
+        const businessContext = await getCachedBusinessContext(env.DB);
 
-    // Gemini AI কল (Structured Response)
-    const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-8), businessContext, env);
+        // Gemini AI কল (Structured Response)
+        const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-8), businessContext, env);
 
-    if (aiDecision.reply) {
-      // মেটা গ্রাফ API দিয়ে পেজ থেকে মেসেঞ্জারে উত্তর পাঠানো
-      const token = await getMetaPageToken(env, recipientId);
-      if (token) {
-        await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            recipient: { id: senderId },
-            message: { text: aiDecision.reply }
-          })
-        });
+        if (aiDecision.reply) {
+          // মেটা গ্রাফ API দিয়ে পেজ থেকে মেসেঞ্জারে উত্তর পাঠানো
+          const token = await getMetaPageToken(env, recipientId);
+          if (token) {
+            await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${token}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                recipient: { id: senderId },
+                message: { text: aiDecision.reply }
+              })
+            });
+          }
+          await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook", env);
+        }
+
+        // যদি চ্যাটে অর্ডার কনফার্ম হয়, D1 orders টেবিলে সেভ ও নোটিফিকেশন
+        if (aiDecision.order_confirmed && aiDecision.order_data && env.DB) {
+          try {
+            const od = aiDecision.order_data;
+            const orderId = `ord_${Date.now()}`;
+            await env.DB.prepare(`
+              INSERT INTO orders (id, chat_id, platform, customer_name, customer_phone, delivery_address, product_name, variant, total_amount, status)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')
+            `).bind(
+              orderId,
+              senderId,
+              "facebook",
+              od.customer_name || senderName || "Customer",
+              od.customer_phone || "",
+              od.delivery_address || "",
+              od.product_name || "",
+              od.variant || "",
+              parseFloat(od.total_amount || 0)
+            ).run();
+            await env.DB.prepare("UPDATE live_conversations SET needs_attention = 1 WHERE chat_id = ?").bind(senderId).run();
+
+            // 📢 টেলিগ্রামে এডমিনকে সাথে সাথে বিস্তারিত অর্ডার পাঠানো
+            if (ctx && typeof ctx.waitUntil === 'function') {
+              ctx.waitUntil(sendTelegramOrderNotification({
+                platform: "facebook",
+                chat_id: senderId,
+                customer_name: od.customer_name || senderName || "Customer",
+                customer_phone: od.customer_phone || "",
+                delivery_address: od.delivery_address || "",
+                product_name: od.product_name || "",
+                variant: od.variant || "",
+                total_amount: parseFloat(od.total_amount || 0)
+              }, env));
+            } else {
+              await sendTelegramOrderNotification({
+                platform: "facebook",
+                chat_id: senderId,
+                customer_name: od.customer_name || senderName || "Customer",
+                customer_phone: od.customer_phone || "",
+                delivery_address: od.delivery_address || "",
+                product_name: od.product_name || "",
+                variant: od.variant || "",
+                total_amount: parseFloat(od.total_amount || 0)
+              }, env);
+            }
+          } catch (ordErr) {
+            console.warn("Order save error:", ordErr.message);
+          }
+        }
       }
-      await appendMessageToSession(senderId, senderName, "assistant", aiDecision.reply, "facebook", env);
     }
-
-    // যদি চ্যাটে অর্ডার কনফার্ম হয়, D1 orders টেবিলে সেভ ও নোটিফিকেশন
-    if (aiDecision.order_confirmed && aiDecision.order_data && env.DB) {
-      try {
-        const od = aiDecision.order_data;
-        const orderId = `ord_${Date.now()}`;
-        await env.DB.prepare(`
-          INSERT INTO orders (id, chat_id, platform, customer_name, customer_phone, delivery_address, product_name, variant, total_amount, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed')
-        `).bind(
-          orderId,
-          senderId,
-          "facebook",
-          od.customer_name || senderName || "Customer",
-          od.customer_phone || "",
-          od.delivery_address || "",
-          od.product_name || "",
-          od.variant || "",
-          parseFloat(od.total_amount || 0)
-        ).run();
-        await env.DB.prepare("UPDATE live_conversations SET needs_attention = 1 WHERE chat_id = ?").bind(senderId).run();
-      } catch (ordErr) {
-        console.warn("Order save error:", ordErr.message);
-      }
-    }
-
-    return new Response("EVENT_RECEIVED", { status: 200 });
   }
 
   // ২. পেজের পোস্টের কমেন্ট (Feed Comments Auto-Reply)
@@ -1320,7 +1438,10 @@ async function handleAdminReply(body, env) {
 // 🤖 GEMINI AI ENGINE (STRUCTURED RESPONSE)
 // ========================================================
 async function callGeminiStructured(userMessage, recentHistory, businessContext, env) {
-  const apiKey = env.GEMINI_API_KEY;
+  let apiKey = env.GEMINI_API_KEY;
+  if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
+    apiKey = await getConfigValue(env.DB, "gemini_api_key", null);
+  }
   const model = env.GEMINI_MODEL || "gemini-2.0-flash";
 
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
@@ -1979,6 +2100,69 @@ function formatExtractedProduct(p, url) {
       variants_count: variants.length
     }
   };
+}
+
+// ========================================================
+// 📢 টেলিগ্রাম ইনস্ট্যান্ট অর্ডার নোটিফিকেশন ইঞ্জিন
+// ========================================================
+async function sendTelegramOrderNotification(orderData, env) {
+  let botToken = env.TELEGRAM_BOT_TOKEN;
+  let chatId = env.TELEGRAM_ADMIN_CHAT_ID;
+
+  if (env.DB) {
+    const dbToken = await getConfigValue(env.DB, "telegram_bot_token", null);
+    const dbChat = await getConfigValue(env.DB, "telegram_admin_chat_id", null);
+    if (dbToken) botToken = dbToken;
+    if (dbChat) chatId = dbChat;
+  }
+
+  if (!botToken || !chatId) {
+    console.warn("Telegram bot token or admin chat ID missing in env/D1");
+    return { success: false, reason: "Missing telegram credentials" };
+  }
+
+  const cleanToken = botToken.replace(/^bot/, '').trim();
+  const nowBdt = new Date(Date.now() + 6 * 3600 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+
+  const platformEmoji = orderData.platform === 'facebook' ? '🔵 Facebook Messenger (Page: Ranonex)' : '🟢 WhatsApp Live Chat';
+  const chatUrl = orderData.chat_id 
+    ? `https://automate.ranonex.shop?chat_id=${encodeURIComponent(orderData.chat_id)}`
+    : `https://automate.ranonex.shop?tab=inbox`;
+
+  const text = 
+`🎉 *নতুন অর্ডার কনফার্ম করেছে AI (New Order!)*
+━━━━━━━━━━━━━━━━━━━━
+📱 *অর্ডার সোর্স:* ${platformEmoji}
+👤 *কার থেকে অর্ডার (কাস্টমার):* ${orderData.customer_name || 'Customer'}
+📞 *মোবাইল নম্বর:* \`${orderData.customer_phone || 'N/A'}\`
+📍 *ডেলিভারি ঠিকানা:* ${orderData.delivery_address || 'N/A'}
+━━━━━━━━━━━━━━━━━━━━
+📦 *অর্ডারকৃত পণ্য:* ${orderData.product_name || 'N/A'}
+🎨 *সাইজ / কালার:* ${orderData.variant || 'Standard'}
+💵 *সর্বমোট বিল (COD):* ৳${orderData.total_amount || 0} BDT
+━━━━━━━━━━━━━━━━━━━━
+🤖 *রিসিভ করেছে:* Gemini 2.0 AI Sales Agent (Ranonex)
+⏰ *অর্ডারের সময়:* ${nowBdt} (BDT)
+👉 [ক্লিক করে কাস্টমার চ্যাট ওপেন করুন](${chatUrl})
+🌐 *ড্যাশবোর্ড:* https://automate.ranonex.shop`;
+
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${cleanToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: String(chatId).trim(),
+        text: text,
+        parse_mode: "Markdown",
+        disable_web_page_preview: true
+      })
+    });
+    const json = await res.json();
+    return { success: json.ok, data: json };
+  } catch (e) {
+    console.warn("Telegram notification error:", e.message);
+    return { success: false, error: e.message };
+  }
 }
 
 // ========================================================
