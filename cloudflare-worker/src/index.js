@@ -1337,11 +1337,19 @@ async function handleSetupMeta(body, env) {
   // ২. পেজকে স্বয়ংক্রিয়ভাবে Webhooks-এ সাবস্ক্রাইব করা (১-বার লাইফটাইম)
   let subStatus = "active";
   try {
-    const subRes = await fetch(`https://graph.facebook.com/v19.0/${accountId}/subscribed_apps?subscribed_fields=messages,feed,messaging_postbacks&access_token=${cleanToken}`, {
+    // ২.১ প্রথমে মেসেঞ্জার ইভেন্টগুলো সাবস্ক্রাইব (pages_messaging পারমিশন দিয়ে শতভাগ কাজ করে)
+    const subRes = await fetch(`https://graph.facebook.com/v19.0/${accountId}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_reactions,messaging_optins&access_token=${cleanToken}`, {
       method: "POST"
     });
     const subJson = await subRes.json();
-    if (subJson && subJson.success) subStatus = "subscribed_auto";
+    if (subJson && subJson.success) subStatus = "subscribed_messages";
+
+    // ২.২ আলাদাভাবে কমেন্ট/ফিড ট্রাই করা (যদি pages_manage_metadata পারমিশন থাকে)
+    try {
+      await fetch(`https://graph.facebook.com/v19.0/${accountId}/subscribed_apps?subscribed_fields=feed&access_token=${cleanToken}`, {
+        method: "POST"
+      });
+    } catch (e) {}
   } catch (e) {
     subStatus = "subscribed_fallback";
   }
