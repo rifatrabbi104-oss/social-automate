@@ -155,7 +155,7 @@ app.get('/audio/:id.wav', (req, res) => {
 // অন-ডিমান্ড অডিও জেনারেটর (যদি কোনো কারণে ক্যাশে না থাকে)
 async function generateAudioFromText(text) {
   if (!CONFIG.geminiApiKey || !text) return null;
-  const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
+  const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
   const ws = new WebSocket(wsUrl);
 
   return new Promise((resolve) => {
@@ -700,10 +700,12 @@ PRODUCT_IDS MARKER (internal, mandatory):
   using the exact PRODUCT_ID values from the catalog. The system removes this line and shows the customer a product button. Never mention it.
 
 HELPLINE & DIRECT SUPPORT (internal marker):
-- If the customer wants to speak directly to a human, asks how to contact, or asks for WhatsApp/phone/helpline (e.g. "যোগাযোগ করতে চাই", "কথা বলতে চাই", "হোয়াটসঅ্যাপ নম্বর আছে?"):
-  Politely tell them in 1 line they can call or WhatsApp our official helpline: 01874600203, and add this marker at the very end:
+- ONLY output SHOW_HELPLINE: true if the customer explicitly asks how to contact, asks for WhatsApp or helpline phone number, or explicitly wants to talk to a human / owner / support (e.g. "আপনাদের সাথে কীভাবে যোগাযোগ করব?", "হোয়াটসঅ্যাপ নম্বর কত?", "হেল্পলাইন বা কাস্টমার কেয়ার নম্বর দিন", "সরাসরি কথা বলতে চাই").
+  When requested, politely tell them in 1 line they can call or WhatsApp our official helpline: 01874600203, and add this marker at the very end:
   SHOW_HELPLINE: true
-- CRITICAL: When the customer sends their phone number to place an order, DO NOT output SHOW_HELPLINE. Take the order and confirm it!
+- CRITICAL (NEVER SHOW HELPLINE ON ORDER OR PHONE NUMBER):
+  When a customer provides their phone number (e.g. "016...", "amar number 01...", "আমার নম্বর 01...") or is placing an order, DO NOT output SHOW_HELPLINE: true!
+  They are providing their contact number to receive the product parcel, NOT asking for customer care. Confirm their order immediately or ask for the missing address/details.
 
 ORDER TAKING:
 - If only one product has been discussed and the customer sends name + 11-digit mobile number (01XXXXXXXXX) + address, or says they want it, do NOT ask the product name again — you already know it.
@@ -1705,12 +1707,9 @@ app.post('/webhook/meta', (req, res) => {
               continue;
             }
 
-            // ৮. [📞 হেল্পলাইনে কল] বাটন ক্লিক (বা সরাসরি কল/হোয়াটসঅ্যাপ সাপোর্ট চাইলে)
-            const isExplicitHelpline = incomingPayload === "ACTION_CALL_SUPPORT"
-              || /(?:সরাসরি\s*কল\s*(?:করতে|দিতে)|কথা\s*বলতে\s*চাই|হোয়াটসঅ্যাপ\s*(?:নাম্বার|নম্বর|সাপোর্ট)|whatsapp\s*support|কাস্টমার\s*কেয়ার)/i.test(incomingText);
-            const isProvidingPhoneOrAddress = /\b(?:01[3-9]\d{8})\b/.test(incomingText) || /(?:বাসা|রোড|বাড়ি|গ্রাম|থানা|জেলা|ঢাকা|dhaka|ঠিকানা|অর্ডার|নিব|চাই)/i.test(incomingText);
-
-            if (isExplicitHelpline && !isProvidingPhoneOrAddress) {
+            // ৮. [📞 হেল্পলাইনে কল] বাটন ক্লিক (শুধুমাত্র নির্দিষ্ট বাটন ক্লিকের ক্ষেত্রে)
+            // সাধারণ টেক্সটের ক্ষেত্রে AI নিজে সিদ্ধান্ত নিবে (SHOW_HELPLINE: true), কোনো হার্ডকোডেড ইন্টারসেপশন নয়
+            if (incomingPayload === "ACTION_CALL_SUPPORT") {
               await sendFacebookHelplineCard(senderId);
               continue;
             }
@@ -1888,9 +1887,9 @@ app.post('/webhook/meta', (req, res) => {
                 }
               }
 
-              // ৭. 📞 কাস্টমার যোগাযোগ করতে চাইলে হেল্পলাইন/হোয়াটসঅ্যাপ বাটন কার্ড পাঠানো
-              if (aiDecision.show_helpline) {
-                console.log(`📞 [Sending Helpline / WhatsApp Support Card] to ${senderId}`);
+              // ৭. 📞 কাস্টমার যোগাযোগ করতে চাইলে হেল্পলাইন/হোয়াটসঅ্যাপ বাটন কার্ড পাঠানো (AI সিদ্ধান্ত অনুযায়ী, অর্ডারের ক্ষেত্রে কখনোই নয়)
+              if (aiDecision.show_helpline && !isOrderConfirmedReply && !aiDecision.order_data) {
+                console.log(`📞 [Sending Helpline / WhatsApp Support Card by AI Decision] to ${senderId}`);
                 await sendFacebookHelplineCard(senderId);
               }
 
@@ -2146,7 +2145,7 @@ function getOrCreatePersistentPostGenSocket() {
       try { persistentPostGenSocket.ws.close(); } catch (e) {}
     }
 
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
     const ws = new WebSocket(wsUrl);
 
     persistentPostGenSocket = {
@@ -2197,6 +2196,7 @@ function getOrCreatePersistentPostGenSocket() {
           }
           const parts = msg.serverContent.modelTurn?.parts || [];
           for (const p of parts) {
+            if (p.thought) continue;
             if (p.text) persistentPostGenSocket.accumulatedText += p.text;
           }
 
@@ -2393,24 +2393,6 @@ Output ONLY the final Facebook post caption, ready to publish. No conversational
       });
     }
 
-    // ২. REST ফলব্যাক (gemini-3.8-flash)
-    if (CONFIG.geminiApiKey) {
-      const restRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${CONFIG.geminiApiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.85, maxOutputTokens: 1000 }
-        })
-      });
-      if (restRes.ok) {
-        const d = await restRes.json();
-        const candidateText = d.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (candidateText && candidateText.trim()) {
-          return res.json({ success: true, caption: candidateText.trim(), method: "gemini-3.8-flash-rest" });
-        }
-      }
-    }
 
     // ৩. ফলব্যাক কপি
     return res.json({

@@ -3,30 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Gemini 3.8 Live API Tester (Persistent ws.send() + Multimodal Vision)</title>
+  <title>Gemini Live API - Persistent WebSocket</title>
   <style>
     :root {
-      --bg-dark: #0f0508;
-      --bg-panel: rgba(38, 10, 18, 0.78);
+      --bg-dark: #120609;
+      --bg-panel: rgba(42, 12, 20, 0.85);
       --maroon-deep: #3b0d18;
       --wine-red: #631527;
       --gold: #d4af37;
       --gold-soft: rgba(212, 175, 55, 0.35);
-      --gold-glow: rgba(212, 175, 55, 0.2);
       --milk-white: #fdfbf7;
       --text-muted: #c9b8bc;
       --success: #4ade80;
       --error: #f87171;
-      --info: #60a5fa;
     }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    }
-
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
     body {
       background: radial-gradient(circle at top right, #2e0913, var(--bg-dark) 70%);
       color: var(--milk-white);
@@ -34,646 +25,355 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      padding: 16px;
+      padding: 10px;
     }
-
     .app-container {
       width: 100%;
-      max-width: 950px;
+      max-width: 900px;
       background: var(--bg-panel);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
       border: 1px solid var(--gold-soft);
-      border-radius: 16px;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.85);
+      border-radius: 14px;
       display: flex;
       flex-direction: column;
       overflow: hidden;
       height: 94vh;
     }
-
     .header {
-      padding: 14px 20px;
-      background: rgba(25, 5, 10, 0.88);
+      padding: 12px 18px;
+      background: rgba(25, 5, 10, 0.9);
       border-bottom: 1px solid var(--gold-soft);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
     }
-
-    .header-left {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .header h1 {
-      font-size: 1.15rem;
-      color: var(--gold);
-      letter-spacing: 0.5px;
-    }
-
+    .header h1 { font-size: 1rem; color: var(--gold); }
+    .header-controls { display: flex; align-items: center; gap: 8px; }
     .status-badge {
-      font-size: 0.78rem;
-      padding: 4px 12px;
+      font-size: 0.76rem;
+      padding: 4px 10px;
       border-radius: 20px;
       background: rgba(255, 255, 255, 0.08);
       border: 1px solid var(--gold-soft);
-      font-weight: 500;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
     }
-
-    .status-badge.connected {
-      background: rgba(74, 222, 128, 0.15);
-      border-color: rgba(74, 222, 128, 0.5);
+    .status-badge.online {
+      border-color: var(--success);
       color: var(--success);
+      background: rgba(74, 222, 128, 0.12);
     }
-
-    .status-badge.connecting {
-      background: rgba(96, 165, 250, 0.15);
-      border-color: rgba(96, 165, 250, 0.5);
-      color: var(--info);
-    }
-
-    .status-badge.disconnected {
-      background: rgba(248, 113, 113, 0.15);
-      border-color: rgba(248, 113, 113, 0.5);
-      color: var(--error);
-    }
-
-    .reset-btn {
-      background: rgba(212, 175, 55, 0.15);
-      border: 1px solid var(--gold-soft);
-      color: var(--gold);
-      padding: 5px 12px;
-      border-radius: 8px;
-      font-size: 0.78rem;
-      cursor: pointer;
-      transition: 0.2s;
-    }
-
-    .reset-btn:hover {
-      background: rgba(212, 175, 55, 0.3);
-    }
-
     .config-grid {
-      padding: 12px 20px;
+      padding: 12px 18px;
       background: rgba(35, 8, 15, 0.65);
       border-bottom: 1px solid rgba(212, 175, 55, 0.2);
       display: grid;
-      grid-template-columns: 1.2fr 1fr 1fr;
-      gap: 12px;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
     }
-
-    @media (max-width: 768px) {
-      .config-grid {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .field-group {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    label {
-      font-size: 0.72rem;
-      color: var(--gold);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
+    .field-group { display: flex; flex-direction: column; gap: 3px; }
+    .field-group.full { grid-column: span 2; }
+    label { font-size: 0.7rem; color: var(--gold); text-transform: uppercase; }
     input, select, button {
-      background: rgba(18, 4, 8, 0.85);
+      background: rgba(18, 4, 8, 0.9);
       color: var(--milk-white);
       border: 1px solid var(--gold-soft);
-      padding: 8px 12px;
-      border-radius: 8px;
-      font-size: 0.85rem;
+      padding: 7px 10px;
+      border-radius: 7px;
+      font-size: 0.84rem;
       outline: none;
-      transition: 0.2s;
     }
-
-    input:focus, select:focus {
-      border-color: var(--gold);
-      box-shadow: 0 0 8px rgba(212, 175, 55, 0.25);
-    }
-
-    input[readonly] {
-      opacity: 0.85;
-      cursor: default;
-      color: var(--gold);
-      font-weight: 600;
-    }
-
+    input:focus, select:focus { border-color: var(--gold); }
     button {
       background: linear-gradient(135deg, var(--wine-red), var(--maroon-deep));
       color: var(--gold);
       font-weight: 600;
       cursor: pointer;
-      white-space: nowrap;
     }
-
-    button:hover {
-      border-color: var(--gold);
-      filter: brightness(1.15);
-    }
-
-    .session-stats-bar {
-      padding: 6px 20px;
-      background: rgba(20, 4, 9, 0.95);
-      border-bottom: 1px solid rgba(212, 175, 55, 0.15);
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.75rem;
-      color: var(--text-muted);
-    }
-
-    .session-stats-bar span strong {
-      color: var(--gold);
-    }
-
+    button:hover { border-color: var(--gold); filter: brightness(1.15); }
+    .btn-small { padding: 4px 10px; font-size: 0.75rem; }
     .chat-box {
       flex: 1;
-      padding: 16px 20px;
+      padding: 14px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
     }
-
     .msg {
       max-width: 85%;
-      padding: 12px 16px;
-      border-radius: 12px;
-      font-size: 0.92rem;
-      line-height: 1.5;
-      word-wrap: break-word;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 0.88rem;
+      line-height: 1.45;
       white-space: pre-wrap;
+      word-wrap: break-word;
     }
-
-    .msg.user {
-      align-self: flex-end;
-      background: var(--wine-red);
-      border: 1px solid var(--gold-soft);
-      color: var(--milk-white);
-    }
-
-    .msg-images {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-bottom: 8px;
-    }
-
-    .msg-images img {
-      width: 120px;
-      height: 120px;
-      object-fit: cover;
-      border-radius: 8px;
-      border: 1px solid var(--gold);
-    }
-
-    .msg.ai {
-      align-self: flex-start;
-      background: rgba(25, 6, 12, 0.92);
-      border: 1px solid rgba(212, 175, 55, 0.35);
-      color: var(--milk-white);
-      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
-    }
-
+    .msg.user { align-self: flex-end; background: var(--wine-red); border: 1px solid var(--gold-soft); }
+    .msg.ai { align-self: flex-start; background: rgba(20, 5, 10, 0.95); border: 1px solid var(--gold-soft); }
     .msg.system {
       align-self: center;
-      max-width: 95%;
-      font-size: 0.8rem;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px dashed rgba(212, 175, 55, 0.35);
+      max-width: 96%;
+      font-size: 0.76rem;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px dashed var(--gold-soft);
       color: var(--text-muted);
       font-family: monospace;
-      padding: 8px 14px;
     }
-
-    .msg.error {
-      border-color: var(--error);
-      color: var(--error);
+    .msg.guide {
+      align-self: center;
+      max-width: 96%;
+      font-size: 0.8rem;
+      background: rgba(59, 13, 24, 0.6);
+      border: 1px solid var(--gold-soft);
     }
-
-    .msg.success {
-      border-color: var(--success);
-      color: var(--success);
-    }
-
-    /* Multi-Image Preview Bar */
-    .preview-bar {
-      display: none;
-      padding: 10px 20px;
-      background: rgba(30, 7, 13, 0.95);
-      border-top: 1px solid var(--gold-soft);
-      gap: 12px;
-      align-items: center;
-      overflow-x: auto;
-    }
-
-    .preview-bar.active {
-      display: flex;
-    }
-
-    .image-preview-card {
-      position: relative;
-      display: inline-block;
-      flex-shrink: 0;
-    }
-
-    .image-preview-card img {
-      width: 60px;
-      height: 60px;
-      object-fit: cover;
-      border-radius: 8px;
-      border: 1.5px solid var(--gold);
-      display: block;
-    }
-
-    .image-serial-badge {
-      position: absolute;
-      top: 3px;
-      left: 3px;
-      background: rgba(0, 0, 0, 0.75);
-      color: var(--gold);
-      font-size: 0.65rem;
-      font-weight: 700;
-      padding: 1px 5px;
-      border-radius: 4px;
-    }
-
-    .remove-single-btn {
-      position: absolute;
-      top: -6px;
-      right: -6px;
-      background: #ef4444;
-      color: white;
-      border: 1px solid white;
-      border-radius: 50%;
-      width: 20px;
-      height: 20px;
-      font-size: 0.7rem;
-      font-weight: bold;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      transition: 0.2s;
-    }
-
-    .remove-single-btn:hover {
-      transform: scale(1.15);
-    }
-
-    .preview-actions {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      margin-left: 8px;
-    }
-
-    .clear-all-btn {
-      background: rgba(248, 113, 113, 0.15);
-      color: var(--error);
-      border: 1px solid var(--error);
-      padding: 4px 8px;
-      font-size: 0.72rem;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-
+    .msg.error { border-color: var(--error); color: var(--error); }
+    .msg.success { border-color: var(--success); color: var(--success); }
     .input-bar {
-      padding: 12px 20px;
-      background: rgba(25, 5, 10, 0.92);
+      padding: 10px 18px;
+      background: rgba(25, 5, 10, 0.9);
       border-top: 1px solid var(--gold-soft);
       display: flex;
-      gap: 10px;
-      align-items: center;
+      gap: 8px;
     }
-
-    .upload-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      background: rgba(42, 12, 20, 0.9);
-      border: 1px dashed var(--gold);
-      color: var(--milk-white);
-      padding: 9px 14px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 0.85rem;
-      transition: 0.2s;
-      white-space: nowrap;
-    }
-
-    .upload-btn:hover {
-      background: var(--wine-red);
-      border-color: #fff;
-    }
-
-    .input-bar input[type="text"] {
-      flex: 1;
-    }
-
-    .btn-send {
-      padding: 9px 18px;
-    }
+    .input-bar input { flex: 1; }
   </style>
 </head>
 <body>
 
 <div class="app-container">
   <div class="header">
-    <div class="header-left">
-      <h1>Gemini 3.8 Live API Tester (Vision + Audio)</h1>
-      <span id="wsStatus" class="status-badge disconnected">⚪ Disconnected</span>
-    </div>
-    <div style="display: flex; gap: 8px; align-items: center;">
-      <button class="reset-btn" onclick="resetLiveSession()">🔄 Reset Socket (New Turn)</button>
+    <h1>Gemini Live API (Persistent WebSocket)</h1>
+    <div class="header-controls">
+      <span id="wsStatus" class="status-badge">Disconnected</span>
+      <button type="button" id="resetBtn" class="btn-small">Reset Socket</button>
     </div>
   </div>
 
   <div class="config-grid">
-    <!-- API Key -->
-    <div class="field-group">
+    <div class="field-group full">
       <label>1. Gemini API Key</label>
-      <input type="password" id="apiKey" placeholder="AIzaSy... API Key বসান" />
+      <input type="password" id="apiKey" placeholder="Paste your AIzaSy... API Key here" />
     </div>
 
-    <!-- Fixed Endpoint -->
     <div class="field-group">
-      <label>2. Model Endpoint</label>
-      <input type="text" id="modelId" value="models/gemini-3.8-live" readonly />
+      <label>2. Select Model (Gemini 3.8 Live Default)</label>
+      <select id="modelPreset">
+        <option value="models/gemini-3.8-live" selected>
+          Gemini 3.8 Live (models/gemini-3.8-live)
+        </option>
+        <option value="models/gemini-2.5-flash-native-audio-preview-12-2025">
+          Gemini 2.5 Flash Native Audio Dialog (12-2025 ID)
+        </option>
+      </select>
     </div>
 
-    <!-- Modality -->
     <div class="field-group">
-      <label>3. Response Modality</label>
+      <label>Active Model ID (setup.model)</label>
+      <input type="text" id="modelId" value="models/gemini-3.8-live" />
+    </div>
+
+    <div class="field-group full">
+      <label>3. AI System Instruction (AI kivhabe instruction dibe)</label>
+      <input
+        type="text"
+        id="sysInstruction"
+        value="Tumi ekjon smart assistant. User ja jante chaibe, step-by-step shohoj Bangla ba Banglish-e clear instruction dibe kivhabe ki korte hobe."
+      />
+    </div>
+
+    <div class="field-group">
+      <label>WebSocket Endpoint Version</label>
+      <select id="apiVersion">
+        <option value="v1alpha" selected>v1alpha (wss://.../v1alpha/GenerativeService.BidiGenerateContent)</option>
+        <option value="v1beta">v1beta (wss://.../v1beta/GenerativeService.BidiGenerateContent)</option>
+      </select>
+    </div>
+
+    <div class="field-group">
+      <label>Response Modality</label>
       <select id="responseModality">
-        <option value="AUDIO">AUDIO + Text Transcript (Live Voice)</option>
-        <option value="TEXT">TEXT Only</option>
+        <option value="AUDIO">AUDIO + Text Transcript</option>
       </select>
     </div>
   </div>
 
-  <!-- Session Stats Bar -->
-  <div class="session-stats-bar">
-    <span>WebSocket মোড: <strong id="socketMode">Persistent Session (ws.send() Reuse)</strong></span>
-    <span>টার্নস সংখ্যা: <strong id="turnsCount">0</strong></span>
-    <span>টোকেন সাশ্রয়: <strong style="color: #4ade80;">১০০% অপ্টিমাইজড (নো রি-হ্যান্ডশেক)</strong></span>
-  </div>
-
-  <!-- Chat Output Area -->
   <div class="chat-box" id="chatBox">
-    <div class="msg system">
-      ⚡ <strong>Gemini 3.8 Live Multimodal WebSocket ইঞ্জিন প্রস্তুত।</strong><br>
-      এখানে একবার কানেক্ট হওয়ার পর প্রতিটি মেসেজ <code>ws.send()</code> দিয়ে পাঠানো হয়। কোনো রিকানেক্ট বা বারবার সেটআপ হ্যান্ডশেক হয় না, যার ফলে টোকেন নষ্ট হয় না ও দ্রুততম সময়ে রেসপন্স পাওয়া যায়। একাধিক ছবি সিলেক্ট করে পাঠাতে পারবেন।
-    </div>
+    <div class="msg guide">📌 KIVHABE USE KORBE:
+1. Upore "1. GEMINI API KEY" box-e tomar API Key boshao.
+2. "2. SELECT MODEL" theke Gemini 3.8 Live select kora ache (Permanent Live Engine).
+3. Niche message likhe Enter ba Send chapo. Prothombar WebSocket connect hobe ebong poroborti shob message eki socket diye jabe!</div>
   </div>
 
-  <!-- Selected Multi-Image Preview Bar -->
-  <div class="preview-bar" id="previewBar">
-    <div id="imageThumbnails" style="display: flex; gap: 10px; align-items: center;"></div>
-    <div class="preview-actions">
-      <span id="photoCountLabel" style="font-size: 0.75rem; color: var(--gold); font-weight: bold;">0 টি ছবি নির্বাচিত</span>
-      <button class="clear-all-btn" onclick="clearAllImages()">✕ সব ছবি মুছুন</button>
-    </div>
-  </div>
-
-  <!-- Message Input Bar -->
   <div class="input-bar">
-    <input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" multiple hidden onchange="handleMultiImageSelect(event)" />
-    <label for="imageInput" class="upload-btn">📷 Add Photo(s)</label>
-
     <input
       type="text"
       id="userInput"
-      placeholder="প্রোডাক্ট বা ছবি সম্পর্কে প্রশ্ন করুন বা ফেসবুক ক্যাপশন লিখতে বলুন..."
-      value="এই প্রোডাক্টটির আকর্ষণীয় ফিচার ও ডিজাইন দেখে একটি হাই-কনভার্টিং বাংলা ফেসবুক সেলস পোস্ট লিখে দাও।"
+      placeholder="Write a message and press Enter..."
+      value="Hi! Amake step by step instruction dao kivhabe tomake use korbo."
     />
-    <button class="btn-send" id="btnSend" onclick="sendMessage()">Send (Enter)</button>
+    <button type="button" id="sendBtn">Send (Enter)</button>
   </div>
 </div>
 
 <script>
-  let ws = null;
-  let isHandshakeComplete = false;
-  let isConnecting = false;
-  let audioCtx = null;
-  let nextPlayTime = 0;
-  let turnsCounter = 0;
+  (function () {
+    let ws = null;
+    let isSetupComplete = false;
+    let activeConfigKey = '';
+    let pendingQueue = [];
+    let currentAiBubble = null;
+    let audioChunksReceived = 0;
+    let audioCtx = null;
+    let nextPlayTime = 0;
 
-  // Multi-Image State Array: [ { name, mime, base64, dataUrl } ]
-  let selectedImages = [];
+    const chatBox = document.getElementById('chatBox');
+    const userInput = document.getElementById('userInput');
+    const wsStatus = document.getElementById('wsStatus');
+    const modelPreset = document.getElementById('modelPreset');
+    const modelIdInput = document.getElementById('modelId');
+    const sendBtn = document.getElementById('sendBtn');
+    const resetBtn = document.getElementById('resetBtn');
 
-  const MODEL_ENDPOINT = 'models/gemini-3.8-live';
-  const chatBox = document.getElementById('chatBox');
-  const userInput = document.getElementById('userInput');
-  const wsStatus = document.getElementById('wsStatus');
-  const previewBar = document.getElementById('previewBar');
-  const imageThumbnails = document.getElementById('imageThumbnails');
-  const photoCountLabel = document.getElementById('photoCountLabel');
-  const imageInput = document.getElementById('imageInput');
-  const turnsCountSpan = document.getElementById('turnsCount');
-  const btnSend = document.getElementById('btnSend');
-
-  userInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      sendMessage();
-    }
-  });
-
-  // Load saved API key from localStorage
-  const savedKey = localStorage.getItem('ranonex_gemini_api_key');
-  if (savedKey) {
-    document.getElementById('apiKey').value = savedKey;
-  }
-  document.getElementById('apiKey').addEventListener('change', (e) => {
-    if (e.target.value.trim()) {
-      localStorage.setItem('ranonex_gemini_api_key', e.target.value.trim());
-      // Reconnect with new key
-      resetLiveSession();
-    }
-  });
-
-  // Handle Multi-Photo Selection
-  function handleMultiImageSelect(event) {
-    const files = Array.from(event.target.files || []);
-    if (!files.length) return;
-
-    files.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const dataUrl = e.target.result;
-        const base64 = dataUrl.split(',')[1];
-        const mime = file.type || 'image/jpeg';
-
-        selectedImages.push({
-          name: file.name,
-          mime: mime,
-          base64: base64,
-          dataUrl: dataUrl
-        });
-        renderImageThumbnails();
-      };
-      reader.readAsDataURL(file);
-    });
-    imageInput.value = '';
-  }
-
-  function renderImageThumbnails() {
-    imageThumbnails.innerHTML = '';
-    if (selectedImages.length === 0) {
-      previewBar.classList.remove('active');
-      return;
+    function setStatus(text, isOnline) {
+      wsStatus.textContent = text;
+      wsStatus.classList.toggle('online', !!isOnline);
     }
 
-    selectedImages.forEach((img, idx) => {
-      const card = document.createElement('div');
-      card.className = 'image-preview-card';
-      card.innerHTML = `
-        <span class="image-serial-badge">#${idx + 1}</span>
-        <img src="${img.dataUrl}" alt="Photo ${idx + 1}" />
-        <button class="remove-single-btn" onclick="removeSingleImage(${idx})" title="Remove photo">✕</button>
-      `;
-      imageThumbnails.appendChild(card);
-    });
-
-    photoCountLabel.textContent = `${selectedImages.length} টি ছবি নির্বাচিত (Serially Added)`;
-    previewBar.classList.add('active');
-  }
-
-  function removeSingleImage(index) {
-    selectedImages.splice(index, 1);
-    renderImageThumbnails();
-  }
-
-  function clearAllImages() {
-    selectedImages = [];
-    renderImageThumbnails();
-  }
-
-  function appendLog(text, type = 'system', imagesArray = null) {
-    const div = document.createElement('div');
-    div.className = `msg ${type}`;
-
-    if (imagesArray && imagesArray.length > 0) {
-      const imgContainer = document.createElement('div');
-      imgContainer.className = 'msg-images';
-      imagesArray.forEach(img => {
-        const imgEl = document.createElement('img');
-        imgEl.src = img.dataUrl;
-        imgContainer.appendChild(imgEl);
-      });
-      div.appendChild(imgContainer);
+    function appendLog(text, type) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + (type || 'system');
+      div.textContent = text;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      return div;
     }
 
-    const span = document.createElement('span');
-    span.textContent = text;
-    div.appendChild(span);
-
-    chatBox.appendChild(div);
-    chatBox.scrollTop = chatBox.scrollHeight;
-    return span;
-  }
-
-  // Play 24kHz 16-bit PCM Audio
-  function playPcmAudio(base64Data) {
-    if (!audioCtx) {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-    }
-    const binaryStr = atob(base64Data);
-    const len = binaryStr.length;
-    const int16 = new Int16Array(len / 2);
-    for (let i = 0; i < len; i += 2) {
-      int16[i / 2] = binaryStr.charCodeAt(i) | (binaryStr.charCodeAt(i + 1) << 8);
-    }
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) {
-      float32[i] = int16[i] / 32768;
+    function applyPreset() {
+      modelIdInput.value = modelPreset.value;
     }
 
-    const buffer = audioCtx.createBuffer(1, float32.length, 24000);
-    buffer.getChannelData(0).set(float32);
-
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioCtx.destination);
-
-    const now = audioCtx.currentTime;
-    if (nextPlayTime < now) nextPlayTime = now;
-    source.start(nextPlayTime);
-    nextPlayTime += buffer.duration;
-  }
-
-  // Reset Session (Close socket gracefully for a fresh conversation)
-  function resetLiveSession() {
-    if (ws) {
-      try { ws.close(); } catch (e) {}
-      ws = null;
+    function playPcmAudio(base64Data) {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      const binaryStr = atob(base64Data);
+      const len = binaryStr.length;
+      const int16 = new Int16Array(len / 2);
+      for (let i = 0; i < len; i += 2) {
+        int16[i / 2] = binaryStr.charCodeAt(i) | (binaryStr.charCodeAt(i + 1) << 8);
+      }
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768;
+      }
+      const buffer = audioCtx.createBuffer(1, float32.length, 24000);
+      buffer.getChannelData(0).set(float32);
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtx.destination);
+      const now = audioCtx.currentTime;
+      if (nextPlayTime < now) nextPlayTime = now;
+      source.start(nextPlayTime);
+      nextPlayTime += buffer.duration;
     }
-    isHandshakeComplete = false;
-    isConnecting = false;
-    turnsCounter = 0;
-    turnsCountSpan.textContent = '0';
-    updateWsStatus('disconnected', '⚪ Disconnected (Ready to connect)');
-    appendLog('🔄 সেশন রিসেট হয়েছে। পরবর্তী মেসেজে নতুন লাইভ সেশন ওপেন হবে।', 'system');
-  }
 
-  function updateWsStatus(state, text) {
-    wsStatus.className = `status-badge ${state}`;
-    wsStatus.textContent = text;
-  }
+    function transmitClientTurn(text) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      currentAiBubble = null;
+      audioChunksReceived = 0;
+      setStatus('Waiting for AI reply...', true);
 
-  // ⚡ Ensure Persistent WebSocket is connected and ready
-  function ensureWebSocketConnected(apiKey, modality) {
-    return new Promise((resolve, reject) => {
-      if (ws && ws.readyState === WebSocket.OPEN && isHandshakeComplete) {
-        return resolve(ws);
+      ws.send(JSON.stringify({
+        clientContent: {
+          turns: [{ role: 'user', parts: [{ text: text }] }],
+          turnComplete: true
+        }
+      }));
+    }
+
+    function disconnectSocket() {
+      if (ws) {
+        ws.close(1000, 'Manual reset');
+        ws = null;
+      }
+      isSetupComplete = false;
+      activeConfigKey = '';
+      pendingQueue = [];
+      currentAiBubble = null;
+      setStatus('Disconnected', false);
+      appendLog('WebSocket manually reset kora hoyeche.', 'system');
+    }
+
+    function sendMessage() {
+      const apiKey = document.getElementById('apiKey').value.trim();
+      const version = document.getElementById('apiVersion').value;
+      let modelId = modelIdInput.value.trim();
+      const modality = document.getElementById('responseModality').value;
+      const sysInstruction = document.getElementById('sysInstruction').value.trim();
+      const text = userInput.value.trim();
+
+      if (!apiKey) {
+        appendLog('Error: Age upore 1 number box-e tomar Gemini API Key boshao!', 'system error');
+        return;
+      }
+      if (!text) return;
+
+      if (!modelId.startsWith('models/')) {
+        modelId = 'models/' + modelId;
+        modelIdInput.value = modelId;
       }
 
-      if (isConnecting) {
-        const checkInterval = setInterval(() => {
-          if (ws && ws.readyState === WebSocket.OPEN && isHandshakeComplete) {
-            clearInterval(checkInterval);
-            resolve(ws);
-          }
-        }, 100);
+      appendLog(text, 'user');
+      userInput.value = '';
+
+      const requestedConfigKey = [apiKey, version, modelId, modality, sysInstruction].join('|');
+
+      // Reuse the exact same open WebSocket for subsequent messages
+      if (ws && ws.readyState === WebSocket.OPEN && isSetupComplete && activeConfigKey === requestedConfigKey) {
+        transmitClientTurn(text);
         return;
       }
 
-      isConnecting = true;
-      updateWsStatus('connecting', '🔵 Connecting WebSocket...');
-      const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
-
-      try {
-        ws = new WebSocket(endpoint);
-      } catch (err) {
-        isConnecting = false;
-        updateWsStatus('disconnected', '❌ Connection Failed');
-        return reject(err);
+      if (ws && ws.readyState === WebSocket.CONNECTING && activeConfigKey === requestedConfigKey) {
+        pendingQueue.push(text);
+        return;
       }
 
-      ws.onopen = () => {
-        updateWsStatus('connecting', '🟡 Handshake (Sending Setup)...');
+      if (ws) {
+        appendLog('Model ba Config change hoyeche. Notun WebSocket connect hocche...', 'system');
+        ws.close();
+        ws = null;
+      }
+
+      isSetupComplete = false;
+      activeConfigKey = requestedConfigKey;
+      pendingQueue.push(text);
+
+      const endpoint = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.' +
+        version + '.GenerativeService.BidiGenerateContent?key=' + encodeURIComponent(apiKey);
+
+      appendLog('Opening persistent ' + version + ' WebSocket for "' + modelId + '" (' + modality + ')...', 'system');
+      setStatus('Connecting...', false);
+
+      ws = new WebSocket(endpoint);
+
+      ws.onopen = function () {
+        setStatus('Sending Setup Handshake...', false);
         const setupPayload = {
           setup: {
-            model: MODEL_ENDPOINT,
+            model: modelId,
             generationConfig: {
               responseModalities: [modality]
             }
           }
         };
+
+        if (sysInstruction) {
+          setupPayload.setup.systemInstruction = {
+            parts: [{ text: sysInstruction }]
+          };
+        }
 
         if (modality === 'AUDIO') {
           setupPayload.setup.outputAudioTranscription = {};
@@ -682,147 +382,98 @@
         ws.send(JSON.stringify(setupPayload));
       };
 
-      ws.onmessage = async (event) => {
+      ws.onmessage = async function (event) {
         try {
           const rawText = event.data instanceof Blob ? await event.data.text() : event.data;
           const msg = JSON.parse(rawText);
 
-          // 1. Setup Complete
           if (msg.setupComplete !== undefined) {
-            isHandshakeComplete = true;
-            isConnecting = false;
-            updateWsStatus('connected', '🟢 Connected (Persistent ws.send() Active)');
-            appendLog(`✅ Handshake সফল! WebSocket লাইভ সেশন অ্যাক্টিভ আছে (Token Saving Active)।`, 'system success');
-            resolve(ws);
+            isSetupComplete = true;
+            setStatus('Connected (Ready for next msg)', true);
+            appendLog(
+              'Handshake Complete! Socket locked open for "' + modelId + '". Poroborti shob message ei same socket diyei jabe.',
+              'system success'
+            );
+
+            while (pendingQueue.length > 0) {
+              transmitClientTurn(pendingQueue.shift());
+            }
             return;
           }
 
-          // 2. Server Content Streaming
           if (msg.serverContent) {
-            handleServerContent(msg.serverContent);
+            if (!currentAiBubble) {
+              currentAiBubble = appendLog('', 'ai');
+            }
+
+            const parts = (msg.serverContent.modelTurn && msg.serverContent.modelTurn.parts) || [];
+            for (let i = 0; i < parts.length; i++) {
+              const part = parts[i];
+              if (part.thought) continue;
+
+              if (part.text) {
+                currentAiBubble.textContent += part.text;
+              }
+              if (part.inlineData && part.inlineData.mimeType && part.inlineData.mimeType.indexOf('audio/pcm') === 0) {
+                audioChunksReceived++;
+                playPcmAudio(part.inlineData.data);
+                if (currentAiBubble.textContent.indexOf('[Audio 🔊]') === -1) {
+                  currentAiBubble.textContent = '[Audio 🔊] ' + currentAiBubble.textContent;
+                }
+              }
+            }
+
+            if (msg.serverContent.outputTranscription && msg.serverContent.outputTranscription.text) {
+              currentAiBubble.textContent += msg.serverContent.outputTranscription.text;
+            }
+
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            if (msg.serverContent.turnComplete) {
+              setStatus('Connected (Ready for next msg)', true);
+              if (audioChunksReceived > 0 && currentAiBubble.textContent.trim() === '[Audio 🔊]') {
+                currentAiBubble.textContent += ' (' + audioChunksReceived + ' audio chunks played)';
+              }
+              currentAiBubble = null;
+              audioChunksReceived = 0;
+            }
           }
         } catch (err) {
-          console.error("Parse Error:", err);
+          appendLog('Parse Error: ' + err.message, 'system error');
         }
       };
 
-      ws.onerror = (e) => {
-        isConnecting = false;
-        isHandshakeComplete = false;
-        updateWsStatus('disconnected', '❌ Socket Error');
+      ws.onerror = function () {
+        setStatus('Socket Error', false);
       };
 
-      ws.onclose = (event) => {
-        isConnecting = false;
-        isHandshakeComplete = false;
-        updateWsStatus('disconnected', `⚪ Closed (${event.code})`);
+      ws.onclose = function (event) {
+        isSetupComplete = false;
+        currentAiBubble = null;
+        setStatus('Closed (' + event.code + ')', false);
+        if (event.code !== 1000) {
+          appendLog(
+            'WebSocket Closed (Code ' + event.code + '): ' + (event.reason || 'Model ID not supported or connection closed.'),
+            'system error'
+          );
+        }
       };
+    }
+
+    modelPreset.addEventListener('change', applyPreset);
+    sendBtn.addEventListener('click', sendMessage);
+    resetBtn.addEventListener('click', disconnectSocket);
+    userInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendMessage();
+      }
     });
-  }
 
-  let activeAiBubble = null;
-  let activeAudioChunks = 0;
-
-  function handleServerContent(serverContent) {
-    if (!activeAiBubble) {
-      activeAiBubble = appendLog('', 'ai');
-    }
-
-    const parts = serverContent.modelTurn?.parts || [];
-    for (const part of parts) {
-      if (part.text) {
-        activeAiBubble.textContent += part.text;
-      }
-      if (part.inlineData && part.inlineData.mimeType?.startsWith('audio/pcm')) {
-        activeAudioChunks++;
-        playPcmAudio(part.inlineData.data);
-        if (!activeAiBubble.textContent.includes('🔊 [Live Audio Playing]')) {
-          activeAiBubble.textContent = `🔊 [Live Audio Playing] ` + activeAiBubble.textContent;
-        }
-      }
-    }
-
-    if (serverContent.outputTranscription?.text) {
-      activeAiBubble.textContent += serverContent.outputTranscription.text;
-    }
-
-    if (serverContent.turnComplete) {
-      btnSend.disabled = false;
-      btnSend.textContent = 'Send (Enter)';
-      updateWsStatus('connected', '🟢 Connected (Persistent ws.send() Ready)');
-      activeAiBubble = null;
-      activeAudioChunks = 0;
-    }
-  }
-
-  // 🚀 Send Message via ws.send() without reconnecting!
-  async function sendMessage() {
-    const apiKey = document.getElementById('apiKey').value.trim();
-    const modality = document.getElementById('responseModality').value;
-    const text = userInput.value.trim();
-
-    if (!apiKey) {
-      appendLog('⚠️ অনুগ্রহ করে উপরে আপনার Gemini API Key টি দিন!', 'system error');
-      return;
-    }
-    if (!text && selectedImages.length === 0) return;
-
-    btnSend.disabled = true;
-    btnSend.textContent = 'Generating...';
-
-    // Copy selected images & prompt before clearing UI
-    const imagesToSend = [...selectedImages];
-    const promptText = text || 'এই ছবিগুলোর বিস্তারিত বিবরণ ও আকর্ষণীয় ফিচার বিশ্লেষণ কর।';
-
-    appendLog(promptText, 'user', imagesToSend);
-    userInput.value = '';
-    clearAllImages();
-
-    try {
-      // ⚡ যদি সকেট ইতিমধ্যে ওপেন থাকে, সাথে সাথে ws.send() কল হবে! কোনো নতুন কানেকশন লাগবে না!
-      const socket = await ensureWebSocketConnected(apiKey, modality);
-
-      turnsCounter++;
-      turnsCountSpan.textContent = turnsCounter;
-
-      const userParts = [];
-
-      // 📸 সব ছবি সিরিয়াল অনুযায়ী ইনলাইন ডাটা হিসেবে পাঠানো
-      imagesToSend.forEach((img, idx) => {
-        userParts.push({
-          inlineData: {
-            mimeType: img.mime,
-            data: img.base64
-          }
-        });
-      });
-
-      // টেক্সট প্রম্পট যুক্ত করা
-      userParts.push({ text: promptText });
-
-      const clientContentPayload = {
-        clientContent: {
-          turns: [
-            {
-              role: 'user',
-              parts: userParts
-            }
-          ],
-          turnComplete: true
-        }
-      };
-
-      // ⚡⚡⚡ সরাসরি ws.send() দিয়ে মেসেজ পাঠানো (সেশন রিউজ - জিরো টোকেন ওয়েস্ট) ⚡⚡⚡
-      socket.send(JSON.stringify(clientContentPayload));
-      updateWsStatus('connected', '⚡ Receiving Stream (ws.send())...');
-
-      console.log(`⚡ [Turn #${turnsCounter}] Dispatched turn via ws.send() with ${imagesToSend.length} photo(s)!`);
-    } catch (err) {
-      btnSend.disabled = false;
-      btnSend.textContent = 'Send (Enter)';
-      appendLog(`❌ এরর: ${err.message}`, 'system error');
-    }
-  }
+    window.applyPreset = applyPreset;
+    window.sendMessage = sendMessage;
+    window.disconnectSocket = disconnectSocket;
+  })();
 </script>
 
 </body>

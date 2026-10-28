@@ -231,7 +231,7 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemin
   if (typeof WebSocket === "undefined") return null;
 
   return new Promise((resolve) => {
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
     let ws;
     let timeoutId;
     let accumulatedText = "";
@@ -414,26 +414,6 @@ Output ONLY the final Facebook post caption, ready to publish. No markdown code 
     }
   } catch (e) {}
 
-  // ৩. REST ফলব্যাক (gemini-3.8-flash)
-  try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${GEMINI_API_KEY}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.85, maxOutputTokens: 1000 }
-      })
-    });
-
-    const data = await res.json();
-    const candidateText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (candidateText && candidateText.trim()) {
-      return candidateText.trim();
-    }
-  } catch (e) {
-    console.error("Gemini REST API Error:", e.message);
-  }
 
   return `✨ ${product.name} ✨\nঅর্ডার করতে ভিজিট করুন: ${product.product_url || "ইনবক্স করুন"}`;
 }
