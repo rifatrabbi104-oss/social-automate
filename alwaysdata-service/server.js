@@ -56,7 +56,7 @@ const CONFIG = {
   metaPageId: process.env.META_PAGE_ID || "1287050647827199",
   metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN || "EAAP26tyiJpMBSwbPigSP59zUgrW3nVwverL5dGtxzJxS7wgGZCwa5FZBTwnp5yLYqBWzvGQco6SuJEXgC7csi3mHZApVZCvRpB7zDCu6KnucWzOZC3jNN8uZCI4VWVlOLyj13uzzYo6lNWlzAr4DSi1QBuYqwHZBiSAxSlbwkJaOZAEZBNBTLwoZA5zOZAIegyGZBGcmC4DeXCKs",
   geminiApiKey: process.env.GEMINI_API_KEY || "",
-  geminiModel: process.env.GEMINI_MODEL || "gemini-3.5-flash",
+  geminiModel: process.env.GEMINI_MODEL || "models/gemini-3.8-live",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "8973914033:AAHA99QmtyefiGYFCePdNuD4ZPyp8xw1uVQ",
   telegramChatId: process.env.TELEGRAM_CHAT_ID || "5513474694",
   workerUrl: process.env.WORKER_URL || "https://social-automate.rifatrabbi104.workers.dev",
@@ -218,6 +218,7 @@ function cleanCustomerReply(raw) {
   return raw
     .replace(/(?:ORDER_JSON|ORDER_UPDATE_JSON|ORDER_CANCEL_JSON|ORDER_NOTE_JSON)[\s\S]*/i, "")
     .replace(/PRODUCT_IDS\s*:\s*[^\r\n]*/gi, "")
+    .replace(/SHOW_HELPLINE\s*:\s*[^\r\n]*/gi, "")
     .replace(/```(?:json)?[\s\S]*?```/gi, "")
     .replace(/\{[\s\r\n]*"(?:order_confirmed|customer_name|order_updated|order_cancelled|order_note|delivery_address)"[\s\S]*?\}/gi, "")
     .replace(/\{[\s\S]*?\}[\s]*$/gi, "")
@@ -566,9 +567,8 @@ function buildContextualQuickReplies(session, aiDecision, audioId) {
 }
 
 // ==========================================
-// 🤖 GEMINI HIGH-SPEED RESILIENT SALES AI ENGINE
-// (Multi-Model Cascade: gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.6-flash, gemini-3.8-flash)
-// (Full Multimodal Image Vision + Zero Silence Guarantee)
+// 🤖 GEMINI 3.8 LIVE MULTIMODAL PERSISTENT WEBSOCKET ENGINE
+// (WebSocket Session Reuse via ws.send() + Multimodal Image Vision)
 // ==========================================
 async function callGeminiSalesAI(
   incomingText,
@@ -699,6 +699,12 @@ PRODUCT_IDS MARKER (internal, mandatory):
   PRODUCT_IDS: <id1>,<id2>
   using the exact PRODUCT_ID values from the catalog. The system removes this line and shows the customer a product button. Never mention it.
 
+HELPLINE & DIRECT SUPPORT (internal marker):
+- If the customer wants to speak directly to a human, asks how to contact, or asks for WhatsApp/phone/helpline (e.g. "যোগাযোগ করতে চাই", "কথা বলতে চাই", "হোয়াটসঅ্যাপ নম্বর আছে?"):
+  Politely tell them in 1 line they can call or WhatsApp our official helpline: 01874600203, and add this marker at the very end:
+  SHOW_HELPLINE: true
+- CRITICAL: When the customer sends their phone number to place an order, DO NOT output SHOW_HELPLINE. Take the order and confirm it!
+
 ORDER TAKING:
 - If only one product has been discussed and the customer sends name + 11-digit mobile number (01XXXXXXXXX) + address, or says they want it, do NOT ask the product name again — you already know it.
 - If several products were discussed and it's unclear which one they want, ask with a short numbered list (১. ..., ২. ...) and let them reply with the number or name.
@@ -716,7 +722,7 @@ EDIT & CANCEL:
 IMAGES:
 - If the customer sends a photo/screenshot, look at it, find the matching or closest product from the catalog, and reply in the same short product format (with link + PRODUCT_IDS).
 
-IMPORTANT: PRODUCT_IDS, ORDER_JSON, ORDER_UPDATE_JSON, ORDER_CANCEL_JSON, ORDER_NOTE_JSON are internal markers only. Put them at the end, never inside customer sentences.
+IMPORTANT: PRODUCT_IDS, ORDER_JSON, ORDER_UPDATE_JSON, ORDER_CANCEL_JSON, ORDER_NOTE_JSON, SHOW_HELPLINE are internal markers only. Put them at the end, never inside customer sentences.
 
 ${orderTimeContext}
 ${productsDiscussionContext}
@@ -724,7 +730,107 @@ ${productsDiscussionContext}
 STORE PRODUCTS CATALOG:
 ${catalog}`;
 
+  const chatId = session?.sender_id ? `fb_${session.sender_id}` : "default";
+  const modelId = CONFIG.geminiModel || "models/gemini-3.8-live";
+
   // টার্নস প্রস্তুতি (হিস্ট্রি + বর্তমান মেসেজ + ছবি)
+  const currentParts = [];
+  if (incomingImageBuffer) {
+    currentParts.push({
+      inlineData: {
+        mimeType: imageMimeType || "image/jpeg",
+        data: incomingImageBuffer.toString('base64')
+      }
+    });
+  }
+  currentParts.push({ text: incomingText.trim() });
+
+  // ==========================================
+  // ⚡ মোড ১: অ্যাক্টিভ লাইভ সকেট রি-ইউজ (Persistent Socket: ws.send() দিয়ে পরবর্তী মেসেজ)
+  // ==========================================
+  const cached = activeLiveSockets.get(chatId);
+  if (cached && cached.ws && cached.ws.readyState === WebSocket.OPEN && cached.isReady) {
+    cached.lastActive = Date.now();
+    cached.accumulatedText = "";
+    cached.pcmChunks = [];
+
+    return new Promise((resolve) => {
+      let isFinished = false;
+      const timeout = setTimeout(() => {
+        if (!isFinished) {
+          isFinished = true;
+          const cleanReply = cleanCustomerReply(cached.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি।";
+          const actions = extractOrderActions(cached.accumulatedText, cleanReply, chatHistory, activeProduct);
+          resolve({
+            reply: cleanReply,
+            rawReply: cached.accumulatedText,
+            order_confirmed: actions.order_confirmed,
+            order_updated: actions.order_updated,
+            order_cancelled: actions.order_cancelled,
+            order_note: actions.order_note,
+            order_data: actions.order_data,
+            note: actions.note,
+            show_helpline: /SHOW_HELPLINE\s*:\s*true/i.test(cached.accumulatedText),
+            audio_id: null,
+            audio_url: null
+          });
+        }
+      }, 30000);
+
+      cached.currentTurnResolve = (accText, chunks) => {
+        if (!isFinished) {
+          isFinished = true;
+          clearTimeout(timeout);
+
+          let audioId = null;
+          let audioUrl = null;
+          if (chunks && chunks.length > 0) {
+            try {
+              const rawPcm = Buffer.concat(chunks);
+              const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+              audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+              audioCache.set(audioId, { buffer: wavBuffer, createdAt: Date.now() });
+              if (audioCache.size > 100) {
+                const oldest = audioCache.keys().next().value;
+                audioCache.delete(oldest);
+              }
+              audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
+            } catch (audioErr) {}
+          }
+
+          const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
+          const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct);
+
+          resolve({
+            reply: cleanReply,
+            rawReply: accText,
+            order_confirmed: actions.order_confirmed,
+            order_updated: actions.order_updated,
+            order_cancelled: actions.order_cancelled,
+            order_note: actions.order_note,
+            order_data: actions.order_data,
+            note: actions.note,
+            show_helpline: /SHOW_HELPLINE\s*:\s*true/i.test(accText),
+            audio_id: audioId,
+            audio_url: audioUrl
+          });
+        }
+      };
+
+      // ⚡ সরাসরি আগের ওপেন সকেটে নতুন টার্ন পাঠানো (কোনো নতুন হ্যান্ডশেক নয়)
+      cached.ws.send(JSON.stringify({
+        clientContent: {
+          turns: [{ role: "user", parts: currentParts }],
+          turnComplete: true
+        }
+      }));
+      console.log(`⚡ [Reusing Persistent Live WebSocket for ${chatId} (${modelId})] Dispatched turn via ws.send()!`);
+    });
+  }
+
+  // ==========================================
+  // 🔌 মোড ২: নতুন লাইভ সকেট ওপেন ও সেশন পুলে পারসিস্টেন্ট সংরক্ষণ
+  // ==========================================
   const rawTurns = [];
   if (Array.isArray(chatHistory)) {
     for (const m of chatHistory.slice(-8)) {
@@ -734,19 +840,8 @@ ${catalog}`;
     }
   }
 
-  const lastTurnParts = [];
-  if (incomingImageBuffer) {
-    lastTurnParts.push({
-      inlineData: {
-        mimeType: imageMimeType || "image/jpeg",
-        data: incomingImageBuffer.toString('base64')
-      }
-    });
-  }
-  lastTurnParts.push({ text: incomingText.trim() });
-
   if (rawTurns.length === 0 || rawTurns[rawTurns.length - 1].parts[rawTurns[rawTurns.length - 1].parts.length - 1]?.text !== incomingText.trim()) {
-    rawTurns.push({ role: "user", parts: lastTurnParts });
+    rawTurns.push({ role: "user", parts: currentParts });
   }
 
   const turns = [];
@@ -763,90 +858,159 @@ ${catalog}`;
     }
   }
   if (turns.length === 0) {
-    turns.push({ role: "user", parts: lastTurnParts });
+    turns.push({ role: "user", parts: currentParts });
   }
 
-  const contents = turns.map(t => ({
-    role: t.role === "model" ? "model" : "user",
-    parts: (t.parts || []).map(p => {
-      if (p.text) return { text: p.text };
-      if (p.inlineData) return { inlineData: p.inlineData };
-      return { text: "" };
-    })
-  }));
+  return new Promise((resolve) => {
+    // 🌐 v1alpha এন্ডপয়েন্ট (models/gemini-3.8-live শতভাগ সাপোর্ট করে)
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
+    const ws = new WebSocket(wsUrl);
 
-  // মাল্টি-মডেল ক্যাসকেড (একটি মডেল ৫০৩ বা হাই ডিমান্ডে থাকলে স্বয়ংক্রিয়ভাবে পরবর্তী মডেলে শিফট)
-  const candidateModels = [
-    CONFIG.geminiModel,
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.6-flash",
-    "gemini-3.8-flash"
-  ].filter(Boolean);
-  const uniqueModels = [...new Set(candidateModels)];
+    const socketEntry = {
+      ws,
+      isReady: false,
+      lastActive: Date.now(),
+      accumulatedText: "",
+      pcmChunks: [],
+      currentTurnResolve: null
+    };
+    activeLiveSockets.set(chatId, socketEntry);
 
-  for (const model of uniqueModels) {
-    try {
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.geminiApiKey}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemInstruction }] },
-          contents,
-          generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        if (rawText.trim()) {
-          const cleanReply = cleanCustomerReply(rawText);
-          const actions = extractOrderActions(rawText, cleanReply, chatHistory, activeProduct);
-          console.log(`✅ [Gemini AI Replied (${model})]: ${cleanReply.substring(0, 60)}...`);
-          return {
-            reply: cleanReply,
-            rawReply: rawText,
-            order_confirmed: actions.order_confirmed,
-            order_updated: actions.order_updated,
-            order_cancelled: actions.order_cancelled,
-            order_note: actions.order_note,
-            order_data: actions.order_data,
-            note: actions.note,
-            audio_id: null,
-            audio_url: null
-          };
-        }
-      } else {
-        const errText = await res.text();
-        console.warn(`⚠️ [Model ${model} Warning]: HTTP ${res.status}`, errText.slice(0, 150));
+    let isFinished = false;
+    const timeout = setTimeout(() => {
+      if (!isFinished) {
+        isFinished = true;
+        const cleanReply = cleanCustomerReply(socketEntry.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।";
+        const actions = extractOrderActions(socketEntry.accumulatedText, cleanReply, chatHistory, activeProduct);
+        resolve({
+          reply: cleanReply,
+          rawReply: socketEntry.accumulatedText,
+          order_confirmed: actions.order_confirmed,
+          order_updated: actions.order_updated,
+          order_cancelled: actions.order_cancelled,
+          order_note: actions.order_note,
+          order_data: actions.order_data,
+          note: actions.note,
+          show_helpline: /SHOW_HELPLINE\s*:\s*true/i.test(socketEntry.accumulatedText),
+          audio_id: null,
+          audio_url: null
+        });
       }
-    } catch (modelErr) {
-      console.warn(`⚠️ [Model ${model} Exception]:`, modelErr.message);
-    }
-  }
+    }, 30000);
 
-  // শতভাগ নিরবচ্ছিন্ন নিরাপত্তা ব্যাকআপ (কখনোই কাস্টমার অনুত্তরিত থাকবে না)
-  console.warn("⚠️ [All Gemini Models Busy / Down] Triggering store catalog fallback reply...");
-  let fallbackReply = "ধন্যবাদ Ranonex-এ মেসেজ দেওয়ার জন্য! 😊 আমাদের অনলাইন শপে আপনাকে স্বাগতম। কীভাবে সাহায্য করতে পারি বলুন? আপনি আমাদের প্রোডাক্ট ক্যাটালগ দেখতে পারেন: https://ranonex.shop";
+    socketEntry.currentTurnResolve = (accText, chunks) => {
+      if (!isFinished) {
+        isFinished = true;
+        clearTimeout(timeout);
 
-  const matched = findMatchingProduct(incomingText, productsList);
-  if (matched) {
-    fallbackReply = `অবশ্যই! আমাদের শপে ${matched.name} এভেইলেবল রয়েছে 😊\nমূল্য: ৳${matched.price}/-\n🔗 বিস্তারিত দেখুন: ${matched.url}\n\nচাইলে এখানেই আপনার নাম, মোবাইল নম্বর ও ঠিকানা দিয়ে অর্ডার করে নিতে পারেন।`;
-  }
+        let audioId = null;
+        let audioUrl = null;
+        if (chunks && chunks.length > 0) {
+          try {
+            const rawPcm = Buffer.concat(chunks);
+            const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+            audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+            audioCache.set(audioId, { buffer: wavBuffer, createdAt: Date.now() });
+            if (audioCache.size > 100) {
+              const oldest = audioCache.keys().next().value;
+              audioCache.delete(oldest);
+            }
+            audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
+          } catch (audioErr) {}
+        }
 
-  return {
-    reply: fallbackReply,
-    rawReply: fallbackReply,
-    order_confirmed: false,
-    order_updated: false,
-    order_cancelled: false,
-    order_note: false,
-    order_data: null,
-    note: "",
-    audio_id: null,
-    audio_url: null
-  };
+        const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
+        const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct);
+
+        resolve({
+          reply: cleanReply,
+          rawReply: accText,
+          order_confirmed: actions.order_confirmed,
+          order_updated: actions.order_updated,
+          order_cancelled: actions.order_cancelled,
+          order_note: actions.order_note,
+          order_data: actions.order_data,
+          note: actions.note,
+          show_helpline: /SHOW_HELPLINE\s*:\s*true/i.test(accText),
+          audio_id: audioId,
+          audio_url: audioUrl
+        });
+      }
+    };
+
+    ws.onopen = () => {
+      console.log(`🔌 [Opening Persistent Live WebSocket for ${chatId}]: Model: ${modelId}`);
+      const setupPayload = {
+        setup: {
+          model: modelId,
+          generationConfig: {
+            responseModalities: ["AUDIO"]
+          },
+          systemInstruction: {
+            parts: [{ text: systemInstruction }]
+          },
+          outputAudioTranscription: {}
+        }
+      };
+      ws.send(JSON.stringify(setupPayload));
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const rawText = event.data instanceof Blob ? await event.data.text() : (event.data?.toString ? event.data.toString() : event.data);
+        const msg = JSON.parse(rawText);
+
+        if (msg.setupComplete !== undefined) {
+          socketEntry.isReady = true;
+          socketEntry.lastActive = Date.now();
+          console.log(`✅ [WebSocket Setup Handshake Complete for ${chatId}]: Socket locked open!`);
+
+          ws.send(JSON.stringify({
+            clientContent: { turns, turnComplete: true }
+          }));
+          return;
+        }
+
+        if (msg.serverContent) {
+          if (msg.serverContent.outputTranscription?.text) {
+            socketEntry.accumulatedText += msg.serverContent.outputTranscription.text;
+          }
+          const parts = msg.serverContent.modelTurn?.parts || [];
+          for (const p of parts) {
+            if (p.text) socketEntry.accumulatedText += p.text;
+            if (p.inlineData && p.inlineData.data) {
+              socketEntry.pcmChunks.push(Buffer.from(p.inlineData.data, 'base64'));
+            }
+          }
+
+          if (msg.serverContent.turnComplete) {
+            socketEntry.lastActive = Date.now();
+            if (socketEntry.currentTurnResolve) {
+              const resFn = socketEntry.currentTurnResolve;
+              socketEntry.currentTurnResolve = null;
+              resFn(socketEntry.accumulatedText, socketEntry.pcmChunks);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Live WS Message parse error:", err.message);
+      }
+    };
+
+    ws.onerror = (e) => {
+      console.error("[Gemini 3.8 Live] WebSocket error:", e.message || e);
+      activeLiveSockets.delete(chatId);
+    };
+
+    ws.onclose = (ev) => {
+      activeLiveSockets.delete(chatId);
+      if (!isFinished && socketEntry.currentTurnResolve) {
+        const resFn = socketEntry.currentTurnResolve;
+        socketEntry.currentTurnResolve = null;
+        resFn(socketEntry.accumulatedText, socketEntry.pcmChunks);
+      }
+    };
+  });
 }
 
 // ==========================================
@@ -1541,8 +1705,12 @@ app.post('/webhook/meta', (req, res) => {
               continue;
             }
 
-            // ৮. [📞 হেল্পলাইনে কল] বাটন ক্লিক
-            if (incomingPayload === "ACTION_CALL_SUPPORT" || /কল\s*করতে\s*চাই|হেল্পলাইন|নাম্বার|number|hotline|customer\s*care/i.test(incomingText)) {
+            // ৮. [📞 হেল্পলাইনে কল] বাটন ক্লিক (বা সরাসরি কল/হোয়াটসঅ্যাপ সাপোর্ট চাইলে)
+            const isExplicitHelpline = incomingPayload === "ACTION_CALL_SUPPORT"
+              || /(?:সরাসরি\s*কল\s*(?:করতে|দিতে)|কথা\s*বলতে\s*চাই|হোয়াটসঅ্যাপ\s*(?:নাম্বার|নম্বর|সাপোর্ট)|whatsapp\s*support|কাস্টমার\s*কেয়ার)/i.test(incomingText);
+            const isProvidingPhoneOrAddress = /\b(?:01[3-9]\d{8})\b/.test(incomingText) || /(?:বাসা|রোড|বাড়ি|গ্রাম|থানা|জেলা|ঢাকা|dhaka|ঠিকানা|অর্ডার|নিব|চাই)/i.test(incomingText);
+
+            if (isExplicitHelpline && !isProvidingPhoneOrAddress) {
               await sendFacebookHelplineCard(senderId);
               continue;
             }
@@ -1718,6 +1886,12 @@ app.post('/webhook/meta', (req, res) => {
                   console.log(`🃏 [Sending Product Card (${matchedProduct.name})] to ${senderId}`);
                   await sendFacebookProductCard(senderId, matchedProduct);
                 }
+              }
+
+              // ৭. 📞 কাস্টমার যোগাযোগ করতে চাইলে হেল্পলাইন/হোয়াটসঅ্যাপ বাটন কার্ড পাঠানো
+              if (aiDecision.show_helpline) {
+                console.log(`📞 [Sending Helpline / WhatsApp Support Card] to ${senderId}`);
+                await sendFacebookHelplineCard(senderId);
               }
 
               session.messages.push({
