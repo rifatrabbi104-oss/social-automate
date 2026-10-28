@@ -64,23 +64,16 @@ conn.on('ready', () => {
             // Restart the Alwaysdata node service by triggering system-restart API
             console.log('🔄 Restarting Alwaysdata Node.js process...');
             fetch('https://ranonex.alwaysdata.net/api/system-restart').catch(() => {});
-            conn.exec(`touch ${REMOTE_DIR}/tmp/restart.txt`, (err4, stream) => {
-              if (err4) {
-                console.error('Exec error:', err4.message);
-                conn.end();
-                return;
-              }
-
-              stream.on('close', (code) => {
-                console.log(`✅ Alwaysdata restart command executed!`);
-                conn.end();
-              });
-            });
+            setTimeout(() => {
+              console.log('✅ Deployment complete! Server is restarting.');
+              conn.end();
+              process.exit(0);
+            }, 2500);
+          });
         });
       });
     });
   });
-});
 }).on('error', (err) => {
   console.error('❌ SSH Connection Error:', err.message);
 }).connect({
