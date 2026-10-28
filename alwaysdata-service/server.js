@@ -217,6 +217,7 @@ function cleanCustomerReply(raw) {
   if (!raw) return "";
   return raw
     .replace(/(?:ORDER_JSON|ORDER_UPDATE_JSON|ORDER_CANCEL_JSON|ORDER_NOTE_JSON)[\s\S]*/i, "")
+    .replace(/PRODUCT_IDS\s*:\s*[^\r\n]*/gi, "")
     .replace(/```(?:json)?[\s\S]*?```/gi, "")
     .replace(/\{[\s\r\n]*"(?:order_confirmed|customer_name|order_updated|order_cancelled|order_note|delivery_address)"[\s\S]*?\}/gi, "")
     .replace(/\{[\s\S]*?\}[\s]*$/gi, "")
@@ -327,10 +328,12 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
   }
 
   // ১. ORDER_JSON মার্কার চেক
+  let orderJsonObj = null;
   const orderMatch = raw.match(/ORDER_JSON:\s*(\{[\s\S]*?\})/i);
   if (orderMatch) {
     try {
       const p = JSON.parse(orderMatch[1]);
+      orderJsonObj = p;
       if (p.customer_phone) {
         const pPhone = extractBangladeshiPhone(p.customer_phone);
         if (pPhone) foundPhone = pPhone;
@@ -361,11 +364,14 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
     order_confirmed = true;
     order_data = {
       order_confirmed: true,
+      product_id: orderJsonObj?.product_id || activeProduct.id,
+      product_name: activeProduct.name,
+      product_url: activeProduct.url || `https://ranonex.shop/product.html?id=${encodeURIComponent(activeProduct.id)}`,
       customer_name: foundName || "Customer",
       customer_phone: foundPhone,
       delivery_address: foundAddress,
-      product_name: activeProduct.name,
-      variant: "Standard",
+      variant: orderJsonObj?.variant || "Standard",
+      order_summary: orderJsonObj?.order_summary || orderJsonObj?.summary || orderJsonObj?.note || "",
       total_amount: total
     };
     console.log(`🎉 [Auto-Detected Real Order Confirmation]: Customer "${order_data.customer_name}", Phone "${foundPhone}", Product "${activeProduct.name}", Total ৳${total}`);
@@ -450,13 +456,13 @@ async function getStoreCatalog() {
           } catch(e) {}
           const imgUrl = (Array.isArray(gallery) && gallery[0]) ? gallery[0] : "https://ranonex.shop/assets/logo.png";
 
-          const rawDesc = p.description || p.specifications || '';
-          const cleanDesc = rawDesc
+          const stripHtml = (s) => String(s || '')
             .replace(/<[^>]*>/g, ' ')
             .replace(/&nbsp;/g, ' ')
             .replace(/\s+/g, ' ')
-            .trim()
-            .slice(0, 180);
+            .trim();
+          const cleanDesc = stripHtml(p.description).slice(0, 400);
+          const cleanSpecs = stripHtml(p.specifications).slice(0, 200);
 
           const pObj = {
             id: p.id,
@@ -468,14 +474,14 @@ async function getStoreCatalog() {
             category: p.category || "",
             description: cleanDesc
           };
-          pObj.searchTokens = extractProductTokens(pObj);
           productsList.push(pObj);
 
-          catalog += `- [SKU: ${sku}] ${p.name}
-    * EXACT PRICE: ৳${price} (${price} BDT)
-    * ORDER LINK: ${link}
-    * SPECS: ${p.specifications || 'Standard'}
-    * KEY FEATURES / INFO: ${cleanDesc || 'প্রিমিয়াম কোয়ালিটি ও আকর্ষণীয় পারফরম্যান্স'}\n`;
+          catalog += `- PRODUCT_ID: ${p.id} | ${p.name}
+    * PRICE: ৳${price}
+    * LINK: ${link}
+    * CATEGORY: ${p.category || '-'}
+    * SPECS: ${cleanSpecs || '-'}
+    * DETAILS: ${cleanDesc || '-'}\n`;
         }
       }
     }
@@ -487,162 +493,43 @@ async function getStoreCatalog() {
   return productCatalogCache;
 }
 
-// 🔍 প্রতিটি প্রোডাক্টের জন্য ডাইনামিক সার্চ টোকেন তৈরি (যেকোনো নতুন প্রোডাক্ট স্বয়ংক্রিয়ভাবে ইনডেক্স হবে)
-function extractProductTokens(p) {
-  const tokens = new Set();
-  if (!p) return [];
-
-  // ১. প্রোডাক্ট আইডি ও এসকেইউ
-  if (p.id) {
-    tokens.add(p.id.toLowerCase());
-    p.id.toLowerCase().split(/[-_]+/).forEach(t => t.length > 1 && tokens.add(t));
-  }
-  if (p.sku) {
-    tokens.add(p.sku.toLowerCase());
-    p.sku.toLowerCase().split(/[-_]+/).forEach(t => t.length > 1 && tokens.add(t));
-  }
-
-  // ২. প্রোডাক্টের নামের শব্দসমূহ (ইংরেজি ও বাংলা)
-  const nameWords = (p.name || '')
-    .toLowerCase()
-    .replace(/[^\w\u0980-\u09FF\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length >= 2);
-  nameWords.forEach(w => tokens.add(w));
-
-  // ৩. ক্যাটাগরি ও স্পেক্স
-  if (p.category) {
-    p.category.toLowerCase().split(/\s+/).filter(w => w.length >= 3).forEach(w => tokens.add(w));
-  }
-
-  // ৪. সার্বজনীন বাংলা ও ব্যাংলিশ প্রতিশব্দ ম্যাপিং (ঘড়ি, কুলার, হুডি, পাঞ্জাবি, গেম, ইয়ারফোন ইত্যাদি)
-  const fullContent = `${p.name || ''} ${p.description || ''} ${p.specifications || ''} ${p.category || ''} ${p.id || ''}`.toLowerCase();
-
-  // ঘড়ি / Watch
-  if (/watch|smartwatch|clock|ঘড়ি|ঘড়ির|হাতঘড়ি|skeleton|wc-1001/i.test(fullContent)) {
-    ['watch', 'smartwatch', 'ghori', 'ghorir', 'hatghori', 'ঘড়ি', 'ঘড়ির', 'হাতঘড়ি', 'ওয়াচ', 'ঘড়ী', 'ঘড়িটা'].forEach(t => tokens.add(t));
-  }
-  // কুলার / Cooler / Fan
-  if (/cooler|glacier|fan|কুলার|ফ্যান|ga6|prod_1/i.test(fullContent)) {
-    ['cooler', 'kuler', 'mobile cooler', 'phone cooler', 'fan', 'কুলার', 'মোবাইল কুলার', 'ফোন কুলার', 'ফ্যান', 'কুলারটা'].forEach(t => tokens.add(t));
-  }
-  // গেম কনসোল / Game Console
-  if (/game|console|handheld|retro|gaming|controller|gc-1102|p6|j36|x9|গেম|গেমিং/i.test(fullContent)) {
-    ['game', 'console', 'game console', 'gaming', 'retro', 'handheld', 'গেম', 'গেম কনসোল', 'গেমিং', 'ভিডিও গেম', 'কনসোল', 'p6', 'j36'].forEach(t => tokens.add(t));
-  }
-  // ইয়ারফোন / Headphone
-  if (/earphone|headphone|headset|ep-1100|m105|ইয়ারফোন|হেডফোন/i.test(fullContent)) {
-    ['earphone', 'headphone', 'headset', 'hedphone', 'earfon', 'ইয়ারফোন', 'হেডফোন', 'হেডফন', 'ইয়ারফোন'].forEach(t => tokens.add(t));
-  }
-  // ইয়ারবাড / Earbuds
-  if (/earbuds|earbud|airbuds|airpod|airpods|tws|ep-1105|k8|বাডস|ইয়ারবাড/i.test(fullContent)) {
-    ['earbuds', 'earbud', 'airbuds', 'airpod', 'airpods', 'buds', 'tws', 'ইয়ারবাড', 'বাডস', 'ইয়ারবাড', 'বাড'].forEach(t => tokens.add(t));
-  }
-  // মাইক্রোফোন / Mic
-  if (/mic|microphone|lavalier|boya|lm-1100|mw6|মাইক্রোফোন|মাইক/i.test(fullContent)) {
-    ['microphone', 'mic', 'maykrofon', 'maik', 'মাইক্রোফোন', 'মাইক', 'মাউথপিস'].forEach(t => tokens.add(t));
-  }
-  // পাওয়ার ব্যাংক / Power Bank
-  if (/power\s*bank|powerbank|magsafe|pb_1100|10000mah|পাওয়ার\s*ব্যাংক/i.test(fullContent)) {
-    ['powerbank', 'power bank', 'pawer bank', 'powar bank', 'পাওয়ার ব্যাংক', 'পাওয়ারব্যাংক'].forEach(t => tokens.add(t));
-  }
-  // লাইট / Light / Neon / Room Decoration
-  if (/light|neon|rope|argb|rgb|prod_2|নিয়ন|লাইট|decor|decoration|shajano/i.test(fullContent)) {
-    ['light', 'neon', 'led', 'rgb', 'lait', 'নিয়ন', 'রিমোট লাইট', 'লাইট', 'আলো', 'ঘর সাজানো', 'ঘর সাজানোর', 'রুম সাজানো', 'decor', 'decoration', 'ghor shajano', 'ghor shajanor', 'shajanor'].forEach(t => tokens.add(t));
-  }
-  // হুডি / Hoodie / Combo
-  if (/hoodie|pullover|ds-1100|hd_1100|dropshoulder|হুডি|ড্রপশোল্ডার|combo/i.test(fullContent)) {
-    ['hoodie', 'hodi', 'hudy', 'hodie', 'dropshoulder', 'dropsoulder', 'হুডি', 'ড্রপশোল্ডার', 'পেইজলি হুডি', 'উইন্টার হুডি', 'কম্বো', 'combo'].forEach(t => tokens.add(t));
-  }
-  // পাঞ্জাবি / Panjabi
-  if (/panjabi|punjabi|crinkle|pj-100|pj-101|pj-102|pj-103|pj-104|পাঞ্জাবি|পাঞ্জাবী/i.test(fullContent)) {
-    ['panjabi', 'punjabi', 'panzabi', 'পাঞ্জাবি', 'পাঞ্জাবী', 'পাঞ্জাবিটা'].forEach(t => tokens.add(t));
-  }
-
-  return Array.from(tokens);
-}
-
-// 🔍 বাংলা ও ইংরেজি সিনোনিম এবং কীওয়ার্ড ব্যাকআপ তালিকা
-const BENGALI_PRODUCT_KEYWORDS = [
-  { matchWords: ['ঘড়ি', 'ঘড়ির', 'হাতঘড়ি', 'watch', 'ঘড়িটা', 'skeleton', 'wc-1001', 'ওয়াচ'], id: 'wc-1001' },
-  { matchWords: ['কুলার', 'মোবাইল কুলার', 'ফোন কুলার', 'cooler', 'ga6', 'hoco ga6', 'glacier', 'fan', 'ফ্যান'], id: 'prod_1' },
-  { matchWords: ['গেম কনসোল', 'গেম', 'গেমিং', 'console', 'game', 'handheld', 'retro', 'ভিডিও গেম', 'p6', 'j36', 'x9'], id: 'gc-1102' },
-  { matchWords: ['ইয়ারফোন', 'হেডফোন', 'হেডফন', 'headphone', 'earphone', 'গেমিং ইয়ারফোন', 'm105', 'hoco m105'], id: 'ep-1100' },
-  { matchWords: ['ইয়ারবাড', 'বাডস', 'earbuds', 'earbud', 'k8', 'wireless earbuds'], id: 'ep-1105' },
-  { matchWords: ['মাইক্রোফোন', 'মাইক', 'মাউথপিস', 'microphone', 'mic', 'boya', 'lavalier', 'by-mw6', 'mw6'], id: 'lm-1100' },
-  { matchWords: ['পাওয়ার ব্যাংক', 'পাওয়ারব্যাংক', 'power bank', 'powerbank', 'magsafe', 'vd-pb030', '10000mah'], id: 'pb_1100' },
-  { matchWords: ['নিয়ন লাইট', 'নিয়ন', 'রিমোট লাইট', 'লাইট', 'neon', 'rope', 'argb', 'rgb light', 'আলো', 'light', 'ঘর সাজানো', 'ঘর সাজানোর', 'রুম সাজানো', 'ghor shajano', 'ghor shajanor', 'decor', 'decoration', 'shajanor'], id: 'prod_2' },
-  { matchWords: ['পেইজলি হুডি', 'paisley', 'hoodie', 'hodie', 'hodi', 'ড্রপশোল্ডার', 'কম্বো', 'dropshoulder', 'dropsoulder', 'হুডি', 'combo'], id: 'ds-1100' },
-  { matchWords: ['সলিড হুডি', 'solid hoodie', 'pullover', 'উইন্টার হুডি', 'plain hoodie', 'হুডি', 'hoodie', 'hodi', 'hodie'], id: 'hd_1100' },
-  { matchWords: ['অলিভ পাঞ্জাবি', 'crinkle panjabi', 'crinkle', 'panjabi', 'পাঞ্জাবি', 'পাঞ্জাবী'], id: 'pj-101' },
-  { matchWords: ['সি গ্রিন পাঞ্জাবি', 'sea green', 'micro stick'], id: 'pj-100' },
-  { matchWords: ['পপকন পাঞ্জাবি', 'popcon', 'cream panjabi', 'ক্রিম কালার'], id: 'pj-104' },
-  { matchWords: ['সাদা পাঞ্জাবি', 'হোয়াইট পাঞ্জাবি', 'giza cotton', 'white panjabi'], id: 'pj-103' },
-  { matchWords: ['চেরি পাঞ্জাবি', 'cherry spandex'], id: 'pj-102' }
-];
-
-// টেক্সট থেকে প্রোডাক্ট খোঁজা (বাংলা, ইংরেজি, ব্যাংলিশ, SKU ও ডাইনামিক টোকেন স্কোরিং)
+// 🔍 কোনো হার্ডকোডেড কীওয়ার্ড নেই — কোন প্রোডাক্ট কাস্টমারের দরকার তা AI নিজেই ক্যাটালগ দেখে ঠিক করে।
+// এখানে শুধু নিশ্চিত (exact) মিল খোঁজা হয়: প্রোডাক্ট আইডি, SKU, প্রোডাক্ট URL বা হুবহু প্রোডাক্টের নাম।
 function findMatchingProduct(text, productsList) {
   if (!text || !Array.isArray(productsList) || productsList.length === 0) return null;
-  const lower = text.toLowerCase().trim();
+  const lower = String(text).toLowerCase();
 
-  // ১. সরাসরি আইডি বা SKU মিল
+  const urlIds = [...lower.matchAll(/product\.html\?id=([\w\-]+)/g)].map(m => m[1]);
+  for (const id of urlIds) {
+    const p = productsList.find(x => String(x.id).toLowerCase() === id);
+    if (p) return p;
+  }
   for (const p of productsList) {
-    if (lower.includes(p.id.toLowerCase())) return p;
-    if (p.sku && lower.includes(p.sku.toLowerCase())) return p;
+    const id = String(p.id || '').toLowerCase();
+    if (id && new RegExp(`(^|[^\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w-]|$)`).test(lower)) return p;
+    if (p.sku && p.sku.length > 3 && lower.includes(p.sku.toLowerCase())) return p;
+    if (p.name && p.name.length > 6 && lower.includes(p.name.toLowerCase())) return p;
   }
-
-  // ২. বাংলা ব্যাকআপ সিনোনিম কীওয়ার্ড মিল
-  for (const item of BENGALI_PRODUCT_KEYWORDS) {
-    for (const kw of item.matchWords) {
-      if (lower.includes(kw.toLowerCase())) {
-        const found = productsList.find(p => p.id === item.id);
-        if (found) return found;
-      }
-    }
-  }
-
-  // ৩. ডাইনামিক টোকেন স্কোরিং (বাংলা, ব্যাংলিশ ও ইংরেজি ম্যাচ)
-  let bestProduct = null;
-  let highestScore = 0;
-
-  for (const p of productsList) {
-    let score = 0;
-    const tokens = p.searchTokens || extractProductTokens(p);
-
-    for (const token of tokens) {
-      if (!token || token.length < 3) continue;
-      if (lower.includes(token.toLowerCase())) {
-        // যদি টোকেনটি সরাসরি প্রোডাক্টের টাইটেলে থাকে
-        if (p.name.toLowerCase().includes(token.toLowerCase())) {
-          score += 4;
-        } else {
-          score += 2;
-        }
-      }
-    }
-
-    if (score > highestScore) {
-      highestScore = score;
-      bestProduct = p;
-    }
-  }
-
-  if (highestScore >= 2) {
-    return bestProduct;
-  }
-
-  // ৪. যেকোনো নতুন প্রোডাক্টের টাইটেল থেকে বড় শব্দের মিল (ফ্যাক্টরি ফলব্যাক)
-  for (const p of productsList) {
-    const words = p.name.toLowerCase().split(/\s+/).filter(w => w.length >= 4 && !['with', 'control', 'original', 'retro', 'sharp', 'black', 'white'].includes(w));
-    for (const w of words) {
-      if (lower.includes(w)) {
-        return p;
-      }
-    }
-  }
-
   return null;
+}
+
+// 🤖 AI-এর রিপ্লাই থেকে AI-নির্বাচিত প্রোডাক্টগুলো বের করা (PRODUCT_IDS মার্কার + রিপ্লাইতে থাকা প্রোডাক্ট URL)
+function extractAIProducts(raw, productsList) {
+  if (!raw || !Array.isArray(productsList) || productsList.length === 0) return [];
+  const ids = [];
+  const marker = String(raw).match(/PRODUCT_IDS\s*:\s*([^\n]+)/i);
+  if (marker) {
+    marker[1].split(/[,\s]+/).map(s => s.trim().replace(/[\[\]"'.]/g, '')).filter(Boolean).forEach(id => ids.push(id.toLowerCase()));
+  }
+  for (const m of String(raw).matchAll(/product\.html\?id=([\w\-]+)/gi)) {
+    ids.push(m[1].toLowerCase());
+  }
+  const out = [];
+  for (const id of ids) {
+    const p = productsList.find(x => String(x.id).toLowerCase() === id);
+    if (p && !out.some(o => o.id === p.id)) out.push(p);
+  }
+  return out;
 }
 
 // ==========================================
@@ -676,6 +563,72 @@ function buildContextualQuickReplies(session, aiDecision, audioId) {
   quickReplies.push({ content_type: "text", title: "🔊 ভয়েস শুনুন", payload: `PLAY_AUDIO_${audioIdForButton}` });
 
   return quickReplies.slice(0, 11); // মেটা সর্বোচ্চ ১৩টি বাটন অনুমোদন করে
+}
+
+// ==========================================
+// 🛡️ GEMINI REST ফলব্যাক ইঞ্জিন (WebSocket ড্রপ বা বিলম্ব হলে নিরবচ্ছিন্ন সেবা নিশ্চিতকরণ)
+// ==========================================
+async function callGeminiRestFallback(systemInstruction, turns = [], activeProduct = null) {
+  if (!CONFIG.geminiApiKey || CONFIG.geminiApiKey === "YOUR_GEMINI_API_KEY") return null;
+  try {
+    const model = CONFIG.geminiModel || "gemini-2.0-flash";
+    const contents = [];
+    if (Array.isArray(turns) && turns.length > 0) {
+      for (const t of turns) {
+        const parts = [];
+        for (const p of t.parts || []) {
+          if (p.text) parts.push({ text: p.text });
+          else if (p.inlineData) parts.push({ inlineData: p.inlineData });
+        }
+        if (parts.length > 0) {
+          contents.push({
+            role: t.role === "model" ? "model" : "user",
+            parts
+          });
+        }
+      }
+    }
+
+    if (contents.length === 0) return null;
+
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.geminiApiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemInstruction }] },
+        contents,
+        generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const txt = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      if (txt.trim()) {
+        const cleanReply = cleanCustomerReply(txt);
+        const actions = extractOrderActions(txt, cleanReply, [], activeProduct);
+        console.log(`🛡️ [REST Fallback Succeeded (${model})]: ${cleanReply.substring(0, 60)}...`);
+        return {
+          reply: cleanReply,
+          rawReply: txt,
+          order_confirmed: actions.order_confirmed,
+          order_updated: actions.order_updated,
+          order_cancelled: actions.order_cancelled,
+          order_note: actions.order_note,
+          order_data: actions.order_data,
+          note: actions.note,
+          audio_id: null,
+          audio_url: null
+        };
+      }
+    } else {
+      const errText = await res.text();
+      console.warn("⚠️ REST Fallback HTTP error:", res.status, errText.slice(0, 200));
+    }
+  } catch (e) {
+    console.error("⚠️ REST Fallback Exception:", e.message);
+  }
+  return null;
 }
 
 // ==========================================
@@ -780,80 +733,65 @@ CRITICAL RULE FOR SINGLE PRODUCT ORDER CONFIRMATION:
 
   const isFirstMessage = !Array.isArray(chatHistory) || chatHistory.length <= 1;
 
-  const systemInstruction = `You are the official AI Sales Assistant of 'Ranonex' online store in Bangladesh (https://ranonex.shop).
+  const systemInstruction = `You are a real, friendly sales person chatting on the Facebook page of 'Ranonex' (online store in Bangladesh, https://ranonex.shop). You talk like a helpful human shop assistant, NOT like a robot.
 
-CRITICAL BRAND & LANGUAGE RULES:
-1. STRICT ZERO BANGLISH POLICY:
-   - You MUST ALWAYS respond in pure, polite, and natural Bengali script (খাঁটি বাংলা লিপি).
-   - Under NO circumstances should you EVER respond in Banglish!
-   - Even if the customer writes in Banglish, reply 100% in pure Bengali script (বাংলা লিপি).
+LANGUAGE:
+- Always reply in natural, simple Bengali script (বাংলা লিপি), even if the customer writes in Banglish or English.
+- Write the brand name only in English: "Ranonex".
+- ${isFirstMessage ? `If the customer just greets (hi/hello/salam), greet back warmly in one short line and ask what they are looking for.` : `Do NOT introduce yourself again. Continue the conversation naturally.`}
 
-2. STORE BRAND NAME IN ENGLISH ONLY:
-   - ALWAYS write the store brand name in English letters as "Ranonex".
+HOW TO FIND THE RIGHT PRODUCT (you decide, nobody else):
+- The full live catalog of the store is given below as STORE PRODUCTS CATALOG. It changes often and new products get added — always rely on it.
+- Understand what the customer actually NEEDS (their problem / purpose), not just the exact word. Banglish, typos, indirect requests are normal.
+  e.g. "ghor shajabo / room decor" -> decoration items like neon/LED lights; "phone gorom hoy" -> mobile cooler; "gaming er jonno" -> game console / gaming earphone; "shiter jama" -> hoodie.
+- Pick only the products from the catalog that really solve their need (usually 1, at most 3). Never say "we don't have it" unless nothing in the catalog fits; if nothing fits, say so honestly in one line and suggest the closest useful item if any.
+- Never invent products, prices, or features that are not in the catalog.
 
-3. STRICT IDENTITY & NO-REPETITIVE-INTRO RULE:
-   ${isFirstMessage ? `- ONLY on the very first greeting (if customer says 'hi/hello/salam'), introduce yourself ONCE: "আমি Ranonex স্টোরের সেলস অ্যাসিস্ট্যান্ট..."` : `- DO NOT INTRODUCE YOURSELF! Never repeat "আমি Ranonex স্টোরের সেলস অ্যাসিস্ট্যান্ট..." on subsequent messages or voice replies! Answer directly like a helpful human conversation.`}
+HOW TO WRITE A PRODUCT REPLY (short, minimal, solution-style):
+- Keep it short — like a real chat message. No long lists of policies.
+- Start by connecting to their need in a human way, then introduce the product as the solution.
+- For each product:
+  • Product name (as in catalog)
+  • 1–2 lines explaining how it solves their problem, mentioning its special features from DETAILS/SPECS (e.g. "১০ মিটার লম্বা, অ্যাপ আর রিমোট দিয়ে রঙ বদলানো যায়")
+  • Price: ৳<exact PRICE from catalog>
+  • The product LINK from the catalog (always include it, on its own line)
+- Then ONE short line telling them they can also order right here in the message by sending name, mobile number and address.
+- Do NOT mention delivery charge, delivery time, cash on delivery, or return policy unless the customer asks about them. (If asked: Dhaka city ৳70, outside Dhaka ৳130, cash on delivery, can check parcel at delivery.)
+- No headings, no "📌 প্রোডাক্ট:" style labels, no repetitive closing questions. At most 1–2 emojis.
 
-4. STRICT PRODUCT PRICE INTEGRITY:
-   - Quote the EXACT numeric price listed under 'EXACT PRICE' in the catalog.
-   - For example, if EXACT PRICE is ৳1315, state "১৩১৫ টাকা (1315 ৳)". Never drop zeros.
+Example (customer: "ghor shajanor jonno kichu ache?"):
+"অবশ্যই! ঘরটাকে একদম নতুন লুক দিতে চাইলে এটা দারুণ কাজে দেবে 😊
 
-5. 🛍️ COMPLETE PRODUCT CONSULTATION, URL & IN-CHAT ORDERING GUIDE (প্রোডাক্ট তথ্য, লিংক ও মেসেজে অর্ডারের নিয়ম):
-   - Whenever ANY product is discussed, asked about, or recommended:
-     You MUST ALWAYS provide a complete, well-structured, and helpful response in pure Bengali script containing ALL of the following essential details:
-     1. Product Name & Core Features/Benefits: State the product name and explain its core features, specs, and benefits in 1-2 attractive, helpful lines based on KEY FEATURES/SPECS in the catalog.
-     2. Exact Price: Clearly state the current offer price: "এর বর্তমান অফার মূল্য মাত্র [Exact Price] টাকা।"
-     3. Delivery Terms & Charge: "সারা বাংলাদেশে ক্যাশ অন হোম ডেলিভারিতে পার্সেল চেক করে নেওয়ার নিশ্চয়তা রয়েছে (ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, এবং ঢাকার বাইরে ১৩০ টাকা)।"
-     4. Direct Website Product Link: Include the direct ORDER LINK from the catalog:
-        "🔗 বিস্তারিত দেখতে বা সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক: [ORDER LINK]"
-     5. Clear In-Chat Ordering Instructions (মেসেজে অর্ডার করার নিয়ম): Clearly instruct the customer:
-        "📩 অথবা এখনই ইনবক্সে মেসেজের মাধ্যমে ক্যাশ অন ডেলিভারিতে অর্ডার করতে আপনার:
-        ১. পুরো নাম
-        ২. ১১ ডিজিটের মোবাইল নম্বর
-        ৩. সম্পূর্ণ ডেলিভারি ঠিকানা
-        লিখে পাঠিয়ে দিন।"
-     6. Polite Gentle Follow-up: Courteously ask: "আপনার কি এই প্রোডাক্টটি সম্পর্কে আরও কিছু জানার আছে, নাকি এখনই অর্ডার কনফার্ম করে দেব?"
+10M ARGB Neon Rope Light
+১০ মিটার লম্বা নিয়ন লাইট — দেয়াল, খাট বা গেমিং সেটআপের চারপাশে লাগিয়ে অ্যাপ বা রিমোট দিয়ে ইচ্ছেমতো রঙ ও মুড বদলাতে পারবেন।
+দাম: ৳3900
+https://ranonex.shop/product.html?id=prod_2
 
-6. 🚨 STRICT FIRST-TURN ORDER CONFIRMATION RULE (কড়াকড়ি নিয়ম):
-   - THE VERY INSTANT the customer provides their Name, 11-digit Bangladeshi Phone Number (01XXXXXXXXX), and Delivery Address:
-   - YOU MUST IMMEDIATELY CONFIRM THE ORDER ON THAT VERY FIRST TURN!
-   - DO NOT wait for a 2nd confirmation!
-   - State warmly: "আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে! আপনি চাইলে আগামী ১৫ মিনিটের মধ্যে যেকোনো তথ্য (ঠিকানা, ফোন নম্বর বা প্রোডাক্ট) পরিবর্তন বা বাতিল করতে পারবেন।"
-   - AT THE VERY BOTTOM OF THAT EXACT MESSAGE, OUTPUT:
-     ORDER_JSON: {"order_confirmed": true, "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "product_name": "...", "variant": "...", "total_amount": 0}
+চাইলে এখানেই আপনার নাম, মোবাইল নম্বর আর ঠিকানা দিয়ে অর্ডার করে ফেলতে পারেন।"
 
-7. EDIT & CANCELLATION:
-   - If customer edits within 15 mins -> Confirm update & output:
-     ORDER_UPDATE_JSON: {"order_updated": true, "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "product_name": "...", "variant": "...", "total_amount": 0}
-   - If customer cancels -> Confirm cancellation & output:
-     ORDER_CANCEL_JSON: {"order_cancelled": true, "customer_name": "...", "customer_phone": "...", "product_name": "...", "reason": "Customer requested cancellation"}
+PRODUCT_IDS MARKER (internal, mandatory):
+- Whenever your reply talks about or recommends any product(s), add this as the very LAST line of your reply:
+  PRODUCT_IDS: <id1>,<id2>
+  using the exact PRODUCT_ID values from the catalog. The system removes this line and shows the customer a product button. Never mention it.
 
-8. 🖼️ VISUAL PRODUCT SEARCH & SCREENSHOT RECOGNITION (ছবি/স্ক্রিনশট শনাক্তকরণ):
-   - When the customer sends an image, photo, or screenshot of a product:
-     1. Carefully analyze the visual features (appearance, color, shape, buttons, gaming console, cooler, earphone, microphone, powerbank, hoodie, neon light, etc.).
-     2. Compare it with the STORE PRODUCTS CATALOG below to identify the exact or closest matching product.
-     3. Warmly and politely greet them in pure Bengali script (বাংলা লিপি), confirm the matched product with ALL basic information:
-        - Product Name & 1-2 lines of core features/benefits.
-        - Exact offer price in ৳ (e.g. "১৩১৫ টাকা").
-        - Cash on delivery with open-box parcel checking nationwide (ডেলিভারি চার্জ: ঢাকা সিটিতে ৭০৳, ঢাকার বাইরে ১৩০৳)।
-        - Direct Website link: "🔗 বিস্তারিত দেখতে বা সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক: [ORDER LINK]"
-        - Clear message ordering instructions: "📩 অথবা ইনবক্সে অর্ডার করতে আপনার নাম, মোবাইল নম্বর ও সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।"
-        - Courteous follow-up question: "ছবিতে দেখা প্রোডাক্টটি কি আপনি খুঁজছেন বা এটি কি এখনই অর্ডার কনফার্ম করে দেব?"
-     4. NEVER invent prices. Use the exact price and link from the catalog.
+ORDER TAKING:
+- If only one product has been discussed and the customer sends name + 11-digit mobile number (01XXXXXXXXX) + address, or says they want it, do NOT ask the product name again — you already know it.
+- If several products were discussed and it's unclear which one they want, ask with a short numbered list (১. ..., ২. ...) and let them reply with the number or name.
+- If name, phone or address is missing, ask only for the missing part, briefly.
+- As soon as you have product + name + phone + address, confirm the order in the SAME turn, warmly and briefly in your own words, and include the sentence "আপনার অর্ডারটি কনফার্ম করা হয়েছে" somewhere. Mention they can change or cancel within 15 minutes.
+- At the very bottom of that confirmation message output (internal):
+  ORDER_JSON: {"order_confirmed": true, "product_id": "<PRODUCT_ID>", "product_name": "...", "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "variant": "...", "order_summary": "<2-3 sentences in Bengali for the shop owner: who ordered what, any size/color/variant or special request the customer mentioned, how the conversation went (e.g. asked about decoration, chose neon light), anything delivery team should know>"}
 
-9. 🎯 SINGLE VS MULTI-PRODUCT ORDERING RULES:
-   - SINGLE PRODUCT DISCUSSED: If only 1 product has been discussed in this conversation, and the customer provides their delivery details (Name, Phone, Address) or says "আমি এটি নিতে চাই / অর্ডার করব":
-     DO NOT ask the customer to repeat or state the product name! You already know the active product. Automatically confirm the order for that single product on the very first turn!
-   - MULTIPLE PRODUCTS DISCUSSED: If 2 or more different products have been discussed in the conversation, and the customer wants to order without naming which one:
-     DO NOT guess blindly!
-     Politely ask them with numbering in pure Bengali script (বাংলা লিপি):
-     "আপনি কোন প্রোডাক্টটি অর্ডার করতে চান? দয়া করে নম্বর বা নাম লিখে জানান:
-     ১. [প্রোডাক্ট ১] (বর্তমান অফার মূল্য: ৳[দাম])
-     ২. [প্রোডাক্ট ২] (বর্তমান অফার মূল্য: ৳[দাম])
-     (যেটি নিতে চান সেটির নম্বর বা নাম লিখে দিন)"
-     Once the customer states the number or name, confirm that specific product!
+EDIT & CANCEL:
+- Edit within 15 minutes -> confirm briefly and output:
+  ORDER_UPDATE_JSON: {"order_updated": true, "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "product_name": "...", "variant": "...", "total_amount": 0}
+- Cancel -> confirm briefly and output:
+  ORDER_CANCEL_JSON: {"order_cancelled": true, "customer_name": "...", "customer_phone": "...", "product_name": "...", "reason": "..."}
 
-IMPORTANT: Internal markers (ORDER_JSON, ORDER_UPDATE_JSON, ORDER_CANCEL_JSON, ORDER_NOTE_JSON) are strictly for internal system processing. Never show raw JSON inside customer sentences.
+IMAGES:
+- If the customer sends a photo/screenshot, look at it, find the matching or closest product from the catalog, and reply in the same short product format (with link + PRODUCT_IDS).
+
+IMPORTANT: PRODUCT_IDS, ORDER_JSON, ORDER_UPDATE_JSON, ORDER_CANCEL_JSON, ORDER_NOTE_JSON are internal markers only. Put them at the end, never inside customer sentences.
 
 ${orderTimeContext}
 ${productsDiscussionContext}
@@ -862,6 +800,48 @@ STORE PRODUCTS CATALOG:
 ${catalog}`;
 
   const chatId = session?.sender_id ? `fb_${session.sender_id}` : "default";
+
+  // 📝 টার্নস বিল্ডার (WebSocket ও REST উভয়ের জন্য প্রস্তুত রাখা)
+  const rawTurns = [];
+  if (Array.isArray(chatHistory)) {
+    for (const m of chatHistory.slice(-8)) {
+      const role = m.sender_type === "assistant" || m.sender_type === "ai" ? "model" : "user";
+      const text = (m.message_text || "").trim();
+      if (text) rawTurns.push({ role, parts: [{ text }] });
+    }
+  }
+
+  const lastTurnParts = [];
+  if (incomingImageBuffer) {
+    lastTurnParts.push({
+      inlineData: {
+        mimeType: imageMimeType,
+        data: incomingImageBuffer.toString('base64')
+      }
+    });
+  }
+  lastTurnParts.push({ text: incomingText.trim() });
+
+  if (rawTurns.length === 0 || rawTurns[rawTurns.length - 1].parts[rawTurns[rawTurns.length - 1].parts.length - 1]?.text !== incomingText.trim()) {
+    rawTurns.push({ role: "user", parts: lastTurnParts });
+  }
+
+  const turns = [];
+  for (const turn of rawTurns) {
+    if (turns.length === 0) {
+      if (turn.role === "user") turns.push(turn);
+      continue;
+    }
+    const prevTurn = turns[turns.length - 1];
+    if (prevTurn.role === turn.role) {
+      prevTurn.parts[0].text += "\n" + (turn.parts[0]?.text || "");
+    } else {
+      turns.push(turn);
+    }
+  }
+  if (turns.length === 0) {
+    turns.push({ role: "user", parts: lastTurnParts });
+  }
 
   // ==========================================
   // ⚡ মোড ১: অ্যাক্টিভ লাইভ সকেট রি-ইউজ (ws.send() দিয়ে লাইভ কনটেক্সট প্রিজার্ভ)
@@ -874,13 +854,20 @@ ${catalog}`;
 
     return new Promise((resolve) => {
       let isFinished = false;
-      const timeout = setTimeout(() => {
+      const timeout = setTimeout(async () => {
         if (!isFinished) {
           isFinished = true;
-          const cleanReply = cleanCustomerReply(cached.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি।";
-          const actions = extractOrderActions(cached.accumulatedText, cleanReply, chatHistory, activeProduct);
+          let acc = cached.accumulatedText;
+          if (!acc || !acc.trim()) {
+            console.log("⚠️ [Live WS Mode 1 Timeout] Attempting REST fallback...");
+            const restRes = await callGeminiRestFallback(systemInstruction, turns, activeProduct);
+            if (restRes) return resolve(restRes);
+          }
+          const cleanReply = cleanCustomerReply(acc) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি।";
+          const actions = extractOrderActions(acc, cleanReply, chatHistory, activeProduct);
           resolve({
             reply: cleanReply,
+            rawReply: acc,
             order_confirmed: actions.order_confirmed,
             order_updated: actions.order_updated,
             order_cancelled: actions.order_cancelled,
@@ -893,10 +880,16 @@ ${catalog}`;
         }
       }, 35000);
 
-      cached.currentTurnResolve = (accText, chunks) => {
+      cached.currentTurnResolve = async (accText, chunks) => {
         if (!isFinished) {
           isFinished = true;
           clearTimeout(timeout);
+
+          if ((!accText || !accText.trim()) && (!chunks || chunks.length === 0)) {
+            console.log("⚠️ [Live WS Mode 1 Empty] Attempting REST fallback...");
+            const restRes = await callGeminiRestFallback(systemInstruction, turns, activeProduct);
+            if (restRes) return resolve(restRes);
+          }
 
           let audioId = null;
           let audioUrl = null;
@@ -919,6 +912,7 @@ ${catalog}`;
 
           resolve({
             reply: cleanReply,
+            rawReply: accText,
             order_confirmed: actions.order_confirmed,
             order_updated: actions.order_updated,
             order_cancelled: actions.order_cancelled,
@@ -965,47 +959,6 @@ ${catalog}`;
   // ==========================================
   // 🔌 মোড ২: নতুন লাইভ সকেট ওপেন ও সেশন পুলে সংরক্ষণ
   // ==========================================
-  const rawTurns = [];
-  if (Array.isArray(chatHistory)) {
-    for (const m of chatHistory.slice(-8)) {
-      const role = m.sender_type === "assistant" || m.sender_type === "ai" ? "model" : "user";
-      const text = (m.message_text || "").trim();
-      if (text) rawTurns.push({ role, parts: [{ text }] });
-    }
-  }
-
-  const lastTurnParts = [];
-  if (incomingImageBuffer) {
-    lastTurnParts.push({
-      inlineData: {
-        mimeType: imageMimeType,
-        data: incomingImageBuffer.toString('base64')
-      }
-    });
-  }
-  lastTurnParts.push({ text: incomingText.trim() });
-
-  if (rawTurns.length === 0 || rawTurns[rawTurns.length - 1].parts[rawTurns[rawTurns.length - 1].parts.length - 1]?.text !== incomingText.trim()) {
-    rawTurns.push({ role: "user", parts: lastTurnParts });
-  }
-
-  const turns = [];
-  for (const turn of rawTurns) {
-    if (turns.length === 0) {
-      if (turn.role === "user") turns.push(turn);
-      continue;
-    }
-    const prevTurn = turns[turns.length - 1];
-    if (prevTurn.role === turn.role) {
-      prevTurn.parts[0].text += "\n" + (turn.parts[0]?.text || "");
-    } else {
-      turns.push(turn);
-    }
-  }
-  if (turns.length === 0) {
-    turns.push({ role: "user", parts: lastTurnParts });
-  }
-
   return new Promise((resolve) => {
     const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
     const ws = new WebSocket(wsUrl);
@@ -1021,13 +974,20 @@ ${catalog}`;
     activeLiveSockets.set(chatId, socketEntry);
 
     let isFinished = false;
-    const timeout = setTimeout(() => {
+    const timeout = setTimeout(async () => {
       if (!isFinished) {
         isFinished = true;
-        const cleanReply = cleanCustomerReply(socketEntry.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।";
-        const actions = extractOrderActions(socketEntry.accumulatedText, cleanReply, chatHistory, activeProduct);
+        let acc = socketEntry.accumulatedText;
+        if (!acc || !acc.trim()) {
+          console.log("⚠️ [Live WS Mode 2 Timeout] Attempting REST fallback...");
+          const restRes = await callGeminiRestFallback(systemInstruction, turns, activeProduct);
+          if (restRes) return resolve(restRes);
+        }
+        const cleanReply = cleanCustomerReply(acc) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।";
+        const actions = extractOrderActions(acc, cleanReply, chatHistory, activeProduct);
         resolve({
           reply: cleanReply,
+          rawReply: acc,
           order_confirmed: actions.order_confirmed,
           order_updated: actions.order_updated,
           order_cancelled: actions.order_cancelled,
@@ -1040,10 +1000,16 @@ ${catalog}`;
       }
     }, 35000);
 
-    socketEntry.currentTurnResolve = (accText, chunks) => {
+    socketEntry.currentTurnResolve = async (accText, chunks) => {
       if (!isFinished) {
         isFinished = true;
         clearTimeout(timeout);
+
+        if ((!accText || !accText.trim()) && (!chunks || chunks.length === 0)) {
+          console.log("⚠️ [Live WS Mode 2 Empty] Attempting REST fallback...");
+          const restRes = await callGeminiRestFallback(systemInstruction, turns, activeProduct);
+          if (restRes) return resolve(restRes);
+        }
 
         let audioId = null;
         let audioUrl = null;
@@ -1066,6 +1032,7 @@ ${catalog}`;
 
         resolve({
           reply: cleanReply,
+          rawReply: accText,
           order_confirmed: actions.order_confirmed,
           order_updated: actions.order_updated,
           order_cancelled: actions.order_cancelled,
@@ -1170,17 +1137,23 @@ async function sendTelegramAlert(order, platform = "Facebook") {
     return;
   }
 
+  const prodUrl = order.product_url || (order.product_id ? `https://ranonex.shop/product.html?id=${encodeURIComponent(order.product_id)}` : 'https://ranonex.shop');
+
   const text = `🎉 [নতুন অর্ডার কনফার্ম হয়েছে - ${platform}]
 ━━━━━━━━━━━━━━━━━━━
+📝 AI অর্ডার সামারি ও নোট:
+${order.order_summary ? order.order_summary : `কাস্টমার ইনবক্সে সরাসরি ${order.product_name} পছন্দ করে ক্যাশ অন ডেলিভারিতে অর্ডার নিশ্চিত করেছেন।`}
+━━━━━━━━━━━━━━━━━━━
+📋 কাস্টমার ও ডেলিভারি বিবরণ:
 👤 কাস্টমার: ${order.customer_name || 'N/A'}
 📞 মোবাইল: ${order.customer_phone || 'N/A'}
 📍 ঠিকানা: ${order.delivery_address || 'N/A'}
 📦 প্রোডাক্ট: ${order.product_name || 'N/A'}
 🎨 ভ্যারিয়েন্ট: ${order.variant || 'Standard'}
-💰 সর্বমোট: ৳${order.total_amount || 0}/-
-🚚 ক্যাশ অন ডেলিভারি (হোম ডেলিভারি)
+💰 সর্বমোট: ৳${order.total_amount || 0}/- (ক্যাশ অন ডেলিভারি)
+🔗 প্রোডাক্ট লিংক: ${prodUrl}
 ━━━━━━━━━━━━━━━━━━━
-🚀 SocialAutomate Alwaysdata Engine`;
+🚀 Ranonex AI Sales Engine`;
 
   try {
     const res = await fetch(`https://api.telegram.org/bot${CONFIG.telegramBotToken}/sendMessage`, {
@@ -1949,25 +1922,37 @@ app.post('/webhook/meta', (req, res) => {
             if (aiDecision && aiDecision.reply) {
               console.log(`🤖 [AI Reply to ${profile.name}]: ${aiDecision.reply.substring(0, 80)}...`);
 
-              // ১. ক্যাটালগ ও প্রোডাক্ট ম্যাচিং (ইনকামিং মেসেজ, এআই রিপ্লাই বা সেশন থেকে)
+              // ১. ক্যাটালগ ও AI-নির্বাচিত প্রোডাক্ট এক্সট্রাকশন (ডাইনামিক AI সিলেক্টর)
               const { productsList } = await getStoreCatalog();
-              const matchedProduct = findMatchingProduct(incomingText, productsList)
+              const aiSelectedProducts = extractAIProducts(aiDecision.rawReply || aiDecision.reply, productsList);
+
+              let matchedProduct = (aiSelectedProducts.length > 0 ? aiSelectedProducts[0] : null)
+                || findMatchingProduct(incomingText, productsList)
                 || findMatchingProduct(aiDecision.reply, productsList)
                 || session.selected_order_product
                 || (session.discussed_products && session.discussed_products.length === 1 ? session.discussed_products[0] : null)
                 || session.last_discussed_product
                 || null;
 
-              if (matchedProduct) {
-                if (!session.discussed_products.some(p => p.id === matchedProduct.id)) {
+              if (aiSelectedProducts.length > 0) {
+                for (const p of aiSelectedProducts) {
+                  if (!session.discussed_products.some(dp => dp.id === p.id)) {
+                    session.discussed_products.push(p);
+                  }
+                }
+              } else if (matchedProduct) {
+                if (!session.discussed_products.some(dp => dp.id === matchedProduct.id)) {
                   session.discussed_products.push(matchedProduct);
                 }
+              }
+
+              if (matchedProduct) {
                 session.last_discussed_product = matchedProduct;
                 session.last_inquiry_time = Date.now();
                 session.abandoned_reminder_sent = false;
               }
 
-              // ২. কাস্টমারকে প্রোডাক্ট তথ্য ও সরাসরি ওয়েবসাইট অর্ডার ইউআরএল দেওয়া শতভাগ নিশ্চিতকরণ
+              // ২. প্রোডাক্ট লিংক নিশ্চিতকরণ (কোনো আগ বাড়িয়ে ডেলিভারি চার্জের লম্বা বয়ান নয়)
               const isOrderConfirmedReply = aiDecision.order_confirmed 
                 || /(?:অর্ডারটি\s*(?:সফলভাবে\s*)?কনফার্ম\s*করা\s*হয়েছে|অর্ডার\s*কনফার্ম\s*হয়েছে|অর্ডার\s*নিশ্চিত\s*করা\s*হয়েছে)/i.test(aiDecision.reply);
 
@@ -1975,11 +1960,10 @@ app.post('/webhook/meta', (req, res) => {
 
               if (!isOrderConfirmedReply && activeProd && !aiDecision.reply.includes("ranonex.shop")) {
                 const orderUrl = activeProd.url || `https://ranonex.shop/product.html?id=${encodeURIComponent(activeProd.id)}`;
-                const productInfoBlock = `\n\n📌 প্রোডাক্ট: ${activeProd.name}\n💰 বর্তমান অফার মূল্য: মাত্র ৳${activeProd.price}/-\n🚚 ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা (ক্যাশ অন ডেলিভারিতে পার্সেল চেক করে দেখে নেওয়ার শতভাগ নিশ্চয়তা)।\n🔗 সরাসরি ওয়েবসাইট থেকে অর্ডার লিংক:\n👉 ${orderUrl}\n\n📩 অথবা ইনবক্সে অর্ডার করতে আপনার নাম, মোবাইল নম্বর ও সম্পূর্ণ ডেলিভারি ঠিকানা লিখে পাঠিয়ে দিন।`;
-                aiDecision.reply = aiDecision.reply.trim() + productInfoBlock;
+                aiDecision.reply = aiDecision.reply.trim() + `\n\n🔗 ${orderUrl}`;
               }
 
-              // ওয়েবসাইট লিংক জানতে চাইলে স্বয়ংক্রিয়ভাবে প্রদান
+              // ওয়েবসাইট লিংক জানতে চাইলে লিঙ্ক প্রদান
               if (!isOrderConfirmedReply && !aiDecision.reply.includes("ranonex.shop") && /(?:ওয়েবসাইট|ওয়েবসাইট|website|site|store|সাইট|লিংক|link|url)/i.test(incomingText)) {
                 aiDecision.reply = aiDecision.reply.trim() + `\n\n🌐 Ranonex অফিশিয়াল ওয়েবসাইট: https://ranonex.shop`;
               }
@@ -1995,9 +1979,16 @@ app.post('/webhook/meta', (req, res) => {
               // ৫. টেক্সট মেসেজ পাঠানো
               await sendFacebookMessage(senderId, aiDecision.reply, quickReplies);
 
-              // ৬. 🃏 প্রোডাক্ট কার্ড ভিউ (In-App WebView সহ)
-              if (matchedProduct && !isOrderConfirmedReply) {
-                if (userSentImage || userSentAudio || /দাম|প্রোডাক্ট|price|কত|৳|নিবেন|অর্ডার|চাই|কুলার|ঘড়ি|watch|headphone|cooler|panjabi|hoodie|লাইট|light/i.test(incomingText + " " + aiDecision.reply)) {
+              // ৬. 🃏 প্রোডাক্ট কার্ড / ক্যারোসেল অ্যাকশন বাটন (In-App WebView সহ সরাসরি ভিউ ও অর্ডার সুবিধা)
+              if (!isOrderConfirmedReply) {
+                if (aiSelectedProducts.length > 1) {
+                  console.log(`🎴 [Sending Product Carousel (${aiSelectedProducts.length} items)] to ${senderId}`);
+                  await sendFacebookCarousel(senderId, aiSelectedProducts);
+                } else if (aiSelectedProducts.length === 1) {
+                  console.log(`🃏 [Sending Product Card (${aiSelectedProducts[0].name})] to ${senderId}`);
+                  await sendFacebookProductCard(senderId, aiSelectedProducts[0]);
+                } else if (matchedProduct) {
+                  console.log(`🃏 [Sending Product Card (${matchedProduct.name})] to ${senderId}`);
                   await sendFacebookProductCard(senderId, matchedProduct);
                 }
               }
@@ -2045,7 +2036,10 @@ app.post('/webhook/meta', (req, res) => {
                 delivery_address: aiDecision.order_data?.delivery_address || "",
                 product_name: prodName,
                 variant: aiDecision.order_data?.variant || "Standard",
-                total_amount: totalAmount
+                total_amount: totalAmount,
+                product_id: resolvedProduct?.id || aiDecision.order_data?.product_id || null,
+                product_url: resolvedProduct?.url || aiDecision.order_data?.product_url || null,
+                order_summary: aiDecision.order_data?.order_summary || null
               };
 
               // 🛡️ কঠোর ভ্যালিডেশন: ফোন নম্বর (১১ ডিজিট), সঠিক প্রোডাক্ট, সঠিক ঠিকানা ও মোট মূল্য > ০ হতে হবে
