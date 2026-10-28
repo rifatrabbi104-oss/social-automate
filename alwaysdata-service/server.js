@@ -450,6 +450,14 @@ async function getStoreCatalog() {
           } catch(e) {}
           const imgUrl = (Array.isArray(gallery) && gallery[0]) ? gallery[0] : "https://ranonex.shop/assets/logo.png";
 
+          const rawDesc = p.description || p.specifications || '';
+          const cleanDesc = rawDesc
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 180);
+
           const pObj = {
             id: p.id,
             sku,
@@ -538,13 +546,13 @@ function extractProductTokens(p) {
   if (/power\s*bank|powerbank|magsafe|pb_1100|10000mah|পাওয়ার\s*ব্যাংক/i.test(fullContent)) {
     ['powerbank', 'power bank', 'pawer bank', 'powar bank', 'পাওয়ার ব্যাংক', 'পাওয়ারব্যাংক'].forEach(t => tokens.add(t));
   }
-  // লাইট / Light / Neon
-  if (/light|neon|rope|argb|rgb|prod_2|নিয়ন|লাইট/i.test(fullContent)) {
-    ['light', 'neon', 'led', 'rgb', 'lait', 'নিয়ন', 'রিমোট লাইট', 'লাইট', 'আলো'].forEach(t => tokens.add(t));
+  // লাইট / Light / Neon / Room Decoration
+  if (/light|neon|rope|argb|rgb|prod_2|নিয়ন|লাইট|decor|decoration|shajano/i.test(fullContent)) {
+    ['light', 'neon', 'led', 'rgb', 'lait', 'নিয়ন', 'রিমোট লাইট', 'লাইট', 'আলো', 'ঘর সাজানো', 'ঘর সাজানোর', 'রুম সাজানো', 'decor', 'decoration', 'ghor shajano', 'ghor shajanor', 'shajanor'].forEach(t => tokens.add(t));
   }
-  // হুডি / Hoodie
-  if (/hoodie|pullover|ds-1100|hd_1100|dropshoulder|হুডি|ড্রপশোল্ডার/i.test(fullContent)) {
-    ['hoodie', 'hodi', 'hudy', 'dropshoulder', 'dropsoulder', 'হুডি', 'ড্রপশোল্ডার', 'পেইজলি হুডি', 'উইন্টার হুডি'].forEach(t => tokens.add(t));
+  // হুডি / Hoodie / Combo
+  if (/hoodie|pullover|ds-1100|hd_1100|dropshoulder|হুডি|ড্রপশোল্ডার|combo/i.test(fullContent)) {
+    ['hoodie', 'hodi', 'hudy', 'hodie', 'dropshoulder', 'dropsoulder', 'হুডি', 'ড্রপশোল্ডার', 'পেইজলি হুডি', 'উইন্টার হুডি', 'কম্বো', 'combo'].forEach(t => tokens.add(t));
   }
   // পাঞ্জাবি / Panjabi
   if (/panjabi|punjabi|crinkle|pj-100|pj-101|pj-102|pj-103|pj-104|পাঞ্জাবি|পাঞ্জাবী/i.test(fullContent)) {
@@ -563,9 +571,9 @@ const BENGALI_PRODUCT_KEYWORDS = [
   { matchWords: ['ইয়ারবাড', 'বাডস', 'earbuds', 'earbud', 'k8', 'wireless earbuds'], id: 'ep-1105' },
   { matchWords: ['মাইক্রোফোন', 'মাইক', 'মাউথপিস', 'microphone', 'mic', 'boya', 'lavalier', 'by-mw6', 'mw6'], id: 'lm-1100' },
   { matchWords: ['পাওয়ার ব্যাংক', 'পাওয়ারব্যাংক', 'power bank', 'powerbank', 'magsafe', 'vd-pb030', '10000mah'], id: 'pb_1100' },
-  { matchWords: ['নিয়ন লাইট', 'নিয়ন', 'রিমোট লাইট', 'লাইট', 'neon', 'rope', 'argb', 'rgb light', 'আলো', 'light'], id: 'prod_2' },
-  { matchWords: ['পেইজলি হুডি', 'paisley', 'hoodie', 'ড্রপশোল্ডার', 'কম্বো', 'dropshoulder', 'dropsoulder', 'হুডি'], id: 'ds-1100' },
-  { matchWords: ['সলিড হুডি', 'solid hoodie', 'pullover', 'উইন্টার হুডি', 'plain hoodie'], id: 'hd_1100' },
+  { matchWords: ['নিয়ন লাইট', 'নিয়ন', 'রিমোট লাইট', 'লাইট', 'neon', 'rope', 'argb', 'rgb light', 'আলো', 'light', 'ঘর সাজানো', 'ঘর সাজানোর', 'রুম সাজানো', 'ghor shajano', 'ghor shajanor', 'decor', 'decoration', 'shajanor'], id: 'prod_2' },
+  { matchWords: ['পেইজলি হুডি', 'paisley', 'hoodie', 'hodie', 'hodi', 'ড্রপশোল্ডার', 'কম্বো', 'dropshoulder', 'dropsoulder', 'হুডি', 'combo'], id: 'ds-1100' },
+  { matchWords: ['সলিড হুডি', 'solid hoodie', 'pullover', 'উইন্টার হুডি', 'plain hoodie', 'হুডি', 'hoodie', 'hodi', 'hodie'], id: 'hd_1100' },
   { matchWords: ['অলিভ পাঞ্জাবি', 'crinkle panjabi', 'crinkle', 'panjabi', 'পাঞ্জাবি', 'পাঞ্জাবী'], id: 'pj-101' },
   { matchWords: ['সি গ্রিন পাঞ্জাবি', 'sea green', 'micro stick'], id: 'pj-100' },
   { matchWords: ['পপকন পাঞ্জাবি', 'popcon', 'cream panjabi', 'ক্রিম কালার'], id: 'pj-104' },
