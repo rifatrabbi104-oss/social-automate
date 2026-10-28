@@ -1211,6 +1211,47 @@ async function handleTriggerPost(body, env) {
   const postType = body.post_type || "caption_only";
   const productUrl = body.product_url || "";
 
+  // 🚀 ১-ক্লিক টেস্ট পোস্ট সরাসরি Worker দিয়ে এক্সেকিউট (No GitHub dependency required!)
+  if (!ghToken || body.direct_worker || body.trigger_source === "dashboard_test") {
+    if (env.DB) {
+      await ensureTables(env.DB);
+      let prod = null;
+      if (body.product_id) {
+        prod = await env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(body.product_id).first();
+      }
+      if (!prod && productUrl) {
+        prod = await env.DB.prepare("SELECT * FROM products WHERE product_url = ?").bind(productUrl).first();
+      }
+      if (!prod) {
+        prod = await env.DB.prepare("SELECT * FROM products WHERE is_active = 1 ORDER BY last_posted_at ASC, id ASC LIMIT 1").first();
+      }
+      if (!prod) {
+        prod = await env.DB.prepare("SELECT * FROM products ORDER BY id ASC LIMIT 1").first();
+      }
+
+      if (prod) {
+        const pubRes = await handlePublishProductNow({ product_id: prod.id, platform: targetPlatform }, env);
+        const pubData = await pubRes.json();
+        if (pubData.success) {
+          return jsonResponse({
+            success: true,
+            message: `🎉 Worker দিয়ে সরাসরি ${targetPlatform.toUpperCase()} পেজে টেস্ট পোস্ট সফলভাবে পাবলিশ হয়েছে!`,
+            post_id: pubData.post_id,
+            post_url: pubData.post_url,
+            caption: pubData.caption,
+            angle: pubData.angle,
+            engine: "Cloudflare Worker (Gemini 3.8 Live Engine)"
+          });
+        } else {
+          return jsonResponse({
+            success: false,
+            error: pubData.error || "Worker দিয়ে টেস্ট পোস্ট পাবলিশ ব্যর্থ হয়েছে।"
+          }, 400);
+        }
+      }
+    }
+  }
+
   if (ghToken) {
     try {
       const dispatchRes = await fetch(`https://api.github.com/repos/${ghRepo}/actions/workflows/post_publisher.yml/dispatches`, {
@@ -1252,7 +1293,7 @@ async function handleTriggerPost(body, env) {
   return jsonResponse({
     success: false,
     missing_token: true,
-    message: "GitHub Personal Access Token সেভ করা নেই। আপনি সরাসরি GitHub Actions পেজ থেকে ১-ক্লিকে 'Run workflow' চালাতে পারেন অথবা ড্যাশবোর্ডে GitHub টোকেন সেভ করুন।",
+    message: "D1 ডেটাবেসে কোনো সক্রিয় প্রোডাক্ট পাওয়া যায়নি অথবা GitHub Personal Access Token সেভ করা নেই। প্রথমে D1-এ প্রোডাক্ট অ্যাড করুন অথবা GitHub টোকেন সেভ করুন।",
     workflow_url: `https://github.com/${ghRepo}/actions/workflows/post_publisher.yml`
   });
 }
@@ -1798,7 +1839,7 @@ async function handleSetupAI(body, env) {
     return jsonResponse({ success: false, error: "Gemini API Key খালি রাখা যাবে না!" }, 400);
   }
   const cleanKey = gemini_api_key.trim();
-  const cleanModel = gemini_model ? gemini_model.trim() : "models/gemini-3.8-live";
+  const cleanModel = gemini_model ? gemini_model.trim() : "gemini-2.0-flash";
 
   // টেস্ট রিকোয়েস্ট পাঠিয়ে ভ্যালিডেশন
   try {
@@ -2874,8 +2915,108 @@ async function getStorePolicies(db) {
 }
 
 // ========================================================
+// ⚡ Gemini 3.8 Live WebSocket Engine (Worker-Native Post Generator)
 // ========================================================
-// ✍️ AI সেলস কপিরাইটার (ইউনিক, কনটেক্সট-ইন্ডিপেন্ডেন্ট ও ডায়নামিক পলিসি)
+async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini-3.8-live", imageParts = []) {
+  if (!apiKey || typeof WebSocket === "undefined") return null;
+
+  try {
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    const ws = new WebSocket(wsUrl);
+
+    return new Promise((resolve) => {
+      let accumulatedText = "";
+      let isDone = false;
+
+      const timer = setTimeout(() => {
+        if (!isDone) {
+          isDone = true;
+          try { ws.close(); } catch (e) {}
+          resolve(accumulatedText.trim() || null);
+        }
+      }, 15000);
+
+      ws.addEventListener("open", () => {
+        const setupPayload = {
+          setup: {
+            model: modelName,
+            generationConfig: {
+              responseModalities: ["TEXT"]
+            }
+          }
+        };
+        ws.send(JSON.stringify(setupPayload));
+      });
+
+      ws.addEventListener("message", (event) => {
+        try {
+          const raw = typeof event.data === "string" ? event.data : event.data.toString();
+          const data = JSON.parse(raw);
+
+          if (data.setupComplete) {
+            const userParts = [];
+            if (Array.isArray(imageParts) && imageParts.length > 0) {
+              for (const img of imageParts) {
+                if (img && img.data) {
+                  userParts.push({
+                    inlineData: {
+                      mimeType: img.mimeType || "image/jpeg",
+                      data: img.data
+                    }
+                  });
+                }
+              }
+            }
+            userParts.push({ text: prompt });
+
+            ws.send(JSON.stringify({
+              clientContent: {
+                turns: [{ role: "user", parts: userParts }],
+                turnComplete: true
+              }
+            }));
+            return;
+          }
+
+          if (data.serverContent) {
+            const parts = data.serverContent.modelTurn?.parts || [];
+            for (const p of parts) {
+              if (p.text) accumulatedText += p.text;
+            }
+            if (data.serverContent.turnComplete) {
+              if (!isDone) {
+                isDone = true;
+                clearTimeout(timer);
+                try { ws.close(); } catch (e) {}
+                resolve(accumulatedText.trim() || null);
+              }
+            }
+          }
+        } catch (err) {}
+      });
+
+      ws.addEventListener("error", () => {
+        if (!isDone) {
+          isDone = true;
+          clearTimeout(timer);
+          resolve(accumulatedText.trim() || null);
+        }
+      });
+
+      ws.addEventListener("close", () => {
+        if (!isDone) {
+          isDone = true;
+          clearTimeout(timer);
+          resolve(accumulatedText.trim() || null);
+        }
+      });
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
+// ✍️ AI সেলস কপিরাইটার (Worker-Native: Gemini 3.8 Live + Vision + Dynamic Policy)
 async function generateAIPostCaption(product, angleObj, env) {
   let apiKey = env.GEMINI_API_KEY;
   if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
@@ -2885,13 +3026,8 @@ async function generateAIPostCaption(product, angleObj, env) {
     apiKey = "";
   }
 
-  let model = env.GEMINI_MODEL;
-  if (!model && env.DB) {
-    model = await getConfigValue(env.DB, "gemini_model", null);
-  }
-  if (!model || model === "gemini-2.0-flash" || model === "gemini-2.5-flash") {
-    model = "gemini-3.8-flash";
-  }
+  // পোস্টের জন্য ডেডিকেটেড Gemini 3.8 Live মডেল
+  const postModel = "models/gemini-3.8-live";
 
   // র‍্যান্ডম হুক সিলেক্টর
   const randomHook = angleObj.hook_starters[Math.floor(Math.random() * angleObj.hook_starters.length)];
@@ -2899,22 +3035,27 @@ async function generateAIPostCaption(product, angleObj, env) {
   // D1 ডেটাবেস থেকে রিয়েল-টাইম স্টোর পলিসি ও ডেলিভারি চার্জ রিড
   const policies = await getStorePolicies(env.DB);
 
-  // ১. Alwaysdata Gemini 3.8 Live ইঞ্জিন দিয়ে আনলিমিটেড ও ন্যাচারাল AI কপিরাইটিং
-  try {
-    const alwaysdataRes = await fetch("https://ranonex.alwaysdata.net/api/generate-post", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ product, angle: angleObj, policies })
-    });
-    if (alwaysdataRes.ok) {
-      const adData = await alwaysdataRes.json();
-      if (adData.caption && adData.caption.trim().length > 40) {
-        console.log(`⚡ [Alwaysdata AI Engine] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
-        return adData.caption.trim();
+  // প্রোডাক্টের ছবি সংগ্রহ ও Base64 রূপান্তর (Gemini Multimodal Vision এর জন্য)
+  const imageParts = [];
+  if (product.image_url && product.image_url.startsWith('http')) {
+    try {
+      const imgRes = await fetch(product.image_url, {
+        headers: { "User-Agent": "SocialAutomate-Worker/1.0" }
+      });
+      if (imgRes.ok) {
+        const ab = await imgRes.arrayBuffer();
+        const bytes = new Uint8Array(ab);
+        const len = bytes.byteLength;
+        let b64 = "";
+        for (let i = 0; i < len; i += 8192) {
+          b64 += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + 8192, len)));
+        }
+        imageParts.push({
+          mimeType: imgRes.headers.get("content-type") || "image/jpeg",
+          data: btoa(b64)
+        });
       }
-    }
-  } catch (adErr) {
-    console.warn("Alwaysdata AI post generator note:", adErr.message);
+    } catch (imgErr) {}
   }
 
   const prompt = `
@@ -2962,15 +3103,38 @@ Opening Inspiration: "${randomHook}"
 10. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
 `;
 
-  // ২. সরাসরি Gemini REST API ট্রাই
-  if (apiKey && apiKey !== "YOUR_GEMINI_API_KEY") {
+  // ১. Worker-এ সরাসরি Gemini 3.8 Live WebSocket ইঞ্জিন কল
+  if (apiKey) {
     try {
-      const cleanModel = model.replace(/^models\//, '');
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`, {
+      const liveCaption = await callGeminiLiveInWorker(prompt, apiKey, postModel, imageParts);
+      if (liveCaption && liveCaption.trim().length > 40) {
+        console.log(`⚡ [Worker Gemini 3.8 Live WebSocket] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (Vision: ${imageParts.length > 0 ? 'Active' : 'No'})`);
+        return liveCaption.trim();
+      }
+    } catch (wsErr) {
+      console.warn("Worker live WebSocket note:", wsErr.message);
+    }
+
+    // ২. সরাসরি Gemini REST API ট্রাই (Vision সহ)
+    try {
+      const restParts = [];
+      if (imageParts.length > 0) {
+        for (const img of imageParts) {
+          restParts.push({
+            inlineData: {
+              mimeType: img.mimeType || "image/jpeg",
+              data: img.data
+            }
+          });
+        }
+      }
+      restParts.push({ text: prompt });
+
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          contents: [{ role: "user", parts: restParts }],
           generationConfig: {
             temperature: 0.95,
             topP: 0.95,
@@ -2983,11 +3147,12 @@ Opening Inspiration: "${randomHook}"
         const data = await res.json();
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text && text.trim().length > 40) {
+          console.log(`⚡ [Worker Gemini REST API] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
           return text.trim();
         }
       }
     } catch (e) {
-      console.warn("Gemini Post Generation Error:", e.message);
+      console.warn("Gemini Post Generation Error in Worker:", e.message);
     }
   }
 

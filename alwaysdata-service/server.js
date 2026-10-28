@@ -56,7 +56,7 @@ const CONFIG = {
   metaPageId: process.env.META_PAGE_ID || "1287050647827199",
   metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN || "EAAP26tyiJpMBSwbPigSP59zUgrW3nVwverL5dGtxzJxS7wgGZCwa5FZBTwnp5yLYqBWzvGQco6SuJEXgC7csi3mHZApVZCvRpB7zDCu6KnucWzOZC3jNN8uZCI4VWVlOLyj13uzzYo6lNWlzAr4DSi1QBuYqwHZBiSAxSlbwkJaOZAEZBNBTLwoZA5zOZAIegyGZBGcmC4DeXCKs",
   geminiApiKey: process.env.GEMINI_API_KEY || "",
-  geminiModel: "models/gemini-3.8-live",
+  geminiModel: process.env.GEMINI_MODEL || "gemini-2.0-flash",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "8973914033:AAHA99QmtyefiGYFCePdNuD4ZPyp8xw1uVQ",
   telegramChatId: process.env.TELEGRAM_CHAT_ID || "5513474694",
   workerUrl: process.env.WORKER_URL || "https://social-automate.rifatrabbi104.workers.dev",
@@ -1073,7 +1073,7 @@ ${catalog}`;
     ws.onopen = () => {
       const setupPayload = {
         setup: {
-          model: "models/gemini-3.8-live",
+          model: CONFIG.geminiModel || "gemini-2.0-flash",
           generationConfig: { responseModalities: ["AUDIO"] },
           systemInstruction: { parts: [{ text: systemInstruction }] },
           outputAudioTranscription: {}

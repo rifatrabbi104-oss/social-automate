@@ -1717,12 +1717,20 @@ function initSettingsForm() {
             resultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
             resultBox.style.color = '#a7f3d0';
             resultBox.innerHTML = `
-              <strong>🚀 GitHub Actions-এ Facebook টেস্ট পোস্টিং শুরু হয়েছে!</strong><br>
-              GitHub Actions রানারে Gemini AI দিয়ে ইউনিক সেলস ক্যাপশন তৈরি করে আপনার Ranonex পেজে পোস্ট পাবলিশ হচ্ছে।<br>
-              <a href="${escapeHtml(data.run_url || 'https://github.com/rifatrabbi104-oss/social-automate/actions')}" target="_blank" style="color: #60a5fa; text-decoration: underline; margin-top: 8px; display: inline-block;">👉 ক্লিক করে GitHub Actions লাইভ লগ দেখুন</a>
+              <strong>🎉 Facebook পেজে টেস্ট পোস্ট সফলভাবে পাবলিশ হয়েছে!</strong><br>
+              ${data.engine ? `ইঞ্জিন: <code>${escapeHtml(data.engine)}</code><br>` : ''}
+              ${data.post_url ? `<a href="${escapeHtml(data.post_url)}" target="_blank" style="color: #60a5fa; font-weight: 600; text-decoration: underline; margin-top: 8px; display: inline-block;">👉 ক্লিক করে ফেসবুকে লাইভ পোস্টটি দেখুন</a><br>` : ''}
+              ${data.run_url ? `<a href="${escapeHtml(data.run_url)}" target="_blank" style="color: #93c5fd; text-decoration: underline; margin-top: 4px; display: inline-block;">👉 GitHub Actions লাইভ লগ</a>` : ''}
             `;
           }
-          showToast('🚀 GitHub Actions ক্রন পোস্টিং শুরু হয়েছে!');
+          showToast('🎉 টেস্ট পোস্ট সফলভাবে সম্পন্ন হয়েছে!');
+          if (data.post_url) {
+            setTimeout(() => {
+              if (confirm('🎉 ফেসবুকে টেস্ট পোস্ট সফল হয়েছে!\nআপনি কি ফেসবুকে লাইভ পোস্টটি দেখতে চান?')) {
+                window.open(data.post_url, '_blank');
+              }
+            }, 600);
+          }
         } else if (data.missing_token) {
           if (resultBox) {
             resultBox.style.display = 'block';
