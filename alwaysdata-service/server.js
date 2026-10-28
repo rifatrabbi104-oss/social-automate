@@ -350,25 +350,32 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
   }
 
   // ২. প্রথম টার্নেই কনফার্মেশন যাচাই (কখনোই ট্র্যাকিং বা প্রসেস স্টেটাসকে অর্ডার ভাবা যাবে না)
-  const isConfirmSpoken = /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?কনফার্ম(?:\s*করা)?\s*হয়েছে|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?নিশ্চিত(?:\s*করা)?\s*হয়েছে|আপনার\s*অর্ডার(?:টি)?\s*গ্রহণ\s*করা\s*হয়েছে)/i.test(replyText);
+  const isConfirmSpoken = (orderJsonObj && (orderJsonObj.order_confirmed === true || orderJsonObj.order_confirmed === "true"))
+    || /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হয়েছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed)/i.test(replyText);
 
   // ৩. কঠোর সত্যতা যাচাই: ফোন নম্বর (১১ ডিজিট), ডেলিভারি ঠিকানা এবং বৈধ প্রোডাক্ট থাকলেই কেবল কনফার্ম হবে
   const hasPhone = foundPhone && foundPhone.length >= 11;
   const hasAddress = foundAddress && foundAddress.length >= 4 && foundAddress !== "ইনবক্সে প্রদত্ত ঠিকানা";
-  const hasValidProduct = activeProduct && activeProduct.name && activeProduct.name !== "Ranonex Store Product" && Number(activeProduct.price) > 0;
+  const targetProduct = activeProduct || (orderJsonObj?.product_name && orderJsonObj.product_name !== "Ranonex Store Product" ? {
+    id: orderJsonObj.product_id || "prod_custom",
+    name: orderJsonObj.product_name,
+    price: orderJsonObj.total_amount || 0,
+    url: orderJsonObj.product_url || "https://ranonex.shop"
+  } : null);
+  const hasValidProduct = targetProduct && targetProduct.name && targetProduct.name !== "Ranonex Store Product";
 
   if (isConfirmSpoken && hasPhone && hasAddress && hasValidProduct) {
     const isDhaka = /ঢাকা|dhaka/i.test(foundAddress) && !/ঢাকার\s*বাইরে|outside/i.test(foundAddress);
     const deliveryCharge = isDhaka ? 70 : 130;
-    const basePrice = parseFloat(activeProduct.price || 0);
-    const total = basePrice + deliveryCharge;
+    const basePrice = parseFloat(targetProduct.price || 0);
+    const total = basePrice > 0 ? (basePrice + deliveryCharge) : (orderJsonObj?.total_amount || 0);
 
     order_confirmed = true;
     order_data = {
       order_confirmed: true,
-      product_id: orderJsonObj?.product_id || activeProduct.id,
-      product_name: activeProduct.name,
-      product_url: activeProduct.url || `https://ranonex.shop/product.html?id=${encodeURIComponent(activeProduct.id)}`,
+      product_id: orderJsonObj?.product_id || targetProduct.id,
+      product_name: targetProduct.name,
+      product_url: targetProduct.url || `https://ranonex.shop/product.html?id=${encodeURIComponent(targetProduct.id)}`,
       customer_name: foundName || "Customer",
       customer_phone: foundPhone,
       delivery_address: foundAddress,
@@ -376,7 +383,7 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
       order_summary: orderJsonObj?.order_summary || orderJsonObj?.summary || orderJsonObj?.note || "",
       total_amount: total
     };
-    console.log(`🎉 [Auto-Detected Real Order Confirmation]: Customer "${order_data.customer_name}", Phone "${foundPhone}", Product "${activeProduct.name}", Total ৳${total}`);
+    console.log(`🎉 [Auto-Detected Real Order Confirmation]: Customer "${order_data.customer_name}", Phone "${foundPhone}", Product "${targetProduct.name}", Total ৳${total}`);
   }
 
   // ৩. ORDER_UPDATE_JSON (১৫ মিনিটের মধ্যে পরিবর্তন)
@@ -672,16 +679,26 @@ HOW TO FIND THE RIGHT PRODUCT (you decide, nobody else):
 - The full live catalog of the store is given below as STORE PRODUCTS CATALOG. It changes often and new products get added — always rely on it.
 - Understand what the customer actually NEEDS (their problem / purpose), not just the exact word. Banglish, typos, indirect requests are normal.
   e.g. "ghor shajabo / room decor" -> decoration items like neon/LED lights; "phone gorom hoy" -> mobile cooler; "gaming er jonno" -> game console / gaming earphone; "shiter jama" -> hoodie; "panjabi" -> panjabi collection.
-- CATEGORY / GENERAL PRODUCT INQUIRY RULE (SHOW ALL OPTIONS):
-  If the customer asks about a category or general product type (e.g. "পাঞ্জাবি আছে?", "t-shirt আছে?", "hoodie আছে?", "ঘড়ি আছে?"):
-  You MUST include ALL matching products from the catalog (up to 5–8 items) so the customer sees all choices! Do NOT hide products or limit to just 1 or 2!
-  When presenting multiple products:
-  Make each product's description 10-20% shorter and compact (just 1 short line stating color/design/spec + Price + Link), so the message stays neat and readable.
-  And MUST add ALL their IDs to 'PRODUCT_IDS: id1,id2,id3...' so a full carousel slider is sent!
+
+- FULL CATALOG SEARCH & SCOURING MANDATE (MUST FIND & SHOW ALL MATCHING PRODUCTS):
+  CRITICAL: If the customer asks about a category or general product type without naming a specific model (e.g. "পাঞ্জাবি আছে?", "পাঞ্জাবি দেখান", "আপনাদের কি পাঞ্জাবি আছে?", "ঘড়ি আছে?", "গেম কনসোল আছে?", "হুডি আছে?", "হেডফোন আছে?"):
+  You MUST scour and search the ENTIRE 'STORE PRODUCTS CATALOG' from top to bottom!
+  You MUST find and include EVERY SINGLE MATCHING PRODUCT from the catalog (e.g. if there are 5 Panjabis in the catalog: pj-100, pj-101, pj-102, pj-103, pj-104, YOU MUST INCLUDE ALL 5 PANJABIS — NEVER leave any out, and NEVER show only 1 or 2)!
+  How to present multiple products from a category:
+  1. Write a short, warm intro in Bengali (e.g. "জী, আমাদের কালেকশনে বর্তমানে এই আকর্ষণীয় পাঞ্জাবিগুলো এভেইলেবল আছে:")
+  2. Number each product clearly (১, ২, ৩, ৪, ৫...):
+     • <নং>. <প্রোডাক্টের নাম> - <রং/ডিজাইন/কাপড় ও আকর্ষণীয় সুবিধা নিয়ে সংক্ষেপে ১ লাইনের বিবরণ>
+     💰 অফার মূল্য: ৳<PRICE>/-
+     🔗 <LINK>
+  3. Shorten each product's description by 10-20% so the message is compact, clean, and easily scannable on mobile screens.
+  4. End with a friendly ordering line: "যেটি আপনার পছন্দ হয়, সেটির নাম বা নম্বর লিখে আপনার নাম, মোবাইল নম্বর ও ঠিকানা দিলেই ক্যাশ অন ডেলিভারিতে অর্ডার কনফার্ম করে দেওয়া হবে।"
+  5. MANDATORY: You MUST append ALL of their IDs in the trailing internal marker:
+     PRODUCT_IDS: <id1>,<id2>,<id3>,<id4>,<id5>...
+     This generates an interactive Messenger carousel slider with photos and buttons for EVERY single one of those products!
 - If the customer asks for a specific single item, present that 1 product with the 1-2 line solution format.
 - Never invent products, prices, or features that are not in the catalog.
 
-HOW TO WRITE A PRODUCT REPLY (short, minimal, solution-style):
+HOW TO WRITE A SINGLE PRODUCT REPLY (short, minimal, solution-style):
 - Keep it short — like a real chat message. No long lists of policies.
 - Start by connecting to their need in a human way, then introduce the product as the solution.
 - For each product:
@@ -706,15 +723,31 @@ HELPLINE & DIRECT SUPPORT (internal marker):
   When a customer provides their phone number (e.g. "016...", "amar number 01...", "আমার নম্বর 01...") or is placing an order, DO NOT output SHOW_HELPLINE: true!
   They are providing their contact number to receive the product parcel, NOT asking for customer care. Confirm their order immediately or ask for the missing address/details.
 
-ORDER TAKING (LOOP PREVENTION):
-- If the customer has ALREADY selected a product (e.g. via button click or choosing a number/name), or if a single product is under discussion:
+ORDER TAKING & STRICT CONFIRMATION (AI CONFIRMS DIRECTLY WITH INVOICE FORM REVIEW):
+- CRITICAL: You (the AI) MUST CONFIRM THE ORDER DIRECTLY, CONFIDENTLY, AND IMMEDIATELY! Do NOT hesitate, do NOT ask the customer to confirm again, and do NOT ask for details you already have!
+- SINGLE PRODUCT OR PREVIOUSLY DISCUSSED PRODUCT:
+  If only 1 product was discussed, or the customer selected/mentioned a product earlier:
   THE CUSTOMER DOES NOT NEED TO REPEAT OR CHOOSE THE PRODUCT AGAIN!
-  You already know which product they want. DO NOT ask "কোন প্রোডাক্টটি নিতে চান?"!
-  As soon as you have their name, 11-digit mobile (01XXXXXXXXX) and address, confirm the order immediately in that SAME turn!
-- ONLY ask with a numbered list (১. ..., ২. ...) if multiple DIFFERENT products were discussed AND the customer has NEVER selected or indicated which one they want yet.
-- As soon as you have product + name + phone + address, confirm the order in the SAME turn, warmly and briefly in your own words, and include the sentence "আপনার অর্ডারটি কনফার্ম করা হয়েছে" somewhere. Mention naturally that if they need to change or update any information (e.g. name, phone number, or delivery address), they can let us know here within 15 minutes (focus on updating information; do NOT highlight cancellation prominently).
+  You already know which product they want. DO NOT ask "কোন প্রোডাক্টটি নিতে চান?" or "কোনটি নিবেন?"!
+- AS SOON AS YOU HAVE: Product + Customer Name + 11-digit Phone (01XXXXXXXXX) + Delivery Address (whether provided in one message or collected over earlier turns):
+  YOU MUST CONFIRM THE ORDER IMMEDIATELY IN THAT VERY TURN!
+  Your reply message MUST be formatted with this exact structured form-style invoice review:
+
+ধন্যবাদ [Customer Name]! আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে।
+
+📋 আপনার অর্ডারের তথ্যসমূহ (রিভিউ):
+━━━━━━━━━━━━━━━━━━━
+📦 প্রোডাক্ট: <Product Name from Catalog>
+👤 নাম: <Customer Name>
+📞 মোবাইল: <Customer 11-digit Phone Number>
+📍 ঠিকানা: <Customer Delivery Address>
+💰 সর্বমোট প্রদেয় মূল্য: ৳<Product Price + Delivery Charge (70 for Dhaka, 130 outside Dhaka)>/- (ক্যাশ অন ডেলিভারি)
+━━━━━━━━━━━━━━━━━━━
+অনুগ্রহ করে উপরের তথ্যগুলো একবার মিলিয়ে দেখে নিন। পরবর্তী ১৫ মিনিটের মধ্যে নাম, মোবাইল নম্বর বা ডেলিভারি ঠিকানায় কোনো পরিবর্তন প্রয়োজন হলে আমাদের এখানে লিখে জানাতে পারেন।
+
+- Do NOT highlight cancellation ("বাতিল") prominently; keep the tone focused on verifying details and giving 15 minutes window for any updates or corrections.
 - At the very bottom of that confirmation message output (internal):
-  ORDER_JSON: {"order_confirmed": true, "product_id": "<PRODUCT_ID>", "product_name": "...", "customer_name": "...", "customer_phone": "...", "delivery_address": "...", "variant": "...", "order_summary": "<2-3 sentences in Bengali for the shop owner: who ordered what, any size/color/variant or special request the customer mentioned, how the conversation went, anything delivery team should know>"}
+  ORDER_JSON: {"order_confirmed": true, "product_id": "<PRODUCT_ID>", "product_name": "<PRODUCT_NAME>", "customer_name": "<CUSTOMER_NAME>", "customer_phone": "<CUSTOMER_PHONE>", "delivery_address": "<DELIVERY_ADDRESS>", "variant": "Standard", "total_amount": <TOTAL_AMOUNT>, "order_summary": "<2-3 sentences in Bengali for the shop owner: who ordered what, any size/color/variant or special request the customer mentioned, how the conversation went, anything delivery team should know>"}
 
 EDIT & CANCEL:
 - Edit within 15 minutes -> confirm briefly and output:
@@ -2128,7 +2161,7 @@ app.post('/webhook/meta', (req, res) => {
 📍 ঠিকানা: ${orderInfo.delivery_address}
 💰 সর্বমোট প্রদেয় মূল্য: ৳${orderInfo.total_amount}/- (ক্যাশ অন ডেলিভারি)
 ━━━━━━━━━━━━━━━━━━━
-অনুগ্রহ করে উপরের তথ্যগুলো একবার মিলিয়ে দেখে নিন। পরবর্তী ১৫ মিনিটের মধ্যে নাম, মোবাইল নম্বর বা ডেলিভারি ঠিকানায় কোনো পরিবর্তন প্রয়োজন হলে আমাদের এখানে লিখে জানাতে পারেন (প্রয়োজনে বাতিলও করতে পারবেন)।`;
+অনুগ্রহ করে উপরের তথ্যগুলো একবার মিলিয়ে দেখে নিন। পরবর্তী ১৫ মিনিটের মধ্যে নাম, মোবাইল নম্বর বা ডেলিভারি ঠিকানায় কোনো পরিবর্তন প্রয়োজন হলে আমাদের এখানে লিখে জানাতে পারেন।`;
 
                 // যদি AI রিপ্লাইতে অলরেডি পুরো ফর্ম না থাকে, সুন্দর করে ফর্মটি যুক্ত করা
                 if (!aiDecision.reply.includes("📦 প্রোডাক্ট:") && !aiDecision.reply.includes("সর্বমোট প্রদেয় মূল্য")) {
