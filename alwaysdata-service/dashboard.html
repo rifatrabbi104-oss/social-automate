@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ranonex Live Inbox & WhatsApp QR Gateway — Alwaysdata</title>
+  <title>Ranonex Live Inbox &amp; WhatsApp QR Gateway — Alwaysdata</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -28,6 +28,11 @@
       100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
     }
     .pulse-dot { animation: pulse-ring 2s infinite; }
+    @keyframes rec-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    .rec-blink { animation: rec-pulse 1s infinite; }
   </style>
 </head>
 <body class="h-screen flex flex-col overflow-hidden select-none">
@@ -42,17 +47,23 @@
         <div class="flex items-center gap-2">
           <h1 class="font-bold text-base lg:text-lg tracking-tight text-white">Ranonex Live Messaging Hub</h1>
           <span class="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-            Zero-D1 • Alwaysdata Direct
+            FB Live Fetch • Local Temp DB
           </span>
         </div>
         <p class="text-xs text-slate-400 hidden sm:block">
-          Messenger &amp; WhatsApp Personal AI Gateway • Gemini 3.8 Live Multimodal
+          Photo, Video &amp; Voice Messaging • Facebook Server Direct Fetch + Browser Local IndexedDB
         </p>
       </div>
     </div>
 
     <!-- Live Status Pills & Quick Actions -->
-    <div class="flex items-center gap-2.5">
+    <div class="flex items-center gap-2">
+      <!-- Local Temp DB Badge -->
+      <div class="hidden lg:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-medium bg-purple-500/10 border border-purple-500/30 text-purple-300" title="ব্রাউজারের লোকাল টেম্পোরারি ডাটাবেসে চ্যাট ক্যাশ হচ্ছে">
+        <i class="fa-solid fa-database text-purple-400"></i>
+        <span id="local-db-badge">Local DB: Ready</span>
+      </div>
+
       <!-- WhatsApp Connection Badge -->
       <button onclick="toggleWaDrawer()" id="header-wa-btn" class="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all bg-slate-800/90 border-slate-700 hover:border-emerald-500/50 text-slate-200">
         <i class="fa-brands fa-whatsapp text-emerald-400 text-sm"></i>
@@ -60,21 +71,21 @@
         <span id="header-wa-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
       </button>
 
-      <!-- Messenger Badge -->
-      <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500/10 border border-blue-500/30 text-blue-300">
+      <!-- Messenger Live Sync Button -->
+      <button onclick="manualRefresh(true)" class="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 text-blue-300 transition" title="সরাসরি Facebook Server থেকে চ্যাট ও মিডিয়া সিঙ্ক করুন">
         <i class="fa-brands fa-facebook-messenger text-blue-400"></i>
-        <span>Messenger Active</span>
-      </div>
+        <span>FB Live Sync</span>
+      </button>
 
       <!-- Refresh Button -->
-      <button onclick="manualRefresh()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="রিফ্রেশ করুন">
+      <button onclick="manualRefresh(true)" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="Facebook Server থেকে লাইভ রিফ্রেশ করুন">
         <i id="refresh-icon" class="fa-solid fa-rotate"></i>
       </button>
 
       <!-- Main Dashboard Link -->
       <a href="/status" target="_blank" class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="JSON Health Status">
         <i class="fa-solid fa-server text-indigo-400"></i>
-        <span>API Status</span>
+        <span>Status</span>
       </a>
     </div>
   </header>
@@ -121,7 +132,7 @@
       <div id="conversations-list" class="flex-1 overflow-y-auto divide-y divide-slate-800/60">
         <div class="p-8 text-center text-slate-500 text-xs">
           <i class="fa-solid fa-circle-notch fa-spin text-lg mb-2 text-indigo-400"></i>
-          <p>কনভার্সেশন লোড হচ্ছে...</p>
+          <p>Facebook Server ও Local DB থেকে চ্যাট লোড হচ্ছে...</p>
         </div>
       </div>
     </aside>
@@ -133,18 +144,18 @@
         <div class="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-4 shadow-inner">
           <i class="fa-regular fa-comments text-2xl text-indigo-400"></i>
         </div>
-        <h2 class="text-base font-bold text-slate-200 mb-1">কাস্টমার ইনবক্স ও লাইভ মেসেজিং</h2>
+        <h2 class="text-base font-bold text-slate-200 mb-1">কাস্টমার ইনবক্স (ছবি, ভিডিও ও ভয়েস মেসেজিং)</h2>
         <p class="text-xs text-slate-400 max-w-md mb-5 leading-relaxed">
-          বাম পাশের তালিকা থেকে যেকোনো Facebook Messenger বা WhatsApp কাস্টমারের চ্যাট সিলেক্ট করে সরাসরি মেসেজ পাঠান অথবা ডান পাশের প্যানেল থেকে QR স্ক্যান করে WhatsApp কানেক্ট করুন।
+          বাম পাশের তালিকা থেকে যেকোনো Facebook Messenger বা WhatsApp কাস্টমার সিলেক্ট করে ছবি দেখুন, ভিডিও ও ভয়েস শুনুন এবং সরাসরি ছবি, ভিডিও, অডিও বা ভয়েস রেকর্ড করে পাঠান।
         </p>
         <div class="flex flex-wrap items-center justify-center gap-3">
           <button onclick="toggleWaDrawer(true)" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition">
             <i class="fa-solid fa-qrcode"></i>
             <span>WhatsApp QR কানেক্ট করুন</span>
           </button>
-          <button onclick="manualRefresh()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-2 border border-slate-700 transition">
-            <i class="fa-solid fa-rotate"></i>
-            <span>ইনবক্স রিফ্রেশ করুন</span>
+          <button onclick="manualRefresh(true)" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-2 border border-slate-700 transition">
+            <i class="fa-brands fa-facebook-messenger text-blue-400"></i>
+            <span>Facebook Server থেকে সিঙ্ক করুন</span>
           </button>
         </div>
       </div>
@@ -189,11 +200,34 @@
         <div id="chat-messages-box" class="flex-1 overflow-y-auto p-4 space-y-3 select-text bg-gradient-to-b from-slate-950 to-slate-900/90">
         </div>
 
-        <!-- Admin Reply Composer -->
+        <!-- Admin Reply Composer (with Photo, Video, Audio & Live Voice Recorder) -->
         <div class="p-3 border-t border-slate-800 bg-slate-900/95 shrink-0">
+          <!-- Pending Media Preview Bar -->
+          <div id="pending-media-preview" class="hidden mb-2.5 p-2.5 rounded-xl bg-slate-950 border border-indigo-500/40 flex items-center justify-between gap-3">
+            <div id="pending-media-content" class="flex items-center gap-3 min-w-0 flex-1"></div>
+            <button onclick="clearPendingMedia()" class="p-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/30 text-rose-400 text-xs shrink-0 transition" title="মিডিয়া মুছে ফেলুন">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+
+          <!-- Voice Recording Live Banner -->
+          <div id="voice-recording-banner" class="hidden mb-2.5 px-3 py-2 rounded-xl bg-rose-500/15 border border-rose-500/40 flex items-center justify-between text-xs text-rose-300">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-rose-500 rec-blink"></span>
+              <span class="font-semibold">🎙️ ভয়েস রেকর্ড হচ্ছে...</span>
+              <span id="voice-rec-timer" class="font-mono font-bold text-white">00:00</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="cancelVoiceRecording()" class="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px]">বাতিল</button>
+              <button onclick="stopVoiceRecording()" class="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] flex items-center gap-1">
+                <i class="fa-solid fa-check"></i> সম্পন্ন
+              </button>
+            </div>
+          </div>
+
           <div class="flex items-center justify-between mb-2 px-1">
             <div class="flex items-center gap-2 text-[11px] text-slate-400">
-              <span id="reply-mode-hint">💡 আপনি মেসেজ পাঠালে কাস্টমার সরাসরি তার Messenger/WhatsApp-এ পাবে।</span>
+              <span id="reply-mode-hint">📷 ছবি, 🎥 ভিডিও, 🎵 অডিও বা 🎙️ ভয়েস রেকর্ড করে সরাসরি পাঠাতে পারবেন।</span>
             </div>
             <button
               onclick="requestAiSuggestion()"
@@ -206,10 +240,40 @@
           </div>
 
           <div class="flex items-end gap-2">
+            <!-- Hidden File Input for Photo, Video, Audio -->
+            <input
+              type="file"
+              id="admin-media-input"
+              accept="image/*,video/*,audio/*"
+              class="hidden"
+              onchange="handleAdminMediaSelect(event)"
+            />
+
+            <!-- Attach Photo/Video/Audio Button -->
+            <button
+              type="button"
+              onclick="document.getElementById('admin-media-input').click()"
+              class="h-11 w-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-indigo-400 border border-slate-700 flex items-center justify-center transition shrink-0"
+              title="ছবি, ভিডিও বা অডিও ফাইল যুক্ত করুন (Photo / Video / Audio)"
+            >
+              <i class="fa-solid fa-paperclip text-base"></i>
+            </button>
+
+            <!-- Live Voice Microphone Record Button -->
+            <button
+              type="button"
+              id="voice-rec-btn"
+              onclick="toggleVoiceRecording()"
+              class="h-11 w-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 flex items-center justify-center transition shrink-0"
+              title="সরাসরি মাইক্রোফোনে ভয়েস রেকর্ড করে পাঠান"
+            >
+              <i class="fa-solid fa-microphone text-base"></i>
+            </button>
+
             <textarea
               id="admin-reply-input"
               rows="2"
-              placeholder="কাস্টমারকে মেসেজ লিখুন... (Enter চাপলে সেন্ড হবে, Shift+Enter নতুন লাইন)"
+              placeholder="মেসেজ লিখুন অথবা ফটো/ভিডিও/ভয়েস পাঠান... (Enter = সেন্ড)"
               onkeydown="handleReplyKeydown(event)"
               class="flex-1 px-3.5 py-2.5 text-sm rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none select-text"
             ></textarea>
@@ -226,7 +290,7 @@
       </div>
     </main>
 
-    <!-- RIGHT DRAWER / PANEL: WhatsApp QR Connection & Controls -->
+    <!-- RIGHT DRAWER / PANEL: WhatsApp QR Connection & Local DB Controls -->
     <aside
       id="wa-drawer"
       class="w-full sm:w-80 lg:w-96 border-l border-slate-800 bg-slate-900/95 flex flex-col shrink-0 transition-all duration-200 z-10"
@@ -313,26 +377,45 @@
           </div>
         </div>
 
-        <!-- System Stats Card -->
-        <div class="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2 text-xs">
-          <div class="font-semibold text-slate-300 flex items-center justify-between">
-            <span>সার্ভার স্ট্যাটাস (Alwaysdata)</span>
-            <span class="text-[10px] text-emerald-400 font-mono">PORT 8100</span>
+        <!-- Browser Local Temp DB & Facebook Live Architecture Card -->
+        <div class="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2.5 text-xs">
+          <div class="font-semibold text-slate-200 flex items-center justify-between">
+            <span class="flex items-center gap-1.5"><i class="fa-solid fa-database text-purple-400"></i> লোকাল টেম্পোরারি ডাটাবেস</span>
+            <span class="text-[10px] text-emerald-400 font-mono">Zero Server DB</span>
           </div>
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            অ্যাডমিন প্যানেলে না থাকলে কোনো ডাটাবেসে চ্যাট সেভ হয় না। প্যানেলে ঢুকলে সরাসরি <strong>Facebook Server</strong> থেকে ফেচ হয়ে আপনার ব্রাউজারের লোকাল ডাটাবেসে (IndexedDB) অস্থায়ীভাবে জমা থাকে।
+          </p>
           <div class="grid grid-cols-2 gap-2 pt-1">
             <div class="p-2 rounded-lg bg-slate-900 border border-slate-800/80">
-              <div class="text-[10px] text-slate-400">মোট চ্যাট সেশন</div>
+              <div class="text-[10px] text-slate-400">লোকাল চ্যাট থ্রেড</div>
               <div id="stat-sessions" class="text-sm font-bold text-white mt-0.5">0</div>
             </div>
             <div class="p-2 rounded-lg bg-slate-900 border border-slate-800/80">
-              <div class="text-[10px] text-slate-400">প্রোডাক্ট ক্যাটালগ</div>
-              <div id="stat-products" class="text-sm font-bold text-emerald-400 mt-0.5">Loaded</div>
+              <div class="text-[10px] text-slate-400">সোর্স</div>
+              <div class="text-xs font-bold text-blue-400 mt-0.5">FB Live + Local</div>
             </div>
+          </div>
+          <div class="flex gap-2 pt-1">
+            <button onclick="manualRefresh(true)" class="flex-1 py-1.5 px-2.5 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 text-blue-300 border border-blue-500/30 text-[11px] font-semibold transition">
+              <i class="fa-solid fa-cloud-arrow-down mr-1"></i>FB Server ফেচ
+            </button>
+            <button onclick="clearLocalTempDB()" class="py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-300 border border-slate-700 text-[11px] transition" title="ব্রাউজারের লোকাল ক্যাশ পরিষ্কার করে আবার ফেচ করুন">
+              <i class="fa-solid fa-broom mr-1"></i>ক্যাশ ক্লিয়ার
+            </button>
           </div>
         </div>
       </div>
     </aside>
 
+  </div>
+
+  <!-- Full-Screen Photo Lightbox Modal -->
+  <div id="media-lightbox-modal" onclick="closeMediaLightbox()" class="fixed inset-0 z-50 hidden bg-black/90 backdrop-blur-sm flex items-center justify-center p-4">
+    <button onclick="closeMediaLightbox()" class="absolute top-4 right-4 w-10 h-10 rounded-full bg-slate-800/80 hover:bg-slate-700 text-white flex items-center justify-center text-lg border border-slate-600">
+      <i class="fa-solid fa-xmark"></i>
+    </button>
+    <img id="media-lightbox-img" src="" alt="Full View" onclick="event.stopPropagation()" class="max-w-full max-h-[90vh] rounded-xl object-contain shadow-2xl border border-white/10" />
   </div>
 
   <!-- Toast Notification -->
@@ -342,11 +425,133 @@
   </div>
 
   <script>
+    // ==========================================
+    // 📦 BROWSER TEMPORARY LOCAL DATABASE (IndexedDB: RanonexLocalChatDB)
+    // ==========================================
+    const LOCAL_DB_NAME = 'RanonexLocalChatDB';
+    const LOCAL_DB_VERSION = 1;
+    const LOCAL_STORE_NAME = 'conversations';
+    let localDbInstance = null;
+
+    function openLocalChatDB() {
+      if (localDbInstance) return Promise.resolve(localDbInstance);
+      return new Promise((resolve) => {
+        if (!window.indexedDB) {
+          resolve(null);
+          return;
+        }
+        const req = indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_VERSION);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains(LOCAL_STORE_NAME)) {
+            db.createObjectStore(LOCAL_STORE_NAME, { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = (e) => {
+          localDbInstance = e.target.result;
+          resolve(localDbInstance);
+        };
+        req.onerror = () => resolve(null);
+      });
+    }
+
+    async function loadAllFromLocalDB() {
+      try {
+        const db = await openLocalChatDB();
+        if (!db) {
+          const raw = localStorage.getItem('ranonex_temp_chats');
+          return raw ? JSON.parse(raw) : [];
+        }
+        return await new Promise((resolve) => {
+          const tx = db.transaction(LOCAL_STORE_NAME, 'readonly');
+          const store = tx.objectStore(LOCAL_STORE_NAME);
+          const req = store.getAll();
+          req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+          req.onerror = () => resolve([]);
+        });
+      } catch (e) {
+        return [];
+      }
+    }
+
+    async function saveConversationsToLocalDB(convList) {
+      try {
+        const db = await openLocalChatDB();
+        if (!db) {
+          localStorage.setItem('ranonex_temp_chats', JSON.stringify(convList));
+          return;
+        }
+        await new Promise((resolve) => {
+          const tx = db.transaction(LOCAL_STORE_NAME, 'readwrite');
+          const store = tx.objectStore(LOCAL_STORE_NAME);
+          for (const item of convList) {
+            if (item && (item.id || item.chat_id)) {
+              store.put({ ...item, id: item.id || item.chat_id });
+            }
+          }
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        });
+        const badge = document.getElementById('local-db-badge');
+        if (badge) badge.textContent = `Local DB: ${convList.length} Chats`;
+      } catch (e) {}
+    }
+
+    async function clearLocalTempDB() {
+      try {
+        const db = await openLocalChatDB();
+        if (db) {
+          await new Promise((resolve) => {
+            const tx = db.transaction(LOCAL_STORE_NAME, 'readwrite');
+            tx.objectStore(LOCAL_STORE_NAME).clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => resolve();
+          });
+        }
+        localStorage.removeItem('ranonex_temp_chats');
+        allConversations = [];
+        renderConversationsList();
+        showToast('🧹 লোকাল টেম্পোরারি ডাটাবেস পরিষ্কার করা হয়েছে! এখন Facebook Server থেকে ফেচ হচ্ছে...');
+        await fetchConversations(true);
+      } catch (e) {
+        showToast('লোকাল ডাটাবেস ক্লিয়ার করতে সমস্যা হয়েছে', true);
+      }
+    }
+
+    function mergeMessageArrays(localMsgs = [], remoteMsgs = []) {
+      const map = new Map();
+      for (const m of localMsgs) {
+        if (!m) continue;
+        const key = m.id || `${m.sender_type}_${m.timestamp}_${m.message_text}`;
+        map.set(key, m);
+      }
+      for (const rm of remoteMsgs) {
+        if (!rm) continue;
+        const key = rm.id || `${rm.sender_type}_${rm.timestamp}_${rm.message_text}`;
+        const existing = map.get(key);
+        if (existing) {
+          map.set(key, {
+            ...existing,
+            ...rm,
+            media_type: rm.media_type || existing.media_type || null,
+            media_url: rm.media_url || existing.media_url || null,
+            attachments: (rm.attachments && rm.attachments.length > 0) ? rm.attachments : (existing.attachments || [])
+          });
+        } else {
+          map.set(key, rm);
+        }
+      }
+      return Array.from(map.values()).sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+    }
+
     let allConversations = [];
     let currentChannelFilter = 'all';
     let activeChatId = null;
     let activeChatSession = null;
     let isSendingReply = false;
+
+    // Pending attachment state (for sending Photo, Video, Audio, or Recorded Voice)
+    let pendingMedia = null; // { base64, type: 'image'|'video'|'audio', mime, name, previewUrl }
 
     function showToast(message, isError = false) {
       const box = document.getElementById('toast-box');
@@ -378,6 +583,21 @@
       return new Date(iso).toLocaleDateString('bn-BD');
     }
 
+    function openMediaLightbox(url) {
+      if (!url) return;
+      const modal = document.getElementById('media-lightbox-modal');
+      const img = document.getElementById('media-lightbox-img');
+      img.src = url;
+      modal.classList.remove('hidden');
+    }
+
+    function closeMediaLightbox() {
+      const modal = document.getElementById('media-lightbox-modal');
+      const img = document.getElementById('media-lightbox-img');
+      img.src = '';
+      modal.classList.add('hidden');
+    }
+
     function toggleWaDrawer(forceOpen) {
       const drawer = document.getElementById('wa-drawer');
       if (typeof forceOpen === 'boolean') {
@@ -401,12 +621,48 @@
       renderConversationsList();
     }
 
-    async function fetchConversations() {
+    // ১. প্রথমে ব্রাউজারের লোকাল টেম্পোরারি ডাটাবেস থেকে লোড এবং এরপর Facebook Server থেকে লাইভ ফেচ
+    async function initLocalAndLiveInbox() {
+      const cached = await loadAllFromLocalDB();
+      if (cached && cached.length > 0) {
+        allConversations = cached.sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0));
+        document.getElementById('count-all').textContent = `(${allConversations.length})`;
+        document.getElementById('stat-sessions').textContent = allConversations.length;
+        renderConversationsList();
+      }
+      await fetchConversations(true);
+    }
+
+    async function fetchConversations(forceLive = false) {
       try {
-        const res = await fetch('/api/conversations');
+        const res = await fetch(forceLive ? '/api/conversations?force=1' : '/api/conversations');
         if (!res.ok) return;
         const data = await res.json();
-        allConversations = Array.isArray(data) ? data : (data.conversations || []);
+        const remoteList = Array.isArray(data) ? data : (data.conversations || []);
+
+        // লোকাল টেম্পোরারি ডাটাবেসের সাথে নতুন মেসেজ ও মিডিয়া মার্জ করা
+        const localById = new Map(allConversations.map(c => [c.id || c.chat_id, c]));
+        for (const rc of remoteList) {
+          const cid = rc.id || rc.chat_id;
+          const prev = localById.get(cid);
+          const mergedMessages = mergeMessageArrays(prev?.messages || [], rc.messages || []);
+          const lastMsgObj = mergedMessages.length > 0 ? mergedMessages[mergedMessages.length - 1] : null;
+          localById.set(cid, {
+            ...(prev || {}),
+            ...rc,
+            id: cid,
+            chat_id: cid,
+            messages: mergedMessages,
+            last_message: rc.last_message || lastMsgObj?.message_text || prev?.last_message || '',
+            last_message_at: rc.last_message_at || lastMsgObj?.timestamp || prev?.last_message_at || new Date().toISOString()
+          });
+        }
+
+        allConversations = Array.from(localById.values())
+          .sort((a, b) => new Date(b.last_message_at || 0) - new Date(a.last_message_at || 0));
+
+        await saveConversationsToLocalDB(allConversations);
+
         document.getElementById('count-all').textContent = `(${allConversations.length})`;
         document.getElementById('stat-sessions').textContent = allConversations.length;
         renderConversationsList();
@@ -503,9 +759,17 @@
       document.getElementById('empty-chat-state').classList.add('hidden');
       document.getElementById('active-chat-container').classList.remove('hidden');
       renderConversationsList();
+
+      // প্রথমে ব্রাউজারের লোকাল ডাটাবেস থেকে তাৎক্ষণিক রেন্ডার
+      const localConv = allConversations.find(c => (c.id || c.chat_id) === chatId);
+      if (localConv) {
+        activeChatSession = localConv;
+        applyActiveChatHeader(localConv, chatId);
+        renderMessages(localConv.messages || [], true);
+      }
+
       await loadActiveConversation(chatId, true);
 
-      // Mark as read
       fetch('/api/conversations/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -519,30 +783,52 @@
       document.getElementById('empty-chat-state').classList.remove('hidden');
     }
 
+    function applyActiveChatHeader(session, chatId) {
+      const isWa = (session.platform || '').toLowerCase() === 'whatsapp' || String(chatId).startsWith('wa_');
+      const name = session.sender_name || session.name || chatId;
+      document.getElementById('active-chat-name').textContent = name;
+      document.getElementById('active-chat-id').textContent = session.sender_id || chatId;
+      document.getElementById('active-chat-avatar').textContent = (name || 'C').charAt(0).toUpperCase();
+
+      const platBadge = document.getElementById('active-chat-platform');
+      if (isWa) {
+        platBadge.className = 'px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+        platBadge.innerHTML = '<i class="fa-brands fa-whatsapp mr-1"></i>WhatsApp Personal';
+      } else {
+        platBadge.className = 'px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30';
+        platBadge.innerHTML = '<i class="fa-brands fa-facebook-messenger mr-1"></i>Messenger';
+      }
+      updateHandoverButtonUI(Boolean(session.admin_takeover));
+    }
+
     async function loadActiveConversation(chatId, scrollToBottom = false) {
       try {
         const res = await fetch(`/api/conversations/${encodeURIComponent(chatId)}`);
         if (!res.ok) return;
-        const session = await res.json();
-        activeChatSession = session;
+        const remoteSession = await res.json();
 
-        const isWa = (session.platform || '').toLowerCase() === 'whatsapp' || chatId.startsWith('wa_');
-        const name = session.sender_name || session.name || chatId;
-        document.getElementById('active-chat-name').textContent = name;
-        document.getElementById('active-chat-id').textContent = session.sender_id || chatId;
-        document.getElementById('active-chat-avatar').textContent = (name || 'C').charAt(0).toUpperCase();
+        const localIdx = allConversations.findIndex(c => (c.id || c.chat_id) === chatId);
+        const prevMessages = localIdx >= 0 ? (allConversations[localIdx].messages || []) : [];
+        const mergedMsgs = mergeMessageArrays(prevMessages, remoteSession.messages || []);
 
-        const platBadge = document.getElementById('active-chat-platform');
-        if (isWa) {
-          platBadge.className = 'px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
-          platBadge.innerHTML = '<i class="fa-brands fa-whatsapp mr-1"></i>WhatsApp Personal';
+        const updatedSession = {
+          ...(localIdx >= 0 ? allConversations[localIdx] : {}),
+          ...remoteSession,
+          id: chatId,
+          chat_id: chatId,
+          messages: mergedMsgs
+        };
+        activeChatSession = updatedSession;
+
+        if (localIdx >= 0) {
+          allConversations[localIdx] = updatedSession;
         } else {
-          platBadge.className = 'px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30';
-          platBadge.innerHTML = '<i class="fa-brands fa-facebook-messenger mr-1"></i>Messenger';
+          allConversations.unshift(updatedSession);
         }
+        await saveConversationsToLocalDB(allConversations);
 
-        updateHandoverButtonUI(Boolean(session.admin_takeover));
-        renderMessages(session.messages || [], scrollToBottom);
+        applyActiveChatHeader(updatedSession, chatId);
+        renderMessages(updatedSession.messages || [], scrollToBottom);
       } catch (e) {
         console.error('Failed to load session:', e);
       }
@@ -581,11 +867,78 @@
           activeChatSession.admin_takeover = nextState;
           updateHandoverButtonUI(nextState);
           showToast(nextState ? '👨‍💻 Admin Takeover চালু করা হয়েছে (AI অটো-রিপ্লাই বন্ধ)' : '🤖 AI অটো-রিপ্লাই পুনরায় চালু করা হয়েছে');
-          fetchConversations();
+          fetchConversations(false);
         }
       } catch (e) {
         showToast('হ্যান্ডওভার পরিবর্তন ব্যর্থ হয়েছে', true);
       }
+    }
+
+    // ==========================================
+    // 🖼️🎥🎙️ INLINE PHOTO, VIDEO & AUDIO RENDERER IN CHAT BUBBLES
+    // ==========================================
+    function renderMessageAttachmentsHtml(m) {
+      const items = [];
+      if (Array.isArray(m.attachments) && m.attachments.length > 0) {
+        items.push(...m.attachments);
+      } else if (m.media_url) {
+        items.push({
+          type: m.media_type || 'image',
+          url: m.media_url,
+          mime_type: m.media_mime || ''
+        });
+      }
+      if (items.length === 0) return '';
+
+      return items.map(att => {
+        const url = att.url || att.file_url;
+        if (!url) return '';
+        const type = String(att.type || '').toLowerCase();
+        const mime = String(att.mime_type || '').toLowerCase();
+        const safeUrl = escapeHtml(url);
+
+        if (type === 'image' || mime.startsWith('image/')) {
+          return `
+            <div class="mt-1.5 mb-1">
+              <img
+                src="${safeUrl}"
+                alt="Chat Photo"
+                onclick="openMediaLightbox('${safeUrl}')"
+                class="max-w-[240px] sm:max-w-[300px] max-h-64 rounded-xl border border-white/15 object-cover cursor-zoom-in hover:opacity-95 transition shadow-md"
+                loading="lazy"
+              />
+            </div>
+          `;
+        }
+        if (type === 'video' || mime.startsWith('video/')) {
+          return `
+            <div class="mt-1.5 mb-1">
+              <video
+                src="${safeUrl}"
+                controls
+                preload="metadata"
+                class="max-w-[260px] sm:max-w-[320px] max-h-64 rounded-xl border border-white/15 bg-black shadow-md"
+              ></video>
+            </div>
+          `;
+        }
+        if (type === 'audio' || mime.startsWith('audio/')) {
+          return `
+            <div class="mt-1.5 mb-1 flex items-center gap-2 bg-slate-950/75 px-2.5 py-1.5 rounded-xl border border-white/15">
+              <i class="fa-solid fa-volume-high text-indigo-400 text-xs"></i>
+              <audio src="${safeUrl}" controls preload="metadata" class="h-8 w-48 sm:w-60"></audio>
+            </div>
+          `;
+        }
+        return `
+          <div class="mt-1.5 mb-1">
+            <a href="${safeUrl}" target="_blank" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950/60 border border-white/15 text-xs text-indigo-300 hover:underline">
+              <i class="fa-solid fa-file-arrow-down"></i>
+              <span>${escapeHtml(att.name || 'ফাইল ডাউনলোড করুন')}</span>
+            </a>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderMessages(messages, scrollToBottom = false) {
@@ -593,7 +946,7 @@
       const wasNearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
 
       if (!messages || messages.length === 0) {
-        box.innerHTML = `<div class="text-center text-slate-500 text-xs py-10">এই সেশনে এখনো কোনো মেসেজ নেই। নিচে লিখে প্রথম মেসেজ পাঠান।</div>`;
+        box.innerHTML = `<div class="text-center text-slate-500 text-xs py-10">এই সেশনে এখনো কোনো মেসেজ নেই। নিচে লিখে বা ছবি/ভয়েস যুক্ত করে প্রথম মেসেজ পাঠান।</div>`;
         return;
       }
 
@@ -605,13 +958,17 @@
           : (isAdmin ? '👨‍💻 Admin (আপনি)' : '🤖 Ranonex AI');
 
         const timeStr = m.timestamp ? new Date(m.timestamp).toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' }) : '';
+        const mediaHtml = renderMessageAttachmentsHtml(m);
+        const rawText = String(m.message_text || '').trim();
+        const isPlaceholderOnly = mediaHtml && /^(\📷|\🎥|\🎙️|\📎)?\s*\[(Photo|Video|Voice Audio|Voice Message|Voice Note|Product Video|Product Image|Product Image \/ Screenshot|Attachment)\]$/i.test(rawText);
+        const textHtml = (!rawText || isPlaceholderOnly) ? '' : `<div>${escapeHtml(rawText)}</div>`;
 
         if (isCustomer) {
           return `
-            <div class="flex flex-col items-start max-w-[82%]">
+            <div class="flex flex-col items-start max-w-[85%]">
               <span class="text-[10px] text-slate-400 mb-1 px-1">${senderLabel} • ${timeStr}</span>
               <div class="px-3.5 py-2.5 rounded-2xl rounded-tl-sm bg-slate-800 border border-slate-700/80 text-slate-100 text-xs sm:text-sm whitespace-pre-wrap leading-relaxed shadow">
-                ${escapeHtml(m.message_text)}
+                ${mediaHtml}${textHtml}
               </div>
             </div>
           `;
@@ -620,10 +977,10 @@
             ? 'bg-gradient-to-br from-emerald-600 to-teal-700 text-white border border-emerald-500/40'
             : 'bg-gradient-to-br from-indigo-600/90 to-purple-700/90 text-white border border-indigo-400/30';
           return `
-            <div class="flex flex-col items-end max-w-[82%] ml-auto">
+            <div class="flex flex-col items-end max-w-[85%] ml-auto">
               <span class="text-[10px] text-slate-400 mb-1 px-1">${senderLabel} • ${timeStr}</span>
               <div class="px-3.5 py-2.5 rounded-2xl rounded-tr-sm ${bubbleStyle} text-xs sm:text-sm whitespace-pre-wrap leading-relaxed shadow">
-                ${escapeHtml(m.message_text)}
+                ${mediaHtml}${textHtml}
               </div>
             </div>
           `;
@@ -632,6 +989,239 @@
 
       if (scrollToBottom || wasNearBottom) {
         box.scrollTop = box.scrollHeight;
+      }
+    }
+
+    // ==========================================
+    // 📎 PHOTO / VIDEO / AUDIO FILE ATTACHMENT & 🎙️ LIVE VOICE RECORDER (.WAV)
+    // ==========================================
+    function handleAdminMediaSelect(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (file.size > 25 * 1024 * 1024) {
+        showToast('ফাইলের সাইজ সর্বোচ্চ ২৫ MB হতে পারবে', true);
+        event.target.value = '';
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64DataUrl = reader.result;
+        const mime = file.type || 'application/octet-stream';
+        let type = 'file';
+        if (mime.startsWith('image/')) type = 'image';
+        else if (mime.startsWith('video/')) type = 'video';
+        else if (mime.startsWith('audio/')) type = 'audio';
+
+        setPendingMedia({
+          base64: base64DataUrl,
+          type,
+          mime,
+          name: file.name
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function setPendingMedia(mediaObj) {
+      pendingMedia = mediaObj;
+      const bar = document.getElementById('pending-media-preview');
+      const content = document.getElementById('pending-media-content');
+      if (!mediaObj) {
+        bar.classList.add('hidden');
+        content.innerHTML = '';
+        return;
+      }
+
+      bar.classList.remove('hidden');
+      const safeName = escapeHtml(mediaObj.name || 'Attached Media');
+      if (mediaObj.type === 'image') {
+        content.innerHTML = `
+          <img src="${mediaObj.base64}" class="w-12 h-12 rounded-lg object-cover border border-indigo-500/40 shrink-0" />
+          <div class="min-w-0">
+            <div class="text-xs font-semibold text-indigo-300 truncate">📷 ছবি যুক্ত করা হয়েছে</div>
+            <div class="text-[11px] text-slate-400 truncate">${safeName}</div>
+          </div>
+        `;
+      } else if (mediaObj.type === 'video') {
+        content.innerHTML = `
+          <video src="${mediaObj.base64}" class="w-16 h-12 rounded-lg object-cover bg-black border border-indigo-500/40 shrink-0"></video>
+          <div class="min-w-0">
+            <div class="text-xs font-semibold text-indigo-300 truncate">🎥 ভিডিও যুক্ত করা হয়েছে</div>
+            <div class="text-[11px] text-slate-400 truncate">${safeName}</div>
+          </div>
+        `;
+      } else if (mediaObj.type === 'audio') {
+        content.innerHTML = `
+          <div class="w-9 h-9 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
+            <i class="fa-solid fa-microphone-lines"></i>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs font-semibold text-emerald-300 truncate">🎙️ ভয়েস / অডিও প্রস্তুত (${safeName})</div>
+            <audio src="${mediaObj.base64}" controls class="h-7 w-full max-w-[240px] mt-1"></audio>
+          </div>
+        `;
+      } else {
+        content.innerHTML = `
+          <i class="fa-solid fa-file text-indigo-400 text-lg"></i>
+          <span class="text-xs text-slate-200 truncate">${safeName}</span>
+        `;
+      }
+    }
+
+    function clearPendingMedia() {
+      pendingMedia = null;
+      const fileInput = document.getElementById('admin-media-input');
+      if (fileInput) fileInput.value = '';
+      document.getElementById('pending-media-preview').classList.add('hidden');
+      document.getElementById('pending-media-content').innerHTML = '';
+    }
+
+    // 🎙️ Browser Microphone Recorder -> Universal 16-bit PCM WAV Encoder
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let recStream = null;
+    let recStartTime = 0;
+    let recTimerInterval = null;
+    let recCancelled = false;
+
+    function encodeAudioBufferToWavBase64(audioBuffer) {
+      const numOfChan = 1; // Mono for crisp voice & compact size
+      const sampleRate = 24000;
+      const offlineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const channelData = audioBuffer.getChannelData(0);
+      const origRate = audioBuffer.sampleRate;
+      const ratio = origRate / sampleRate;
+      const newLength = Math.floor(channelData.length / ratio);
+      const pcm16 = new Int16Array(newLength);
+      for (let i = 0; i < newLength; i++) {
+        const idx = Math.min(channelData.length - 1, Math.floor(i * ratio));
+        const s = Math.max(-1, Math.min(1, channelData[idx]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+
+      const wavBuffer = new ArrayBuffer(44 + pcm16.length * 2);
+      const view = new DataView(wavBuffer);
+      const writeStr = (offset, str) => {
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+      };
+      writeStr(0, 'RIFF');
+      view.setUint32(4, 36 + pcm16.length * 2, true);
+      writeStr(8, 'WAVE');
+      writeStr(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numOfChan, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * numOfChan * 2, true);
+      view.setUint16(32, numOfChan * 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, 'data');
+      view.setUint32(40, pcm16.length * 2, true);
+
+      const bytes = new Uint8Array(wavBuffer);
+      bytes.set(new Uint8Array(pcm16.buffer), 44);
+
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      }
+      return 'data:audio/wav;base64,' + btoa(binary);
+    }
+
+    async function toggleVoiceRecording() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        stopVoiceRecording();
+        return;
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast('আপনার ব্রাউজারে মাইক্রোফোন সাপোর্ট নেই', true);
+        return;
+      }
+      try {
+        recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recordedChunks = [];
+        recCancelled = false;
+        mediaRecorder = new MediaRecorder(recStream);
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          clearInterval(recTimerInterval);
+          document.getElementById('voice-recording-banner').classList.add('hidden');
+          const recBtn = document.getElementById('voice-rec-btn');
+          recBtn.className = 'h-11 w-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 flex items-center justify-center transition shrink-0';
+
+          if (recStream) {
+            recStream.getTracks().forEach(t => t.stop());
+            recStream = null;
+          }
+          if (recCancelled || recordedChunks.length === 0) return;
+
+          try {
+            const rawBlob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+            const arrayBuf = await rawBlob.arrayBuffer();
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            const audioCtx = new AudioCtx();
+            const decoded = await audioCtx.decodeAudioData(arrayBuf);
+            const wavDataUrl = encodeAudioBufferToWavBase64(decoded);
+            try { audioCtx.close(); } catch (e) {}
+
+            setPendingMedia({
+              base64: wavDataUrl,
+              type: 'audio',
+              mime: 'audio/wav',
+              name: `voice_${Date.now()}.wav`
+            });
+            showToast('🎙️ ভয়েস রেকর্ড সম্পন্ন! এখন "পাঠান" বাটনে ক্লিক করুন।');
+          } catch (convErr) {
+            // Fallback to raw blob if decodeAudioData fails
+            const rawBlob = new Blob(recordedChunks, { type: 'audio/mp4' });
+            const reader = new FileReader();
+            reader.onload = () => {
+              setPendingMedia({
+                base64: reader.result,
+                type: 'audio',
+                mime: 'audio/mp4',
+                name: `voice_${Date.now()}.mp4`
+              });
+            };
+            reader.readAsDataURL(rawBlob);
+          }
+        };
+
+        mediaRecorder.start();
+        recStartTime = Date.now();
+        document.getElementById('voice-recording-banner').classList.remove('hidden');
+        document.getElementById('voice-rec-timer').textContent = '00:00';
+        const recBtn = document.getElementById('voice-rec-btn');
+        recBtn.className = 'h-11 w-11 rounded-xl bg-rose-600 text-white border border-rose-500 flex items-center justify-center transition shrink-0 rec-blink';
+
+        recTimerInterval = setInterval(() => {
+          const sec = Math.floor((Date.now() - recStartTime) / 1000);
+          const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+          const ss = String(sec % 60).padStart(2, '0');
+          document.getElementById('voice-rec-timer').textContent = `${mm}:${ss}`;
+        }, 500);
+      } catch (err) {
+        showToast('মাইক্রোফোন পারমিশন পাওয়া যায়নি', true);
+      }
+    }
+
+    function stopVoiceRecording() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        recCancelled = false;
+        mediaRecorder.stop();
+      }
+    }
+
+    function cancelVoiceRecording() {
+      recCancelled = true;
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
       }
     }
 
@@ -646,7 +1236,7 @@
       if (!activeChatId || isSendingReply) return;
       const input = document.getElementById('admin-reply-input');
       const text = (input.value || '').trim();
-      if (!text) return;
+      if (!text && !pendingMedia) return;
 
       isSendingReply = true;
       const btn = document.getElementById('send-reply-btn');
@@ -654,21 +1244,29 @@
       btn.disabled = true;
       btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>পাঠানো হচ্ছে...</span>';
 
+      const payload = {
+        chat_id: activeChatId,
+        message_text: text
+      };
+      if (pendingMedia) {
+        payload.media_base64 = pendingMedia.base64;
+        payload.media_type = pendingMedia.type;
+        payload.media_mime = pendingMedia.mime;
+      }
+
       try {
         const res = await fetch('/api/send-reply', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: activeChatId,
-            message_text: text
-          })
+          body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok && data.success) {
           input.value = '';
+          clearPendingMedia();
           showToast('মেসেজ সফলভাবে কাস্টমারের কাছে পাঠানো হয়েছে!');
           await loadActiveConversation(activeChatId, true);
-          await fetchConversations();
+          await fetchConversations(false);
         } else {
           showToast(data.error || 'মেসেজ পাঠানো যায়নি', true);
         }
@@ -814,19 +1412,19 @@
       }
     }
 
-    async function manualRefresh() {
+    async function manualRefresh(forceLive = true) {
       const icon = document.getElementById('refresh-icon');
       icon.classList.add('fa-spin');
-      await Promise.all([fetchConversations(), pollWhatsAppStatus()]);
+      await Promise.all([fetchConversations(forceLive), pollWhatsAppStatus()]);
+      if (forceLive) showToast('☁️ Facebook Server থেকে সর্বশেষ মেসেজ ও মিডিয়া সিঙ্ক হয়েছে');
       setTimeout(() => icon.classList.remove('fa-spin'), 400);
     }
 
-    // Initial load & live polling
-    fetchConversations();
+    // Initial load: Local Temp DB first + Live Facebook Server Fetch
+    initLocalAndLiveInbox();
     pollWhatsAppStatus();
-    setInterval(fetchConversations, 3500);
-    setInterval(pollWhatsAppStatus, 4000);
+    setInterval(() => fetchConversations(false), 4000);
+    setInterval(pollWhatsAppStatus, 4500);
   </script>
 </body>
 </html>
-

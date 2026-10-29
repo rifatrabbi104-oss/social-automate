@@ -66,14 +66,17 @@ conn.on('ready', () => {
             sftp.fastPut(localDashboard, remoteDashboard, (errD) => {
               if (!errD) console.log('✅ dashboard.html uploaded successfully!');
 
-              // Restart the Alwaysdata node service by triggering system-restart API
-              console.log('🔄 Restarting Alwaysdata Node.js process...');
-              fetch('https://ranonex.alwaysdata.net/api/system-restart').catch(() => {});
-              setTimeout(() => {
-                console.log('✅ Deployment complete! Server is restarting.');
-                conn.end();
-                process.exit(0);
-              }, 2500);
+              // Ensure no server-side sessions_store.json file remains on disk
+              sftp.unlink(`${REMOTE_DIR}/sessions_store.json`, () => {
+                // Restart the Alwaysdata node service by triggering system-restart API
+                console.log('🔄 Restarting Alwaysdata Node.js process...');
+                fetch('https://ranonex.alwaysdata.net/api/system-restart').catch(() => {});
+                setTimeout(() => {
+                  console.log('✅ Deployment complete! Server is restarting.');
+                  conn.end();
+                  process.exit(0);
+                }, 2500);
+              });
             });
           });
         });

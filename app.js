@@ -281,13 +281,32 @@ window.fetchLatestConversations = async function(isManual = false) {
 
   try {
     let convs = null;
-    // ১. Alwaysdata লাইভ নোডজেএস গেটওয়ে থেকে রিয়েল-টাইম কনভারসেশন ফেচ
+    // ১. Alwaysdata লাইভ নোডজেএস গেটওয়ে থেকে রিয়েল-টাইম কনভারসেশন ফেচ (Facebook Server Live Fetch)
     try {
-      const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations`, { signal: AbortSignal.timeout(2500) });
+      const adUrl = isManual
+        ? `https://ranonex.alwaysdata.net/api/conversations?force=1`
+        : `https://ranonex.alwaysdata.net/api/conversations`;
+      const adRes = await fetch(adUrl, { signal: AbortSignal.timeout(6000) });
       if (adRes.ok) {
         const adData = await adRes.json();
         if (Array.isArray(adData) && adData.length > 0) {
           convs = adData;
+          // যদি চ্যাটের সাথে মেসেজ ও মিডিয়া থাকে, লোকাল টেম্পোরারি ক্যাশে সংরক্ষণ করা
+          for (const c of convs) {
+            if (Array.isArray(c.messages) && c.messages.length > 0) {
+              appState.messages[c.id] = c.messages.map(m => ({
+                id: m.id,
+                sender_type: m.sender_type || (m.role === 'model' ? 'assistant' : 'customer'),
+                message_text: m.message_text || m.text || '',
+                media_type: m.media_type || null,
+                media_url: m.media_url || null,
+                media_mime: m.media_mime || null,
+                attachments: m.attachments || [],
+                created_at: m.timestamp || m.created_at || new Date().toISOString()
+              }));
+            }
+          }
+          setLocalCache(CACHE_KEYS.MESSAGES, appState.messages);
         }
       }
     } catch (adErr) {}
@@ -375,7 +394,7 @@ async function forceRefreshActiveChatMessages(chatId) {
   try {
     let msgs = null;
     try {
-      const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(2500) });
+      const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(5000) });
       if (adRes.ok) {
         const adData = await adRes.json();
         if (adData && Array.isArray(adData.messages)) {
@@ -383,7 +402,11 @@ async function forceRefreshActiveChatMessages(chatId) {
             id: m.id,
             sender_type: m.sender_type || (m.role === 'model' ? 'assistant' : 'customer'),
             message_text: m.message_text || m.text || '',
-            created_at: m.timestamp || new Date().toISOString()
+            media_type: m.media_type || null,
+            media_url: m.media_url || null,
+            media_mime: m.media_mime || null,
+            attachments: m.attachments || [],
+            created_at: m.timestamp || m.created_at || new Date().toISOString()
           }));
         }
       }
@@ -583,18 +606,16 @@ function updateHandoverUI(conv) {
 }
 
 async function loadChatMessages(chatId) {
-  // ১. লোকাল ক্যাশ চেক
+  // ১. প্রথমে লোকাল টেম্পোরারি ক্যাশ থেকে তাৎক্ষণিক রেন্ডার
   if (appState.messages[chatId] && appState.messages[chatId].length > 0) {
     renderMessageBubbles(chatId);
-    return;
   }
 
-  // ২. লোকাল ক্যাশ খালি থাকলে ১-বার ব্যাকএন্ড থেকে ফেচ
+  // ২. Alwaysdata (Facebook Server Live Fetch) থেকে সর্বশেষ মেসেজ ও মিডিয়া সিঙ্ক
   try {
     let msgs = null;
-    // প্রথমে Alwaysdata থেকে লাইভ সেশনের মেসেজ চেক
     try {
-      const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(2500) });
+      const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(5000) });
       if (adRes.ok) {
         const adData = await adRes.json();
         if (adData && Array.isArray(adData.messages)) {
@@ -602,23 +623,60 @@ async function loadChatMessages(chatId) {
             id: m.id,
             sender_type: m.sender_type || (m.role === 'model' ? 'assistant' : 'customer'),
             message_text: m.message_text || m.text || '',
-            created_at: m.timestamp || new Date().toISOString()
+            media_type: m.media_type || null,
+            media_url: m.media_url || null,
+            media_mime: m.media_mime || null,
+            attachments: m.attachments || [],
+            created_at: m.timestamp || m.created_at || new Date().toISOString()
           }));
         }
       }
     } catch (e) {}
 
-    if (!msgs) {
+    if (!msgs && (!appState.messages[chatId] || appState.messages[chatId].length === 0)) {
       const res = await fetch(`${API_BASE}/messages?chat_id=${encodeURIComponent(chatId)}`);
       if (res.ok) msgs = await res.json();
     }
 
-    if (msgs) {
+    if (msgs && msgs.length > 0) {
       appState.messages[chatId] = msgs;
       setLocalCache(CACHE_KEYS.MESSAGES, appState.messages);
       renderMessageBubbles(chatId);
     }
   } catch (e) {}
+}
+
+function renderMainMessageAttachmentsHtml(m) {
+  const items = [];
+  if (Array.isArray(m.attachments) && m.attachments.length > 0) {
+    items.push(...m.attachments);
+  } else if (m.media_url) {
+    items.push({
+      type: m.media_type || 'image',
+      url: m.media_url,
+      mime_type: m.media_mime || ''
+    });
+  }
+  if (items.length === 0) return '';
+
+  return items.map(att => {
+    const url = att.url || att.file_url;
+    if (!url) return '';
+    const type = String(att.type || '').toLowerCase();
+    const mime = String(att.mime_type || '').toLowerCase();
+    const safeUrl = escapeHtml(url);
+
+    if (type === 'image' || mime.startsWith('image/')) {
+      return `<div style="margin: 6px 0;"><img src="${safeUrl}" alt="Photo" onclick="window.open('${safeUrl}', '_blank')" style="max-width: 260px; max-height: 240px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.18); object-fit: cover; cursor: zoom-in; display: block;" loading="lazy"></div>`;
+    }
+    if (type === 'video' || mime.startsWith('video/')) {
+      return `<div style="margin: 6px 0;"><video src="${safeUrl}" controls preload="metadata" style="max-width: 280px; max-height: 240px; border-radius: 10px; background: #000; display: block;"></video></div>`;
+    }
+    if (type === 'audio' || mime.startsWith('audio/')) {
+      return `<div style="margin: 6px 0;"><audio src="${safeUrl}" controls preload="metadata" style="height: 34px; max-width: 250px;"></audio></div>`;
+    }
+    return `<div style="margin: 6px 0;"><a href="${safeUrl}" target="_blank" style="color: #93c5fd; text-decoration: underline; font-size: 12px;">📎 ফাইল ডাউনলোড করুন</a></div>`;
+  }).join('');
 }
 
 function renderMessageBubbles(chatId) {
@@ -647,9 +705,14 @@ function renderMessageBubbles(chatId) {
     if (isAi) tag = '🤖 AI Assistant';
     if (isAdmin) tag = '👤 You (Admin)';
 
+    const mediaHtml = renderMainMessageAttachmentsHtml(m);
+    const rawText = String(m.message_text || '').trim();
+    const isPlaceholderOnly = mediaHtml && /^(\📷|\🎥|\🎙️|\📎)?\s*\[(Photo|Video|Voice Audio|Voice Message|Voice Note|Product Video|Product Image|Product Image \/ Screenshot|Attachment)\]$/i.test(rawText);
+    const textHtml = (!rawText || isPlaceholderOnly) ? '' : `<div>${escapeHtml(rawText)}</div>`;
+
     row.innerHTML = `
       <div class="msg-sender-tag">${tag}</div>
-      <div class="msg-bubble">${escapeHtml(m.message_text)}</div>
+      <div class="msg-bubble">${mediaHtml}${textHtml}</div>
       <span class="msg-time">${formatTime(m.created_at)}</span>
     `;
     container.appendChild(row);
@@ -659,8 +722,204 @@ function renderMessageBubbles(chatId) {
 }
 
 // ========================================================
-// ৪. আউটবাউন্ড অ্যাডমিন রিপ্লাই
+// ৪. আউটবাউন্ড অ্যাডমিন রিপ্লাই (টেক্সট + ছবি / ভিডিও / অডিও / ভয়েস রেকর্ড)
 // ========================================================
+let mainPendingMedia = null;
+let mainMediaRecorder = null;
+let mainRecChunks = [];
+let mainRecStream = null;
+let mainRecStart = 0;
+let mainRecTimer = null;
+let mainRecCancelled = false;
+
+function encodeMainAudioBufferToWavBase64(audioBuffer) {
+  const numOfChan = 1;
+  const sampleRate = 24000;
+  const channelData = audioBuffer.getChannelData(0);
+  const origRate = audioBuffer.sampleRate;
+  const ratio = origRate / sampleRate;
+  const newLength = Math.floor(channelData.length / ratio);
+  const pcm16 = new Int16Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    const idx = Math.min(channelData.length - 1, Math.floor(i * ratio));
+    const s = Math.max(-1, Math.min(1, channelData[idx]));
+    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  const wavBuffer = new ArrayBuffer(44 + pcm16.length * 2);
+  const view = new DataView(wavBuffer);
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + pcm16.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numOfChan, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numOfChan * 2, true);
+  view.setUint16(32, numOfChan * 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, pcm16.length * 2, true);
+  const bytes = new Uint8Array(wavBuffer);
+  bytes.set(new Uint8Array(pcm16.buffer), 44);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return 'data:audio/wav;base64,' + btoa(binary);
+}
+
+window.setMainPendingMedia = function(mediaObj) {
+  mainPendingMedia = mediaObj;
+  const bar = document.getElementById('main-pending-media-preview');
+  const content = document.getElementById('main-pending-media-content');
+  if (!bar || !content) return;
+  if (!mediaObj) {
+    bar.style.display = 'none';
+    content.innerHTML = '';
+    return;
+  }
+  bar.style.display = 'flex';
+  const safeName = escapeHtml(mediaObj.name || 'Media');
+  if (mediaObj.type === 'image') {
+    content.innerHTML = `<img src="${mediaObj.base64}" style="width: 44px; height: 44px; border-radius: 8px; object-fit: cover;"><div><strong style="font-size: 12px; color: #93c5fd;">📷 ছবি যুক্ত করা হয়েছে</strong><div style="font-size: 11px; color: #94a3b8;">${safeName}</div></div>`;
+  } else if (mediaObj.type === 'video') {
+    content.innerHTML = `<video src="${mediaObj.base64}" style="width: 56px; height: 44px; border-radius: 8px; object-fit: cover; background: #000;"></video><div><strong style="font-size: 12px; color: #93c5fd;">🎥 ভিডিও যুক্ত করা হয়েছে</strong><div style="font-size: 11px; color: #94a3b8;">${safeName}</div></div>`;
+  } else if (mediaObj.type === 'audio') {
+    content.innerHTML = `<span style="font-size: 18px;">🎙️</span><div><strong style="font-size: 12px; color: #6ee7b7;">ভয়েস / অডিও প্রস্তুত</strong><div style="margin-top: 4px;"><audio src="${mediaObj.base64}" controls style="height: 28px; max-width: 220px;"></audio></div></div>`;
+  } else {
+    content.innerHTML = `<span>📎 ${safeName}</span>`;
+  }
+};
+
+window.clearMainPendingMedia = function() {
+  mainPendingMedia = null;
+  const inp = document.getElementById('main-media-file-input');
+  if (inp) inp.value = '';
+  const bar = document.getElementById('main-pending-media-preview');
+  const content = document.getElementById('main-pending-media-content');
+  if (bar) bar.style.display = 'none';
+  if (content) content.innerHTML = '';
+};
+
+window.handleMainMediaSelect = function(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (file.size > 25 * 1024 * 1024) {
+    showToast('⚠️ ফাইলের সাইজ সর্বোচ্চ ২৫ MB হতে পারবে');
+    event.target.value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    const mime = file.type || 'application/octet-stream';
+    let type = 'file';
+    if (mime.startsWith('image/')) type = 'image';
+    else if (mime.startsWith('video/')) type = 'video';
+    else if (mime.startsWith('audio/')) type = 'audio';
+    window.setMainPendingMedia({
+      base64: reader.result,
+      type,
+      mime,
+      name: file.name
+    });
+  };
+  reader.readAsDataURL(file);
+};
+
+window.toggleMainVoiceRec = async function() {
+  if (mainMediaRecorder && mainMediaRecorder.state === 'recording') {
+    window.stopMainVoiceRec();
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showToast('⚠️ ব্রাউজারে মাইক্রোফোন সাপোর্ট নেই');
+    return;
+  }
+  try {
+    mainRecStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mainRecChunks = [];
+    mainRecCancelled = false;
+    mainMediaRecorder = new MediaRecorder(mainRecStream);
+
+    mainMediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) mainRecChunks.push(e.data);
+    };
+
+    mainMediaRecorder.onstop = async () => {
+      clearInterval(mainRecTimer);
+      const banner = document.getElementById('main-voice-rec-banner');
+      if (banner) banner.style.display = 'none';
+      if (mainRecStream) {
+        mainRecStream.getTracks().forEach(t => t.stop());
+        mainRecStream = null;
+      }
+      if (mainRecCancelled || mainRecChunks.length === 0) return;
+      try {
+        const rawBlob = new Blob(mainRecChunks, { type: mainMediaRecorder.mimeType || 'audio/webm' });
+        const arrayBuf = await rawBlob.arrayBuffer();
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioCtx();
+        const decoded = await audioCtx.decodeAudioData(arrayBuf);
+        const wavDataUrl = encodeMainAudioBufferToWavBase64(decoded);
+        try { audioCtx.close(); } catch (e) {}
+        window.setMainPendingMedia({
+          base64: wavDataUrl,
+          type: 'audio',
+          mime: 'audio/wav',
+          name: `voice_${Date.now()}.wav`
+        });
+        showToast('🎙️ ভয়েস রেকর্ড সম্পন্ন! এখন Send বাটনে চাপুন।');
+      } catch (e) {
+        const rawBlob = new Blob(mainRecChunks, { type: 'audio/mp4' });
+        const reader = new FileReader();
+        reader.onload = () => {
+          window.setMainPendingMedia({
+            base64: reader.result,
+            type: 'audio',
+            mime: 'audio/mp4',
+            name: `voice_${Date.now()}.mp4`
+          });
+        };
+        reader.readAsDataURL(rawBlob);
+      }
+    };
+
+    mainMediaRecorder.start();
+    mainRecStart = Date.now();
+    const banner = document.getElementById('main-voice-rec-banner');
+    if (banner) banner.style.display = 'flex';
+    const timerEl = document.getElementById('main-voice-rec-timer');
+    if (timerEl) timerEl.textContent = '00:00';
+    mainRecTimer = setInterval(() => {
+      const sec = Math.floor((Date.now() - mainRecStart) / 1000);
+      const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+      const ss = String(sec % 60).padStart(2, '0');
+      if (timerEl) timerEl.textContent = `${mm}:${ss}`;
+    }, 500);
+  } catch (err) {
+    showToast('❌ মাইক্রোফোন পারমিশন পাওয়া যায়নি');
+  }
+};
+
+window.stopMainVoiceRec = function() {
+  if (mainMediaRecorder && mainMediaRecorder.state === 'recording') {
+    mainRecCancelled = false;
+    mainMediaRecorder.stop();
+  }
+};
+
+window.cancelMainVoiceRec = function() {
+  mainRecCancelled = true;
+  if (mainMediaRecorder && mainMediaRecorder.state === 'recording') {
+    mainMediaRecorder.stop();
+  }
+};
+
 function initChatReply() {
   const form = document.getElementById('chat-reply-form');
   const inputEl = document.getElementById('admin-message-input');
@@ -671,7 +930,7 @@ function initChatReply() {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const text = inputEl.value.trim();
-    if (!text || appState.isSending) return;
+    if ((!text && !mainPendingMedia) || appState.isSending) return;
 
     const chatId = appState.activeChatId;
     if (!chatId) {
@@ -682,11 +941,18 @@ function initChatReply() {
     appState.isSending = true;
     sendBtn.disabled = true;
 
+    const attachedMedia = mainPendingMedia ? { ...mainPendingMedia } : null;
+    const displayMsgText = text || (attachedMedia ? (attachedMedia.type === 'image' ? '📷 [Photo]' : (attachedMedia.type === 'video' ? '🎥 [Video]' : '🎙️ [Voice Audio]')) : '');
+
     // ১. লোকাল ক্যাশে তাৎক্ষণিক সেভ (Instant UI)
     const newMsg = {
       id: 'm_' + Date.now(),
       sender_type: 'admin',
-      message_text: text,
+      message_text: displayMsgText,
+      media_type: attachedMedia ? attachedMedia.type : null,
+      media_url: attachedMedia ? attachedMedia.base64 : null,
+      media_mime: attachedMedia ? attachedMedia.mime : null,
+      attachments: attachedMedia ? [{ type: attachedMedia.type, url: attachedMedia.base64, mime_type: attachedMedia.mime }] : [],
       created_at: new Date().toISOString()
     };
 
@@ -695,31 +961,44 @@ function initChatReply() {
     setLocalCache(CACHE_KEYS.MESSAGES, appState.messages);
     renderMessageBubbles(chatId);
     inputEl.value = '';
+    window.clearMainPendingMedia();
+
+    const payload = { chat_id: chatId, message_text: text };
+    if (attachedMedia) {
+      payload.media_base64 = attachedMedia.base64;
+      payload.media_type = attachedMedia.type;
+      payload.media_mime = attachedMedia.mime;
+    }
 
     // ২. Alwaysdata গেটওয়ে অথবা Worker-এ ১টি একক আউটবাউন্ড POST কল
     try {
       let res = await fetch(`https://ranonex.alwaysdata.net/api/send-reply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, message_text: text }),
-        signal: AbortSignal.timeout(3500)
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15000)
       }).catch(() => null);
 
       if (!res || !res.ok) {
         res = await fetch(`${API_BASE}/admin-reply`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, message_text: text })
+          body: JSON.stringify(payload)
         });
       }
 
       const data = await res.json();
       if (res.ok && data.success) {
+        if (data.media_url && newMsg.attachments && newMsg.attachments[0]) {
+          newMsg.media_url = data.media_url;
+          newMsg.attachments[0].url = data.media_url;
+          setLocalCache(CACHE_KEYS.MESSAGES, appState.messages);
+        }
         showToast('✅ কাস্টমারকে মেসেজ পাঠানো হয়েছে!');
         const conv = appState.conversations.find(c => String(c.id) === String(chatId));
         if (conv) {
           conv.admin_takeover = true;
-          conv.last_message = text;
+          conv.last_message = displayMsgText;
           setLocalCache(CACHE_KEYS.CONVERSATIONS, appState.conversations);
           renderConversationList();
           updateHandoverUI(conv);
