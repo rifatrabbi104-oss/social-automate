@@ -1,13 +1,19 @@
 {
   "name": "social-automate-alwaysdata",
-  "version": "1.0.0",
-  "description": "Alwaysdata Node.js Social Automation Gateway (Facebook Messenger, Comments, WhatsApp Web QR, Gemini AI)",
+  "version": "2.0.0",
+  "description": "High-Efficiency Alwaysdata Node.js Gateway for Meta Messenger, Comments, WhatsApp QR (Baileys) & Gemini 3.8 Live AI",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
     "express": "^4.19.2",
-    "qrcode": "^1.5.3"
+    "pino": "^8.19.0",
+    "qrcode": "^1.5.4",
+    "ssh2": "^1.15.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

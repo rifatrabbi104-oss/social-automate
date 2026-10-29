@@ -5,3 +5,7 @@ dist/
 *.log
 local_cache.sqlite
 .env
+wa_auth_info/
+sessions_store.json
+*.zip
+*.tar.gz

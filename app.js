@@ -204,9 +204,9 @@ function initConversationFilters() {
 }
 
 async function syncWithBackend(isSilent = false) {
+  // ১. কনভারসেশন ফেচ (100% Alwaysdata Direct - Zero D1)
   try {
-    // ১. কনভারসেশন ফেচ
-    const convRes = await fetch(`${API_BASE}/conversations`);
+    const convRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations`);
     if (convRes.ok) {
       const convs = await convRes.json();
       if (Array.isArray(convs)) {
@@ -346,15 +346,15 @@ function startZeroWasteLivePolling() {
 
     try {
       const url = lastKnownLatestTime
-        ? `${API_BASE}/conversations-check?since=${encodeURIComponent(lastKnownLatestTime)}`
-        : `${API_BASE}/conversations-check`;
+        ? `https://ranonex.alwaysdata.net/api/conversations-check?since=${encodeURIComponent(lastKnownLatestTime)}`
+        : `https://ranonex.alwaysdata.net/api/conversations-check`;
       const res = await fetch(url);
       if (!res.ok) return;
       const data = await res.json();
 
-      // ২. শুধুমাত্র ডেটাবেসে পরিবর্তন আসলেই সম্পূর্ণ কনভারসেশন রিলোড হবে (০ কুয়েরি ড্রেন)
+      // ২. শুধুমাত্র নতুন মেসেজ আসলেই কনভারসেশন রিলোড হবে (Zero D1)
       if (data && data.changed) {
-        lastKnownLatestTime = data.latest_time || '';
+        lastKnownLatestTime = data.latest_timestamp || data.latest_time || '';
         await window.fetchLatestConversations(false);
       }
     } catch (e) {}
@@ -506,11 +506,11 @@ function renderConversationList() {
     item.addEventListener('click', async () => {
       appState.activeChatId = c.id;
 
-      // রিড স্ট্যাটাস আপডেট
+      // রিড স্ট্যাটাস আপডেট (Alwaysdata Direct)
       if (Number(c.unread_count || 0) > 0) {
         c.unread_count = 0;
         item.classList.remove('unread');
-        fetch(`${API_BASE}/conversations/read`, {
+        fetch(`https://ranonex.alwaysdata.net/api/conversations/read`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ chat_id: c.id })
@@ -751,15 +751,16 @@ window.requestAiReplySuggestion = async function() {
   if (btnText) btnText.textContent = 'Thinking...';
 
   try {
-    const res = await fetch(`${API_BASE}/ai-suggest-reply`, {
+    const res = await fetch(`https://ranonex.alwaysdata.net/api/ai-suggest-reply`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId })
     });
     const data = await res.json();
-    if (res.ok && data.success && data.suggested_reply) {
+    const replySuggestion = data.suggestion || data.suggested_reply;
+    if (res.ok && data.success && replySuggestion) {
       if (inputEl) {
-        inputEl.value = data.suggested_reply;
+        inputEl.value = replySuggestion;
         inputEl.focus();
       }
       showToast('✨ AI সেলস রিপ্লাই সাজেস্ট করেছে! দেখে Send চাপুন।');
@@ -788,7 +789,7 @@ function initHandoverToggle() {
     renderConversationList();
 
     try {
-      await fetch(`${API_BASE}/handover`, {
+      await fetch(`https://ranonex.alwaysdata.net/api/handover`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: conv.id, admin_takeover: conv.admin_takeover })
@@ -1412,6 +1413,119 @@ function initSettingsForm() {
   const waResultBox = document.getElementById('wa-setup-result');
   const waCopyBtn = document.getElementById('btn-copy-wa-webhook');
   const waWebhookInput = document.getElementById('display-wa-webhook-url');
+
+  // 🟢 Alwaysdata Live WhatsApp QR Engine Polling & Controls
+  window.updateDashWhatsAppUI = function(data) {
+    if (!data) return;
+    const status = data.status || 'disconnected';
+    const pill = document.getElementById('dash-wa-status-pill');
+    const dot = document.getElementById('dash-wa-status-dot');
+    const text = document.getElementById('dash-wa-status-text');
+    const qrWrap = document.getElementById('dash-wa-qr-wrapper');
+    const qrImg = document.getElementById('dash-wa-qr-img');
+    const qrPlace = document.getElementById('dash-wa-qr-placeholder');
+    const connInfo = document.getElementById('dash-wa-connected-info');
+    const connPhone = document.getElementById('dash-wa-connected-phone');
+    const badge = document.getElementById('wa-connection-badge');
+
+    if (status === 'connected') {
+      if (pill) {
+        pill.style.background = 'rgba(16, 185, 129, 0.15)';
+        pill.style.color = '#34d399';
+        pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+      }
+      if (dot) dot.style.background = '#34d399';
+      if (text) text.textContent = 'Connected (Personal Chat AI সক্রিয়)';
+      if (qrWrap) qrWrap.style.display = 'none';
+      if (connInfo) connInfo.style.display = 'block';
+      if (connPhone) connPhone.textContent = data.phone ? `নম্বর: +${data.phone} (${data.name || 'WhatsApp'})` : (data.name || 'Connected');
+      if (badge) badge.textContent = data.phone ? `Connected (+${data.phone})` : 'Connected ✅';
+    } else if (status === 'qr_ready' && data.qr_data_url) {
+      if (pill) {
+        pill.style.background = 'rgba(245, 158, 11, 0.15)';
+        pill.style.color = '#fbbf24';
+        pill.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+      }
+      if (dot) dot.style.background = '#fbbf24';
+      if (text) text.textContent = 'আপনার ফোনের WhatsApp থেকে নিচের QR স্ক্যান করুন';
+      if (connInfo) connInfo.style.display = 'none';
+      if (qrWrap) qrWrap.style.display = 'flex';
+      if (qrImg) {
+        qrImg.src = data.qr_data_url;
+        qrImg.style.display = 'block';
+      }
+      if (qrPlace) qrPlace.style.display = 'none';
+      if (badge) badge.textContent = 'Scan QR Code 📱';
+    } else {
+      if (pill) {
+        pill.style.background = 'rgba(59, 130, 246, 0.15)';
+        pill.style.color = '#93c5fd';
+        pill.style.borderColor = 'rgba(59, 130, 246, 0.4)';
+      }
+      if (dot) dot.style.background = '#60a5fa';
+      if (text) text.textContent = status === 'connecting' ? 'QR কোড তৈরি হচ্ছে...' : 'ডিসকানেক্টেড (Generate QR চাপুন)';
+      if (connInfo) connInfo.style.display = 'none';
+      if (qrWrap) qrWrap.style.display = 'flex';
+      if (qrImg) qrImg.style.display = 'none';
+      if (qrPlace) {
+        qrPlace.style.display = 'block';
+        qrPlace.innerHTML = '⏳ WhatsApp সেশন প্রস্তুত হচ্ছে...<br><small>কয়েক সেকেন্ড অপেক্ষা করুন অথবা নিচে Generate QR চাপুন</small>';
+      }
+    }
+  };
+
+  window.pollAlwaysdataWhatsAppStatus = async function() {
+    if (document.hidden) return;
+    try {
+      const res = await fetch('https://ranonex.alwaysdata.net/api/whatsapp/status');
+      if (res.ok) {
+        const data = await res.json();
+        window.updateDashWhatsAppUI(data);
+      }
+    } catch (e) {}
+  };
+
+  window.connectAlwaysdataWhatsApp = async function(force = false) {
+    const btn = document.getElementById('btn-dash-wa-qr');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '⏳ QR তৈরি হচ্ছে...';
+    }
+    try {
+      const res = await fetch('https://ranonex.alwaysdata.net/api/whatsapp/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force })
+      });
+      const data = await res.json();
+      window.updateDashWhatsAppUI(data);
+      showToast('📱 নতুন WhatsApp QR সেশন শুরু হয়েছে!');
+      setTimeout(window.pollAlwaysdataWhatsAppStatus, 1800);
+    } catch (e) {
+      showToast('❌ QR জেনারেট করতে সমস্যা হয়েছে');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '⚡ নতুন QR জেনারেট করুন';
+      }
+    }
+  };
+
+  window.logoutAlwaysdataWhatsApp = async function() {
+    if (!confirm('আপনি কি নিশ্চিতভাবে WhatsApp সেশন ডিসকানেক্ট ও রিসেট করতে চান?')) return;
+    try {
+      const res = await fetch('https://ranonex.alwaysdata.net/api/whatsapp/logout', { method: 'POST' });
+      const data = await res.json();
+      window.updateDashWhatsAppUI(data);
+      showToast('🔌 WhatsApp সেশন ডিসকানেক্ট করা হয়েছে');
+      setTimeout(window.pollAlwaysdataWhatsAppStatus, 2000);
+    } catch (e) {
+      showToast('❌ ডিসকানেক্ট করতে সমস্যা হয়েছে');
+    }
+  };
+
+  window.pollAlwaysdataWhatsAppStatus();
+  setInterval(window.pollAlwaysdataWhatsAppStatus, 5000);
 
   if (waCopyBtn && waWebhookInput) {
     waCopyBtn.addEventListener('click', () => {

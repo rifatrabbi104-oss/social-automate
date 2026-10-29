@@ -57,18 +57,24 @@ conn.on('ready', () => {
 
           const localTester = path.join(__dirname, 'gemini-live-tester.html');
           const remoteTester = `${REMOTE_DIR}/gemini-live-tester.html`;
+          const localDashboard = path.join(__dirname, 'dashboard.html');
+          const remoteDashboard = `${REMOTE_DIR}/dashboard.html`;
 
           sftp.fastPut(localTester, remoteTester, (errT) => {
             if (!errT) console.log('✅ gemini-live-tester.html uploaded successfully!');
 
-            // Restart the Alwaysdata node service by triggering system-restart API
-            console.log('🔄 Restarting Alwaysdata Node.js process...');
-            fetch('https://ranonex.alwaysdata.net/api/system-restart').catch(() => {});
-            setTimeout(() => {
-              console.log('✅ Deployment complete! Server is restarting.');
-              conn.end();
-              process.exit(0);
-            }, 2500);
+            sftp.fastPut(localDashboard, remoteDashboard, (errD) => {
+              if (!errD) console.log('✅ dashboard.html uploaded successfully!');
+
+              // Restart the Alwaysdata node service by triggering system-restart API
+              console.log('🔄 Restarting Alwaysdata Node.js process...');
+              fetch('https://ranonex.alwaysdata.net/api/system-restart').catch(() => {});
+              setTimeout(() => {
+                console.log('✅ Deployment complete! Server is restarting.');
+                conn.end();
+                process.exit(0);
+              }, 2500);
+            });
           });
         });
       });

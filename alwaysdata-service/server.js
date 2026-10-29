@@ -88,8 +88,55 @@ async function syncCredentialsFromWorker() {
 }
 syncCredentialsFromWorker();
 
-// ইন-মেমোরি চ্যাট হিস্ট্রি, অডিও ক্যাশ, প্রোডাক্ট ক্যাশ
+// ইন-মেমোরি চ্যাট হিস্ট্রি (ডিস্ক পারসিস্টেন্স সহ - Zero D1 Architecture), অডিও ক্যাশ, প্রোডাক্ট ক্যাশ
 const memorySessions = new Map();
+const SESSIONS_FILE = path.join(__dirname, 'sessions_store.json');
+let saveSessionsTimer = null;
+
+function loadSessionsFromDisk() {
+  try {
+    if (fs.existsSync(SESSIONS_FILE)) {
+      const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        for (const [k, v] of parsed) {
+          if (k && v && typeof v === 'object') memorySessions.set(k, v);
+        }
+        console.log(`💾 [Alwaysdata Disk Store] Loaded ${memorySessions.size} chat session(s) from sessions_store.json`);
+      }
+    }
+  } catch (e) {
+    console.error("Failed to load sessions_store.json:", e.message);
+  }
+}
+
+function persistSessionsToDisk() {
+  if (saveSessionsTimer) clearTimeout(saveSessionsTimer);
+  saveSessionsTimer = setTimeout(() => {
+    try {
+      const entries = Array.from(memorySessions.entries());
+      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(entries), 'utf8');
+    } catch (e) {
+      console.error("Failed to write sessions_store.json:", e.message);
+    }
+  }, 400);
+}
+
+function saveSession(chatId, session) {
+  if (!chatId || !session) return;
+  session.chat_id = chatId;
+  if (!session.last_message_at) session.last_message_at = new Date().toISOString();
+  if (Array.isArray(session.messages) && session.messages.length > 0) {
+    const lastMsg = session.messages[session.messages.length - 1];
+    if (lastMsg?.message_text) session.last_message = lastMsg.message_text;
+    if (lastMsg?.timestamp) session.last_message_at = lastMsg.timestamp;
+  }
+  memorySessions.set(chatId, session);
+  persistSessionsToDisk();
+}
+
+loadSessionsFromDisk();
+
 const audioCache = new Map(); // audioId -> { buffer: Buffer, createdAt: number }
 let productCatalogCache = { data: null, productsList: [], expiresAt: 0 };
 let totalMessagesHandled = 0;
@@ -253,12 +300,22 @@ function parseOrderDetailsFromText(text) {
   // ১. বাংলাদেশি ফোন নম্বর
   phone = extractBangladeshiPhone(text);
 
-  // ২. সরাসরি লেবেল ভিত্তিক পার্সিং
-  const nameMatch = text.match(/(?:নাম|name)\s*[:ঃ-]?\s*([^\r\n,;]+)/i);
-  if (nameMatch) name = nameMatch[1].trim();
+  // ২. সরাসরি লেবেল ভিত্তিক পার্সিং (বাংলা, ইংরেজি ও বাংলিশ)
+  const nameMatch = text.match(/(?:👤\s*)?(?:নাম|name|nam|নেম)\s*[:ঃ-]?\s*([^\r\n,;]+)/i);
+  if (nameMatch) {
+    const candidateName = nameMatch[1].replace(/\b(?:মোবাইল|ফোন|নাম্বার|নম্বর|number|phone|mobile|num|mob)\s*[:ঃ-]?\s*$/i, '').trim();
+    if (candidateName && candidateName !== "..." && !candidateName.startsWith("<")) {
+      name = candidateName;
+    }
+  }
 
-  const addrMatch = text.match(/(?:ঠিকানা|address|লোকেশন|location)\s*[:ঃ-]?\s*([^\r\n]+)/i);
-  if (addrMatch) address = addrMatch[1].trim();
+  const addrMatch = text.match(/(?:📍\s*)?(?:ঠিকানা|address|addr|thika?na|লোকেশন|location)\s*[:ঃ-]?\s*([^\r\n]+)/i);
+  if (addrMatch) {
+    const candidateAddr = addrMatch[1].trim();
+    if (candidateAddr && candidateAddr !== "..." && !candidateAddr.startsWith("<")) {
+      address = candidateAddr;
+    }
+  }
 
   // ৩. যদি ফোন থাকে কিন্তু নাম বা ঠিকানা না থাকে, ফোন বাউন্ডারি দিয়ে আলাদা করা
   if (phone && (!name || !address)) {
@@ -269,13 +326,20 @@ function parseOrderDetailsFromText(text) {
       const after = text.substring(phoneIdx + 11).trim();
 
       if (!name && before) {
-        const cleanBefore = before.replace(/^(?:নাম|name)\s*[:ঃ-]?\s*/i, '').replace(/[,\r\n;]+$/, '').trim();
+        const cleanBefore = before
+          .replace(/^(?:👤\s*)?(?:নাম|name|nam|নেম)\s*[:ঃ-]?\s*/i, '')
+          .replace(/(?:[\r\n,;]+|\b(?:মোবাইল|ফোন|নাম্বার|নম্বর|number|phone|mobile|num|mob|phn|no)\s*[:ঃ-]?\s*)+$/i, '')
+          .replace(/[,\r\n;]+$/, '')
+          .trim();
         if (cleanBefore.length >= 2 && cleanBefore.length < 40 && !/ঢাকা|চট্টগ্রাম|কুমিল্লা|গ্রাম|রোড/i.test(cleanBefore)) {
           name = cleanBefore;
         }
       }
       if (!address && after) {
-        const cleanAfter = after.replace(/^(?:ঠিকানা|address)\s*[:ঃ-]?\s*/i, '').replace(/^[,\r\n;]+/, '').trim();
+        const cleanAfter = after
+          .replace(/^(?:📍\s*)?(?:ঠিকানা|address|addr|thika?na|লোকেশন|location)\s*[:ঃ-]?\s*/i, '')
+          .replace(/^[,\r\n;]+/, '')
+          .trim();
         if (cleanAfter.length >= 4) {
           address = cleanAfter;
         }
@@ -287,10 +351,12 @@ function parseOrderDetailsFromText(text) {
   if (!address || !name) {
     const lines = text.split(/[\r\n]+/).map(l => l.trim()).filter(Boolean);
     for (const line of lines) {
-      const clean = line.replace(/^(?:নাম|name|ঠিকানা|address|মোবাইল|ফোন|phone)\s*[:ঃ-]?\s*/i, '').trim();
-      if (!address && (/ঢাকা|কুমিল্লা|চট্টগ্রাম|রাজশাহী|সিলেট|খুলনা|বরিশাল|রংপুর|বাসা|রোড|গ্রাম|থানা|জেলা|পোস্ট|উপজেলা|sector|block|house|road|village|post|dhaka|cumilla|chittagong/i.test(line) || clean.length > 15)) {
-        address = clean;
-      } else if (!name && clean.length >= 2 && clean.length < 35 && !/অর্ডার|order|confirm|দাম|টাকা|চাই|নেব|product|01[3-9]/i.test(clean)) {
+      const clean = line.replace(/^(?:নাম|name|nam|নেম|ঠিকানা|address|addr|thika?na|মোবাইল|ফোন|নাম্বার|নম্বর|number|phone|mobile)\s*[:ঃ-]?\s*/i, '').trim();
+      if (!address && (/ঢাকা|কুমিল্লা|চট্টগ্রাম|রাজশাহী|সিলেট|খুলনা|বরিশাল|রংপুর|বাসা|রোড|গ্রাম|থানা|জেলা|পোস্ট|উপজেলা|sector|block|house|road|village|post|dhaka|cumilla|chittagong|moshjid|masjid|villa/i.test(line) || clean.length > 15)) {
+        if (!/প্রোডাক্ট|সর্বমোট|কনফার্ম|অনুগ্রহ|পরবর্তী/i.test(clean)) {
+          address = clean;
+        }
+      } else if (!name && clean.length >= 2 && clean.length < 35 && !/অর্ডার|order|confirm|দাম|টাকা|চাই|নেব|product|01[3-9]|প্রোডাক্ট|সর্বমোট|কনফার্ম/i.test(clean)) {
         name = clean;
       }
     }
@@ -302,7 +368,7 @@ function parseOrderDetailsFromText(text) {
 // ==========================================
 // ⚡ বুলেটপ্রুফ অর্ডার অ্যাকশন ও ফার্স্ট-টার্ন ডিটেক্টর
 // ==========================================
-function extractOrderActions(raw, replyText = "", messages = [], activeProduct = null) {
+function extractOrderActions(raw, replyText = "", messages = [], activeProduct = null, productsList = []) {
   let order_confirmed = false;
   let order_updated = false;
   let order_cancelled = false;
@@ -310,7 +376,7 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
   let order_data = null;
   let note = "";
 
-  // মেসেজ হিস্ট্রি থেকে কাস্টমারের দেওয়া ফোন, নাম ও ঠিকানা বের করা
+  // মেসেজ হিস্ট্রি ও বর্তমান রিপ্লাই থেকে কাস্টমারের দেওয়া ফোন, নাম ও ঠিকানা বের করা
   let foundPhone = "";
   let foundName = "";
   let foundAddress = "";
@@ -327,6 +393,13 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
     if (!foundName && lastMsg?.sender_name && !lastMsg.sender_name.startsWith("Facebook User")) {
       foundName = lastMsg.sender_name;
     }
+  }
+
+  if (replyText) {
+    const parsedFromReply = parseOrderDetailsFromText(replyText);
+    if (!foundPhone && parsedFromReply.phone) foundPhone = parsedFromReply.phone;
+    if (!foundName && parsedFromReply.name) foundName = parsedFromReply.name;
+    if (!foundAddress && parsedFromReply.address) foundAddress = parsedFromReply.address;
   }
 
   // ১. ORDER_JSON মার্কার চেক
@@ -349,14 +422,18 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
     } catch (e) {}
   }
 
-  // ২. প্রথম টার্নেই কনফার্মেশন যাচাই (কখনোই ট্র্যাকিং বা প্রসেস স্টেটাসকে অর্ডার ভাবা যাবে না)
+  // ২. প্রথম টার্নেই কনফার্মেশন যাচাই (হয়েছে এবং হয়েছে উভয় ইউনিকোড সাপোর্ট সহ)
+  const isAlreadyConfirmedReminder = /(?:আগেই|ইতিমধ্যে|ইতিপূর্বে)\s*(?:আপনার\s*)?(?:অর্ডার(?:টি)?\s*)?(?:কনফার্ম|নিশ্চিত)/i.test(replyText);
   const isConfirmSpoken = (orderJsonObj && (orderJsonObj.order_confirmed === true || orderJsonObj.order_confirmed === "true"))
-    || /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হয়েছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed)/i.test(replyText);
+    || (!isAlreadyConfirmedReminder && /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হ(?:য়ে|য়ে)ছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed|📋\s*আপনার\s*অর্ডারের\s*তথ্যসমূহ)/i.test(replyText));
 
   // ৩. কঠোর সত্যতা যাচাই: ফোন নম্বর (১১ ডিজিট), ডেলিভারি ঠিকানা এবং বৈধ প্রোডাক্ট থাকলেই কেবল কনফার্ম হবে
   const hasPhone = foundPhone && foundPhone.length >= 11;
   const hasAddress = foundAddress && foundAddress.length >= 4 && foundAddress !== "ইনবক্সে প্রদত্ত ঠিকানা";
-  const targetProduct = activeProduct || (orderJsonObj?.product_name && orderJsonObj.product_name !== "Ranonex Store Product" ? {
+  const matchedFromReply = (!activeProduct && Array.isArray(productsList) && productsList.length > 0)
+    ? (findMatchingProduct(replyText, productsList) || findMatchingProduct(raw, productsList))
+    : null;
+  const targetProduct = activeProduct || matchedFromReply || (orderJsonObj?.product_name && orderJsonObj.product_name !== "Ranonex Store Product" ? {
     id: orderJsonObj.product_id || "prod_custom",
     name: orderJsonObj.product_name,
     price: orderJsonObj.total_amount || 0,
@@ -832,7 +909,7 @@ ${catalog}`;
         if (!isFinished) {
           isFinished = true;
           const cleanReply = cleanCustomerReply(cached.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি।";
-          const actions = extractOrderActions(cached.accumulatedText, cleanReply, chatHistory, activeProduct);
+          const actions = extractOrderActions(cached.accumulatedText, cleanReply, chatHistory, activeProduct, productsList);
           resolve({
             reply: cleanReply,
             rawReply: cached.accumulatedText,
@@ -871,7 +948,7 @@ ${catalog}`;
           }
 
           const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
-          const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct);
+          const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct, productsList);
 
           resolve({
             reply: cleanReply,
@@ -949,7 +1026,7 @@ ${catalog}`;
       if (!isFinished) {
         isFinished = true;
         const cleanReply = cleanCustomerReply(socketEntry.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।";
-        const actions = extractOrderActions(socketEntry.accumulatedText, cleanReply, chatHistory, activeProduct);
+        const actions = extractOrderActions(socketEntry.accumulatedText, cleanReply, chatHistory, activeProduct, productsList);
         resolve({
           reply: cleanReply,
           rawReply: socketEntry.accumulatedText,
@@ -988,7 +1065,7 @@ ${catalog}`;
         }
 
         const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
-        const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct);
+        const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct, productsList);
 
         resolve({
           reply: cleanReply,
@@ -1545,23 +1622,43 @@ Acknowledge their inquiry about '${prod.name}', address any hesitation or questi
 // 🌐 WEB ROUTES & WEBHOOKS
 // ==========================================
 
-// ১. হেলথ চেক ও স্ট্যাটাস
-app.get(['/', '/status', '/api/status'], (req, res) => {
+// ১. ভিউয়েবল অ্যাডমিন ড্যাশবোর্ড ও হোয়াটসঅ্যাপ QR পোর্টাল (GET / ও /dashboard)
+app.get(['/', '/dashboard', '/whatsapp', '/inbox'], (req, res) => {
+  // যদি কোনো API ক্লায়েন্ট JSON চায় (?format=json)
+  if (req.query.format === 'json') {
+    return res.redirect('/api/status');
+  }
+  const dashPath = path.join(__dirname, 'dashboard.html');
+  if (fs.existsSync(dashPath)) {
+    return res.sendFile(dashPath);
+  }
+  res.send("Ranonex Alwaysdata Live Messaging Hub is Online.");
+});
+
+// ১.০৫ হেলথ চেক ও JSON স্ট্যাটাস (GET /status ও /api/status)
+app.get(['/status', '/api/status'], (req, res) => {
   res.json({
     status: "online",
-    server: "Alwaysdata High-Throughput Node.js Gateway",
+    server: "Alwaysdata High-Throughput Node.js Gateway (Zero-D1 Architecture)",
     uptime_seconds: Math.floor(process.uptime()),
     memory_usage_mb: (process.memoryUsage().rss / (1024 * 1024)).toFixed(1),
     total_messages_handled: totalMessagesHandled,
+    active_sessions_count: memorySessions.size,
     channels: {
       facebook_messenger: Boolean(CONFIG.metaPageAccessToken),
       facebook_page_id: CONFIG.metaPageId,
+      whatsapp_status: typeof waState !== 'undefined' ? waState.status : "initializing",
+      whatsapp_phone: typeof waState !== 'undefined' ? waState.phone : null,
+      whatsapp_personal_only: true,
       gemini_ai: Boolean(CONFIG.geminiApiKey),
       gemini_model: "models/gemini-3.8-live (Multimodal Live WebSocket Engine)",
       telegram_alerts: Boolean(CONFIG.telegramBotToken),
       audio_cache_count: audioCache.size,
       products_count: productCatalogCache.productsList?.length || 0,
       active_features: [
+        "Zero-D1 Alwaysdata Direct Messaging & Disk Persistence",
+        "Real WhatsApp Multi-Device QR Engine (Personal Chats Only)",
+        "Viewable Admin Inbox & Direct Customer Reply Console",
         "In-App WebView Modal (Tall)",
         "Multi-Product Carousel Slider",
         "Contextual Quick Reply Pills",
@@ -1624,10 +1721,21 @@ app.post('/webhook/meta', (req, res) => {
             const chatId = `fb_${senderId}`;
             let session = memorySessions.get(chatId);
             if (!session) {
-              session = { messages: [], sender_id: senderId };
+              session = {
+                chat_id: chatId,
+                messages: [],
+                sender_id: senderId,
+                platform: "facebook",
+                channel_type: "messenger",
+                unread_count: 0,
+                admin_takeover: false
+              };
               memorySessions.set(chatId, session);
             }
+            session.chat_id = chatId;
             session.sender_id = senderId;
+            session.platform = "facebook";
+            session.channel_type = "messenger";
             if (!Array.isArray(session.discussed_products)) {
               session.discussed_products = [];
             }
@@ -1637,7 +1745,8 @@ app.post('/webhook/meta', (req, res) => {
 
             const profile = await getFacebookUserProfile(senderId);
             session.sender_name = profile.name;
-            memorySessions.set(chatId, session);
+            if (profile.avatar) session.sender_avatar = profile.avatar;
+            saveSession(chatId, session);
 
             // ১. ইনকামিং মেসেজ থেকে কোনো প্রোডাক্টের মিল আছে কিনা তা আগেই শনাক্ত ও ট্র্যাকিং করা
             const { productsList } = await getStoreCatalog();
@@ -2029,13 +2138,24 @@ app.post('/webhook/meta', (req, res) => {
             totalMessagesHandled++;
             console.log(`📩 [Messenger from ${senderId}]: ${incomingText || (userSentAudio ? "[Voice Note]" : (userSentVideo ? "[Product Video]" : "[Product Screenshot]"))}`);
 
+            const customerMsgText = incomingText || (userSentAudio ? "[Voice Message]" : (userSentVideo ? "[Product Video]" : "[Product Image / Screenshot]"));
             session.messages.push({
               id: message?.mid || `m_${Date.now()}`,
               sender_type: "customer",
               sender_name: profile.name,
-              message_text: incomingText || (userSentAudio ? "[Voice Message]" : (userSentVideo ? "[Product Video]" : "[Product Image / Screenshot]")),
+              message_text: customerMsgText,
               timestamp: new Date().toISOString()
             });
+            session.last_message = customerMsgText;
+            session.last_message_at = new Date().toISOString();
+            session.unread_count = Number(session.unread_count || 0) + 1;
+            saveSession(chatId, session);
+
+            // 👨‍💻 Admin Takeover চেক: অ্যাডমিন ম্যানুয়াল মোডে থাকলে AI রিপ্লাই দিবে না
+            if (session.admin_takeover) {
+              console.log(`👨‍💻 [Admin Takeover Active for ${chatId}] — Customer message saved to inbox, AI auto-reply paused.`);
+              continue;
+            }
 
             const isVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|শুনতে চাই/i.test(incomingText || "");
 
@@ -2051,6 +2171,9 @@ app.post('/webhook/meta', (req, res) => {
               incomingVideoBuffer,
               videoMimeType
             );
+
+            let isOrderConfirmedReply = false;
+            let orderInfo = null;
 
             if (aiDecision && aiDecision.reply) {
               console.log(`🤖 [AI Reply to ${profile.name}]: ${aiDecision.reply.substring(0, 80)}...`);
@@ -2095,13 +2218,14 @@ app.post('/webhook/meta', (req, res) => {
                 session.discussed_products = [matchedProduct];
               }
 
-              // ২. অর্ডার কনফার্মেশন যাচাই ও ফর্ম স্টাইল রিভিউ মেসেজ তৈরি
-              const isOrderConfirmedReply = aiDecision.order_confirmed 
-                || /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হয়েছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed)/i.test(aiDecision.reply || "");
+              // ২. অর্ডার কনফার্মেশন যাচাই ও ফর্ম স্টাইল রিভিউ মেসেজ তৈরি (হয়েছে এবং হয়েছে উভয় ইউনিকোড সাপোর্ট সহ)
+              const isAlreadyConfirmedReminder = /(?:আগেই|ইতিমধ্যে|ইতিপূর্বে)\s*(?:আপনার\s*)?(?:অর্ডার(?:টি)?\s*)?(?:কনফার্ম|নিশ্চিত)/i.test(aiDecision.reply || "");
+              isOrderConfirmedReply = aiDecision.order_confirmed 
+                || (!isAlreadyConfirmedReminder && /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হ(?:য়ে|য়ে)ছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed|📋\s*আপনার\s*অর্ডারের\s*তথ্যসমূহ)/i.test(aiDecision.reply || ""));
 
-              let orderInfo = null;
               if (isOrderConfirmedReply) {
                 const resolvedProduct = session.selected_order_product 
+                  || matchedProduct
                   || (session.discussed_products && session.discussed_products.length === 1 ? session.discussed_products[0] : null)
                   || session.last_discussed_product;
 
@@ -2111,8 +2235,8 @@ app.post('/webhook/meta', (req, res) => {
                   ? aiDecision.order_data.customer_name
                   : "";
 
-                // 🔍 চ্যাট হিস্ট্রি এবং ইনকামিং মেসেজ থেকে সরাসরি ফোন, নাম ও ঠিকানা উদ্ধার (যদি AI JSON এ কোনো ঘাটতি থাকে)
-                const allTexts = [...(session.messages || []).map(m => m.message_text || ""), incomingText || ""];
+                // 🔍 চ্যাট হিস্ট্রি, ইনকামিং মেসেজ ও AI রিপ্লাই থেকে সরাসরি ফোন, নাম ও ঠিকানা উদ্ধার (যদি AI JSON এ কোনো ঘাটতি থাকে)
+                const allTexts = [...(session.messages || []).map(m => m.message_text || ""), incomingText || "", aiDecision.reply || ""];
                 for (let i = allTexts.length - 1; i >= 0; i--) {
                   const text = allTexts[i];
                   const parsed = parseOrderDetailsFromText(text);
@@ -2131,9 +2255,10 @@ app.post('/webhook/meta', (req, res) => {
                   customerName = profile.name || "Customer";
                 }
 
+                const prodFromReplyLine = (aiDecision.reply || "").match(/📦\s*প্রোডাক্ট\s*[:ঃ-]?\s*([^\r\n]+)/i)?.[1]?.trim() || "";
                 const prodName = (aiDecision.order_data && aiDecision.order_data.product_name && aiDecision.order_data.product_name !== "Ranonex Store Product")
                   ? aiDecision.order_data.product_name
-                  : (resolvedProduct?.name || "Ranonex Store Product");
+                  : (resolvedProduct?.name || prodFromReplyLine || "Ranonex Store Product");
 
                 const basePrice = resolvedProduct ? parseFloat(resolvedProduct.price || 0) : (session.selected_order_product ? parseFloat(session.selected_order_product.price || 0) : 0);
                 const isDhaka = /ঢাকা|dhaka/i.test(deliveryAddress) && !/ঢাকার\s*বাইরে|outside/i.test(deliveryAddress);
@@ -2226,40 +2351,23 @@ app.post('/webhook/meta', (req, res) => {
             // ==========================================
             if (isOrderConfirmedReply && orderInfo) {
               const hasValidPhone = orderInfo.customer_phone && orderInfo.customer_phone.length >= 11;
-              const hasValidProduct = orderInfo.product_name && orderInfo.product_name !== "Ranonex Store Product" && orderInfo.product_name.length > 3;
+              const hasValidProduct = Boolean(orderInfo.product_name && orderInfo.product_name.length > 2);
 
               if (hasValidPhone && hasValidProduct) {
-                // ডুপ্লিকেট রোধ: একই ফোন ও প্রোডাক্টের জন্য বারবার অ্যালার্ট না পাঠানো
+                // ডুপ্লিকেট রোধ: একই ফোন ও প্রোডাক্টের জন্য ৬০ সেকেন্ডের মধ্যে ডুপ্লিকেট অ্যালার্ট না পাঠানো
                 const dedupeKey = `${orderInfo.customer_phone}_${orderInfo.product_name}`;
-                if (session.last_alerted_order_key === dedupeKey) {
+                const isRecentDuplicate = (session.last_alerted_order_key === dedupeKey) && (Date.now() - (session.last_order_time || 0) < 60 * 1000);
+                if (isRecentDuplicate) {
                   console.log(`ℹ️ [Duplicate Order Alert Skipped]: ${dedupeKey}`);
                 } else {
                   session.last_alerted_order_key = dedupeKey;
                   session.last_order_data = orderInfo;
                   session.last_order_time = Date.now();
                   session.last_order_cancelled = false;
-                  memorySessions.set(chatId, session);
+                  saveSession(chatId, session);
 
-                  console.log(`🎉 [ORDER CONFIRMED! Sending Telegram Alert & Saving to D1...]`, JSON.stringify(orderInfo));
+                  console.log(`🎉 [ORDER CONFIRMED! Sending Telegram Alert...]`, JSON.stringify(orderInfo));
                   await sendTelegramAlert(orderInfo, "Facebook Messenger");
-
-                  if (CONFIG.workerUrl) {
-                    fetch(`${CONFIG.workerUrl}/api/orders`, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        chat_id: chatId,
-                        platform: "facebook",
-                        customer_name: orderInfo.customer_name,
-                        customer_phone: orderInfo.customer_phone,
-                        delivery_address: orderInfo.delivery_address,
-                        product_name: orderInfo.product_name,
-                        variant: orderInfo.variant || "Standard",
-                        total_amount: orderInfo.total_amount,
-                        status: "confirmed"
-                      })
-                    }).catch((err) => console.error("Worker order save error:", err.message));
-                  }
                 }
               } else {
                 console.warn(`⚠️ [Order Alert Blocked]: Incomplete order details. Phone: "${orderInfo.customer_phone}", Product: "${orderInfo.product_name}", Address: "${orderInfo.delivery_address}", Total: ৳${orderInfo.total_amount}`);
@@ -2291,25 +2399,7 @@ app.post('/webhook/meta', (req, res) => {
               await sendTelegramOrderNote(aiDecision.note, session.last_order_data || { customer_name: profile.name }, "Facebook Messenger");
             }
 
-            memorySessions.set(chatId, session);
-
-            // ক্লাউডফ্লেয়ার ড্যাশবোর্ডে সিঙ্ক
-            if (CONFIG.workerUrl) {
-              fetch(`${CONFIG.workerUrl}/api/sync-chat`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  chat_id: chatId,
-                  sender_name: profile.name,
-                  sender_avatar: profile.avatar,
-                  platform: "facebook",
-                  channel_type: "messenger",
-                  last_message: incomingText,
-                  messages: session.messages,
-                  unread_count: 1
-                })
-              }).catch(() => {});
-            }
+            saveSession(chatId, session);
           }
         }
 
@@ -2329,9 +2419,43 @@ app.post('/webhook/meta', (req, res) => {
                 totalMessagesHandled++;
                 console.log(`💬 [Comment by ${senderName} on ${commentId}]: ${commentText}`);
 
-                const aiDecision = await callGeminiSalesAI(commentText, []);
+                const commentChatId = `fb_comment_${senderId || commentId}`;
+                let cSession = memorySessions.get(commentChatId);
+                if (!cSession) {
+                  cSession = {
+                    chat_id: commentChatId,
+                    sender_id: senderId || commentId,
+                    sender_name: senderName,
+                    platform: "facebook",
+                    channel_type: "comment",
+                    unread_count: 0,
+                    admin_takeover: false,
+                    messages: []
+                  };
+                }
+                cSession.messages.push({
+                  id: commentId || `c_${Date.now()}`,
+                  sender_type: "customer",
+                  sender_name: senderName,
+                  message_text: commentText,
+                  timestamp: new Date().toISOString()
+                });
+                cSession.unread_count = Number(cSession.unread_count || 0) + 1;
+                saveSession(commentChatId, cSession);
+
+                if (cSession.admin_takeover) continue;
+
+                const aiDecision = await callGeminiSalesAI(commentText, cSession.messages, cSession);
                 if (aiDecision && aiDecision.reply) {
                   await replyToFacebookComment(commentId, aiDecision.reply);
+                  cSession.messages.push({
+                    id: `ai_c_${Date.now()}`,
+                    sender_type: "assistant",
+                    sender_name: "Ranonex AI Assistant",
+                    message_text: aiDecision.reply,
+                    timestamp: new Date().toISOString()
+                  });
+                  saveSession(commentChatId, cSession);
                 }
               }
             }
@@ -2345,37 +2469,748 @@ app.post('/webhook/meta', (req, res) => {
 });
 
 // ==========================================
-// 💬 CLOUDFLARE PAGES ড্যাশবোর্ড ইনবক্স API
+// 📱 REAL WHATSAPP MULTI-DEVICE QR ENGINE (Baileys - Personal Chats ONLY)
 // ==========================================
-app.get(['/api/conversations', '/api/live-conversations'], (req, res) => {
-  const list = Array.from(memorySessions.values()).map(s => ({
-    id: s.chat_id || s.sender_id,
-    sender_id: s.sender_id,
-    name: s.sender_name || `Customer (${s.sender_id})`,
-    sender_avatar: s.sender_avatar || "",
-    platform: "facebook",
-    channel_type: "messenger",
-    last_message: s.last_message || "",
-    last_message_at: s.last_message_at || new Date().toISOString(),
-    unread_count: Number(s.unread_count || 0),
-    messages_count: s.messages ? s.messages.length : 0
-  })).sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
+const qrcode = require('qrcode');
+let pino;
+try {
+  pino = require('pino');
+} catch (e) {
+  const noop = () => {};
+  const fallbackLogger = { level: 'silent', trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop, child: () => fallbackLogger };
+  pino = () => fallbackLogger;
+}
+const WA_AUTH_DIR = path.join(__dirname, 'wa_auth_info');
 
+const waState = {
+  status: 'disconnected', // 'disconnected' | 'connecting' | 'qr_ready' | 'connected'
+  qrRaw: null,
+  qrDataUrl: null,
+  qrUpdatedAt: 0,
+  phone: null,
+  name: null,
+  jid: null,
+  lastError: null
+};
+
+let waSocket = null;
+let waStartingLock = false;
+let waReconnectTimer = null;
+
+/**
+ * 🔒 STRICT PERSONAL-CHAT-ONLY FILTER FOR WHATSAPP
+ * AI শুধুমাত্র Personal 1-on-1 চ্যাটে (@s.whatsapp.net / @lid) কথা বলবে।
+ * Group (@g.us), Channel (@newsletter), বা Status/Broadcast-এ কখনোই কিছু করবে না।
+ */
+function isPersonalWhatsAppJid(jid) {
+  if (!jid || typeof jid !== 'string') return false;
+  const normalized = jid.trim().toLowerCase();
+  if (
+    normalized.endsWith('@g.us') ||
+    normalized.endsWith('@newsletter') ||
+    normalized === 'status@broadcast' ||
+    normalized.endsWith('@broadcast')
+  ) {
+    return false;
+  }
+  return normalized.endsWith('@s.whatsapp.net') || normalized.endsWith('@lid');
+}
+
+async function sendWhatsAppTextMessage(targetJidOrPhone, text) {
+  if (!waSocket || waState.status !== 'connected') {
+    throw new Error("WhatsApp বর্তমানে কানেক্টেড নেই। অনুগ্রহ করে প্রথমে QR স্ক্যান করে WhatsApp কানেক্ট করুন।");
+  }
+  let jid = String(targetJidOrPhone || '').trim();
+  if (jid.startsWith('wa_')) jid = jid.slice(3);
+  if (!jid.includes('@')) {
+    let digits = jid.replace(/\D/g, '');
+    if (digits.length === 11 && digits.startsWith('01')) {
+      digits = '88' + digits;
+    }
+    jid = `${digits}@s.whatsapp.net`;
+  }
+  if (!isPersonalWhatsAppJid(jid)) {
+    throw new Error("নিরাপত্তা নীতি: শুধুমাত্র Personal WhatsApp চ্যাটে মেসেজ পাঠানো অনুমোদিত (Group/Channel ব্লকড)।");
+  }
+  return await waSocket.sendMessage(jid, { text: String(text || '').trim() });
+}
+
+async function startWhatsAppClient(forceReset = false) {
+  if (waStartingLock) return waState;
+  waStartingLock = true;
+
+  try {
+    if (waReconnectTimer) {
+      clearTimeout(waReconnectTimer);
+      waReconnectTimer = null;
+    }
+
+    if (forceReset) {
+      if (waSocket) {
+        try { waSocket.ev.removeAllListeners(); } catch (e) {}
+        try { waSocket.end(undefined); } catch (e) {}
+        waSocket = null;
+      }
+      try {
+        if (fs.existsSync(WA_AUTH_DIR)) {
+          fs.rmSync(WA_AUTH_DIR, { recursive: true, force: true });
+        }
+      } catch (e) {}
+    }
+
+    if (waSocket && waState.status === 'connected' && !forceReset) {
+      waStartingLock = false;
+      return waState;
+    }
+
+    if (waSocket) {
+      try { waSocket.ev.removeAllListeners(); } catch (e) {}
+      try { waSocket.end(undefined); } catch (e) {}
+      waSocket = null;
+    }
+
+    waState.status = 'connecting';
+    waState.lastError = null;
+
+    if (!fs.existsSync(WA_AUTH_DIR)) {
+      fs.mkdirSync(WA_AUTH_DIR, { recursive: true });
+    }
+
+    const baileys = await import('@whiskeysockets/baileys');
+    const makeWASocket = baileys.default?.default || baileys.default || baileys.makeWASocket;
+    const useMultiFileAuthState = baileys.useMultiFileAuthState || baileys.default?.useMultiFileAuthState;
+    const fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion || baileys.default?.fetchLatestBaileysVersion;
+    const DisconnectReason = baileys.DisconnectReason || baileys.default?.DisconnectReason || {};
+    const downloadMediaMessage = baileys.downloadMediaMessage || baileys.default?.downloadMediaMessage;
+
+    const { state, saveCreds } = await useMultiFileAuthState(WA_AUTH_DIR);
+    let version = [2, 3000, 1015901307];
+    try {
+      const latest = await fetchLatestBaileysVersion();
+      if (latest?.version) version = latest.version;
+    } catch (e) {}
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      logger: pino({ level: 'silent' }),
+      browser: ['Ranonex SocialAutomate', 'Chrome', '122.0.0'],
+      syncFullHistory: false,
+      markOnlineOnConnect: false
+    });
+
+    waSocket = sock;
+    sock.ev.on('creds.update', saveCreds);
+
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        try {
+          waState.qrRaw = qr;
+          waState.qrDataUrl = await qrcode.toDataURL(qr, { margin: 1, width: 320 });
+          waState.qrUpdatedAt = Date.now();
+          waState.status = 'qr_ready';
+          console.log('📱 [WhatsApp QR Ready] নতুন QR কোড জেনারেট হয়েছে।');
+        } catch (qrErr) {
+          console.error('QR generation error:', qrErr.message);
+        }
+      }
+
+      if (connection === 'open') {
+        const userJid = sock.user?.id || '';
+        const cleanNumber = userJid.split(':')[0].split('@')[0].replace(/\D/g, '');
+        waState.status = 'connected';
+        waState.qrRaw = null;
+        waState.qrDataUrl = null;
+        waState.jid = userJid;
+        waState.phone = cleanNumber || null;
+        waState.name = sock.user?.name || 'Ranonex WhatsApp';
+        waState.lastError = null;
+        console.log(`✅ [WhatsApp Connected]: +${waState.phone} (${waState.name})`);
+      }
+
+      if (connection === 'close') {
+        const statusCode = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.statusCode;
+        const isLoggedOut = statusCode === (DisconnectReason.loggedOut || 401);
+        console.log(`⚠️ [WhatsApp Connection Closed] code=${statusCode}, isLoggedOut=${isLoggedOut}`);
+
+        waSocket = null;
+        if (isLoggedOut) {
+          waState.status = 'disconnected';
+          waState.qrRaw = null;
+          waState.qrDataUrl = null;
+          waState.phone = null;
+          waState.name = null;
+          waState.jid = null;
+          try {
+            if (fs.existsSync(WA_AUTH_DIR)) {
+              fs.rmSync(WA_AUTH_DIR, { recursive: true, force: true });
+            }
+          } catch (e) {}
+          // স্বয়ংক্রিয়ভাবে নতুন QR প্রস্তুত রাখা
+          waReconnectTimer = setTimeout(() => startWhatsAppClient(false), 2500);
+        } else {
+          waState.status = 'connecting';
+          waReconnectTimer = setTimeout(() => startWhatsAppClient(false), 3500);
+        }
+      }
+    });
+
+    // ==========================================
+    // 📩 WHATSAPP INCOMING MESSAGES (STRICT PERSONAL CHATS ONLY)
+    // ==========================================
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify' || !Array.isArray(messages)) return;
+
+      for (const msg of messages) {
+        try {
+          if (!msg || !msg.message || msg.key?.fromMe) continue;
+
+          const remoteJid = msg.key?.remoteJid || '';
+          // 🔒 STRICT FILTER: শুধুমাত্র Personal 1-on-1 চ্যাট অনুমোদিত। Group (@g.us), Channel (@newsletter), Status ব্লকড!
+          if (!isPersonalWhatsAppJid(remoteJid) || msg.key?.participant) {
+            console.log(`🚫 [WhatsApp Ignored Non-Personal / Group / Channel Message]: ${remoteJid}`);
+            continue;
+          }
+
+          // আনর‍্যাপ মেসেজ অবজেক্ট (ephemeral / viewOnce থাকলে)
+          const innerMsg = msg.message.ephemeralMessage?.message
+            || msg.message.viewOnceMessage?.message
+            || msg.message.viewOnceMessageV2?.message
+            || msg.message;
+
+          const incomingText = (
+            innerMsg.conversation ||
+            innerMsg.extendedTextMessage?.text ||
+            innerMsg.imageMessage?.caption ||
+            innerMsg.videoMessage?.caption ||
+            ""
+          ).trim();
+
+          const userSentAudio = Boolean(innerMsg.audioMessage);
+          const userSentImage = Boolean(innerMsg.imageMessage);
+          const userSentVideo = Boolean(innerMsg.videoMessage);
+
+          if (!incomingText && !userSentAudio && !userSentImage && !userSentVideo) continue;
+
+          const cleanPhone = remoteJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+          const chatId = `wa_${cleanPhone || remoteJid}`;
+          const pushName = msg.pushName || `WhatsApp (${cleanPhone || remoteJid})`;
+
+          let session = memorySessions.get(chatId);
+          if (!session) {
+            session = {
+              chat_id: chatId,
+              sender_id: cleanPhone || remoteJid,
+              wa_jid: remoteJid,
+              sender_name: pushName,
+              platform: "whatsapp",
+              channel_type: "whatsapp",
+              unread_count: 0,
+              admin_takeover: false,
+              messages: [],
+              discussed_products: []
+            };
+          }
+          session.chat_id = chatId;
+          session.sender_id = cleanPhone || remoteJid;
+          session.wa_jid = remoteJid;
+          session.sender_name = pushName;
+          session.platform = "whatsapp";
+          session.channel_type = "whatsapp";
+          if (!Array.isArray(session.discussed_products)) session.discussed_products = [];
+
+          const displayMsgText = incomingText || (userSentAudio ? "[Voice Note]" : (userSentVideo ? "[Product Video]" : "[Product Image]"));
+          session.messages.push({
+            id: msg.key?.id || `wa_${Date.now()}`,
+            sender_type: "customer",
+            sender_name: pushName,
+            message_text: displayMsgText,
+            timestamp: new Date().toISOString()
+          });
+          session.last_message = displayMsgText;
+          session.last_message_at = new Date().toISOString();
+          session.unread_count = Number(session.unread_count || 0) + 1;
+          saveSession(chatId, session);
+
+          totalMessagesHandled++;
+          console.log(`📩 [WhatsApp Personal from ${pushName} (${cleanPhone})]: ${displayMsgText}`);
+
+          // 👨‍💻 যদি Admin Takeover চালু থাকে, তবে AI অটো-রিপ্লাই দিবে না
+          if (session.admin_takeover) {
+            console.log(`👨‍💻 [Admin Takeover Active for ${chatId}] — WhatsApp message saved to inbox, AI auto-reply paused.`);
+            continue;
+          }
+
+          // মাল্টিমোডাল মিডিয়া ডাউনলোড (ভয়েস / ছবি / ভিডিও)
+          let incomingAudioBuffer = null;
+          let audioMimeType = "audio/ogg; codecs=opus";
+          let incomingImageBuffer = null;
+          let imageMimeType = "image/jpeg";
+          let incomingVideoBuffer = null;
+          let videoMimeType = "video/mp4";
+
+          if (downloadMediaMessage && (userSentAudio || userSentImage || userSentVideo)) {
+            try {
+              const mediaBuf = await downloadMediaMessage(
+                msg,
+                'buffer',
+                {},
+                { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage }
+              );
+              if (mediaBuf && mediaBuf.length > 0) {
+                if (userSentAudio) {
+                  incomingAudioBuffer = Buffer.from(mediaBuf);
+                  audioMimeType = (innerMsg.audioMessage?.mimetype || "audio/ogg").split(';')[0].trim();
+                } else if (userSentImage) {
+                  incomingImageBuffer = Buffer.from(mediaBuf);
+                  imageMimeType = (innerMsg.imageMessage?.mimetype || "image/jpeg").split(';')[0].trim();
+                } else if (userSentVideo && mediaBuf.length <= 15 * 1024 * 1024) {
+                  incomingVideoBuffer = Buffer.from(mediaBuf);
+                  videoMimeType = (innerMsg.videoMessage?.mimetype || "video/mp4").split(';')[0].trim();
+                }
+              }
+            } catch (mErr) {
+              console.error("WhatsApp media download error:", mErr.message);
+            }
+          }
+
+          // প্রোডাক্ট ক্যাটালগ ম্যাচিং
+          const { productsList } = await getStoreCatalog();
+          const earlyMatchedProduct = findMatchingProduct(incomingText, productsList);
+          if (earlyMatchedProduct) {
+            if (!session.discussed_products.some(p => p.id === earlyMatchedProduct.id)) {
+              session.discussed_products.push(earlyMatchedProduct);
+            }
+            session.last_discussed_product = earlyMatchedProduct;
+            session.last_inquiry_time = Date.now();
+            session.abandoned_reminder_sent = false;
+            saveSession(chatId, session);
+          }
+
+          let userPromptText = incomingText;
+          if (userSentAudio) {
+            userPromptText = userPromptText
+              ? `The customer sent a WhatsApp voice note with text: "${userPromptText}". LISTEN CAREFULLY to their voice audio and reply in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog.`
+              : "The customer sent a WhatsApp voice note. LISTEN CAREFULLY to their voice audio and answer their question in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog.";
+          } else if (userSentImage) {
+            userPromptText = userPromptText
+              ? `The customer sent a product photo on WhatsApp with caption: "${userPromptText}". Match it with our Ranonex store catalog, state its exact name and price in pure Bengali script (বাংলা লিপি), and ask if they want to order.`
+              : "The customer sent a product photo on WhatsApp. Match it with our Ranonex store catalog, state its exact name, price, and link in pure Bengali script (বাংলা লিপি), and ask if they want to order.";
+          } else if (userSentVideo) {
+            userPromptText = "The customer sent a product video on WhatsApp. Match it with our Ranonex store catalog and reply in pure Bengali script (বাংলা লিপি) with exact name, price, and order instructions.";
+          }
+
+          const aiDecision = await callGeminiSalesAI(
+            userPromptText,
+            session.messages,
+            session,
+            incomingAudioBuffer,
+            audioMimeType,
+            incomingImageBuffer,
+            imageMimeType,
+            incomingVideoBuffer,
+            videoMimeType
+          );
+
+          if (aiDecision && aiDecision.reply) {
+            const aiSelectedProducts = extractAIProducts(aiDecision.rawReply || aiDecision.reply, productsList);
+            let matchedProduct = (aiSelectedProducts.length > 0 ? aiSelectedProducts[0] : null)
+              || earlyMatchedProduct
+              || findMatchingProduct(aiDecision.reply, productsList)
+              || session.selected_order_product
+              || session.last_discussed_product
+              || null;
+
+            if (matchedProduct) {
+              session.last_discussed_product = matchedProduct;
+              if (!session.discussed_products.some(dp => dp.id === matchedProduct.id)) {
+                session.discussed_products.push(matchedProduct);
+              }
+            }
+
+            const isAlreadyConfirmedReminder = /(?:আগেই|ইতিমধ্যে|ইতিপূর্বে)\s*(?:আপনার\s*)?(?:অর্ডার(?:টি)?\s*)?(?:কনফার্ম|নিশ্চিত)/i.test(aiDecision.reply || "");
+            const isOrderConfirmedReply = aiDecision.order_confirmed
+              || (!isAlreadyConfirmedReminder && /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হ(?:য়ে|য়ে)ছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed|📋\s*আপনার\s*অর্ডারের\s*তথ্যসমূহ)/i.test(aiDecision.reply || ""));
+
+            let orderInfo = null;
+            if (isOrderConfirmedReply) {
+              const resolvedProduct = session.selected_order_product || matchedProduct || session.last_discussed_product;
+              let customerPhone = (aiDecision.order_data?.customer_phone || "").replace(/\D/g, '');
+              let deliveryAddress = (aiDecision.order_data?.delivery_address || "").trim();
+              let customerName = aiDecision.order_data?.customer_name || "";
+
+              const allTexts = [...(session.messages || []).map(m => m.message_text || ""), incomingText || "", aiDecision.reply || ""];
+              for (let i = allTexts.length - 1; i >= 0; i--) {
+                const parsed = parseOrderDetailsFromText(allTexts[i]);
+                if ((!customerPhone || customerPhone.length < 11) && parsed.phone) customerPhone = parsed.phone.replace(/\D/g, '');
+                if ((!deliveryAddress || deliveryAddress.length < 4 || deliveryAddress === "ইনবক্সে প্রদত্ত ঠিকানা") && parsed.address) deliveryAddress = parsed.address;
+                if ((!customerName || customerName === "Customer") && parsed.name) customerName = parsed.name;
+              }
+              // যদি কাস্টমারের হোয়াটসঅ্যাপ নম্বর ১১-১৩ ডিজিটের বাংলাদেশি নম্বর হয়, সেটি ফলব্যাক হিসেবে ব্যবহার করা
+              if ((!customerPhone || customerPhone.length < 11) && cleanPhone.length >= 11) {
+                customerPhone = cleanPhone.startsWith('8801') ? cleanPhone.slice(2) : cleanPhone;
+              }
+              if (!customerName || customerName === "Customer") customerName = pushName;
+
+              const prodFromReplyLine = (aiDecision.reply || "").match(/📦\s*প্রোডাক্ট\s*[:ঃ-]?\s*([^\r\n]+)/i)?.[1]?.trim() || "";
+              const prodName = (aiDecision.order_data?.product_name && aiDecision.order_data.product_name !== "Ranonex Store Product")
+                ? aiDecision.order_data.product_name
+                : (resolvedProduct?.name || prodFromReplyLine || "Ranonex Store Product");
+
+              const basePrice = resolvedProduct ? parseFloat(resolvedProduct.price || 0) : 0;
+              const isDhaka = /ঢাকা|dhaka/i.test(deliveryAddress) && !/ঢাকার\s*বাইরে|outside/i.test(deliveryAddress);
+              const deliveryCharge = isDhaka ? 70 : 130;
+              const totalAmount = basePrice > 0 ? (basePrice + deliveryCharge) : (aiDecision.order_data?.total_amount || 0);
+
+              orderInfo = {
+                customer_name: customerName,
+                customer_phone: customerPhone,
+                delivery_address: deliveryAddress || "হোয়াটসঅ্যাপে প্রদত্ত ঠিকানা",
+                product_name: prodName,
+                variant: aiDecision.order_data?.variant || "Standard",
+                total_amount: totalAmount,
+                product_id: resolvedProduct?.id || null,
+                product_url: resolvedProduct?.url || null,
+                order_summary: `কাস্টমার WhatsApp পার্সোনাল চ্যাটে সরাসরি ${prodName} ক্যাশ অন ডেলিভারিতে অর্ডার নিশ্চিত করেছেন।`
+              };
+
+              const formReview = `📋 আপনার অর্ডারের তথ্যসমূহ (রিভিউ):
+━━━━━━━━━━━━━━━━━━━
+📦 প্রোডাক্ট: ${orderInfo.product_name}
+👤 নাম: ${orderInfo.customer_name}
+📞 মোবাইল: ${orderInfo.customer_phone}
+📍 ঠিকানা: ${orderInfo.delivery_address}
+💰 সর্বমোট প্রদেয় মূল্য: ৳${orderInfo.total_amount}/- (ক্যাশ অন ডেলিভারি)
+━━━━━━━━━━━━━━━━━━━
+অনুগ্রহ করে উপরের তথ্যগুলো একবার মিলিয়ে দেখে নিন। পরবর্তী ১৫ মিনিটের মধ্যে কোনো পরিবর্তন প্রয়োজন হলে এখানে লিখে জানাতে পারেন।`;
+
+              if (!aiDecision.reply.includes("📦 প্রোডাক্ট:") && !aiDecision.reply.includes("সর্বমোট প্রদেয় মূল্য")) {
+                aiDecision.reply = `ধন্যবাদ ${orderInfo.customer_name}! আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে।\n\n${formReview}`;
+              }
+            }
+
+            if (!isOrderConfirmedReply && matchedProduct && !aiDecision.reply.includes("ranonex.shop")) {
+              const orderUrl = matchedProduct.url || `https://ranonex.shop/product.html?id=${encodeURIComponent(matchedProduct.id)}`;
+              aiDecision.reply = aiDecision.reply.trim() + `\n\n🔗 ${orderUrl}`;
+            }
+
+            await sock.sendMessage(remoteJid, { text: aiDecision.reply });
+
+            session.messages.push({
+              id: `ai_wa_${Date.now()}`,
+              sender_type: "assistant",
+              sender_name: "Ranonex AI Assistant",
+              message_text: aiDecision.reply,
+              timestamp: new Date().toISOString()
+            });
+            saveSession(chatId, session);
+
+            if (isOrderConfirmedReply && orderInfo && orderInfo.customer_phone && orderInfo.customer_phone.length >= 11) {
+              const dedupeKey = `${orderInfo.customer_phone}_${orderInfo.product_name}`;
+              const isRecentDuplicate = (session.last_alerted_order_key === dedupeKey) && (Date.now() - (session.last_order_time || 0) < 60 * 1000);
+              if (!isRecentDuplicate) {
+                session.last_alerted_order_key = dedupeKey;
+                session.last_order_data = orderInfo;
+                session.last_order_time = Date.now();
+                saveSession(chatId, session);
+                console.log(`🎉 [WhatsApp ORDER CONFIRMED! Sending Telegram Alert...]`, JSON.stringify(orderInfo));
+                await sendTelegramAlert(orderInfo, "WhatsApp Personal");
+              }
+            }
+
+            if (aiDecision.order_updated && aiDecision.order_data) {
+              session.last_order_data = { ...(session.last_order_data || {}), ...aiDecision.order_data };
+              saveSession(chatId, session);
+              await sendTelegramOrderUpdate(session.last_order_data, "WhatsApp Personal");
+            }
+
+            if (aiDecision.order_cancelled) {
+              await sendTelegramOrderCancel(session.last_order_data || { customer_name: pushName }, aiDecision.note, "WhatsApp Personal");
+            }
+          }
+        } catch (waMsgErr) {
+          console.error("WhatsApp message handler error:", waMsgErr.message);
+        }
+      }
+    });
+  } catch (err) {
+    waState.status = 'disconnected';
+    waState.lastError = err.message;
+    console.error("Failed to initialize WhatsApp Baileys client:", err.message);
+  } finally {
+    waStartingLock = false;
+  }
+  return waState;
+}
+
+// সার্ভার চালুর সাথে সাথে WhatsApp সেশন ইনিশিয়ালাইজ করা
+setTimeout(() => {
+  startWhatsAppClient(false).catch(err => console.error("Initial WhatsApp boot error:", err.message));
+}, 1000);
+
+// ==========================================
+// 📱 WHATSAPP QR & CONNECTION API ENDPOINTS
+// ==========================================
+app.get(['/api/whatsapp/status', '/api/whatsapp/qr'], async (req, res) => {
+  if (waState.status === 'disconnected' && !waStartingLock && req.query.auto !== 'false') {
+    startWhatsAppClient(false).catch(() => {});
+  }
+  res.json({
+    success: true,
+    status: waState.status,
+    qr_data_url: waState.qrDataUrl,
+    phone: waState.phone,
+    name: waState.name,
+    jid: waState.jid,
+    updated_at: waState.qrUpdatedAt,
+    personal_only_mode: true,
+    last_error: waState.lastError
+  });
+});
+
+app.post('/api/whatsapp/connect', async (req, res) => {
+  const force = Boolean(req.body?.force);
+  await startWhatsAppClient(force);
+  res.json({
+    success: true,
+    status: waState.status,
+    qr_data_url: waState.qrDataUrl,
+    phone: waState.phone,
+    name: waState.name,
+    jid: waState.jid,
+    personal_only_mode: true
+  });
+});
+
+app.post('/api/whatsapp/logout', async (req, res) => {
+  try {
+    if (waSocket) {
+      try { await waSocket.logout(); } catch (e) {}
+      try { waSocket.ev.removeAllListeners(); } catch (e) {}
+      try { waSocket.end(undefined); } catch (e) {}
+      waSocket = null;
+    }
+    if (fs.existsSync(WA_AUTH_DIR)) {
+      fs.rmSync(WA_AUTH_DIR, { recursive: true, force: true });
+    }
+    waState.status = 'disconnected';
+    waState.qrRaw = null;
+    waState.qrDataUrl = null;
+    waState.phone = null;
+    waState.name = null;
+    waState.jid = null;
+    // নতুন QR সেশন শুরু করা যাতে অ্যাডমিন সাথে সাথে আবার স্ক্যান করতে পারে
+    startWhatsAppClient(false).catch(() => {});
+    res.json({ success: true, status: waState.status, message: "WhatsApp logged out and reset." });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ==========================================
+// 💬 ZERO-D1 ALWAYSDATA LIVE INBOX & MESSAGING API
+// ==========================================
+function buildConversationsList(platformFilter) {
+  return Array.from(memorySessions.values())
+    .map(s => {
+      const id = s.chat_id || s.sender_id;
+      const platform = s.platform || (String(id).startsWith('wa_') ? 'whatsapp' : 'facebook');
+      const channelType = s.channel_type || (platform === 'whatsapp' ? 'whatsapp' : 'messenger');
+      const lastMsgObj = Array.isArray(s.messages) && s.messages.length > 0 ? s.messages[s.messages.length - 1] : null;
+      return {
+        id,
+        chat_id: id,
+        sender_id: s.sender_id || id,
+        name: s.sender_name || s.name || `Customer (${s.sender_id || id})`,
+        sender_name: s.sender_name || s.name || `Customer (${s.sender_id || id})`,
+        sender_avatar: s.sender_avatar || "",
+        platform,
+        channel_type: channelType,
+        last_message: s.last_message || lastMsgObj?.message_text || "",
+        last_message_at: s.last_message_at || lastMsgObj?.timestamp || new Date().toISOString(),
+        unread_count: Number(s.unread_count || 0),
+        admin_takeover: Boolean(s.admin_takeover),
+        messages_count: Array.isArray(s.messages) ? s.messages.length : 0
+      };
+    })
+    .filter(item => {
+      if (!platformFilter || platformFilter === 'all') return true;
+      return item.platform === platformFilter || item.channel_type === platformFilter;
+    })
+    .sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
+}
+
+app.get(['/api/conversations', '/api/live-conversations'], (req, res) => {
+  const list = buildConversationsList(req.query.platform);
   res.json(list);
 });
 
+app.get('/api/conversations-check', (req, res) => {
+  const since = req.query.since || '';
+  const list = buildConversationsList(req.query.platform);
+  const latestTimestamp = list.length > 0 ? list[0].last_message_at : null;
+  const changed = !since || !latestTimestamp || new Date(latestTimestamp) > new Date(since);
+  res.json({
+    changed,
+    latest_timestamp: latestTimestamp,
+    conversations: changed ? list : undefined
+  });
+});
+
 app.get('/api/conversations/:id', (req, res) => {
-  const session = memorySessions.get(req.params.id);
+  const id = req.params.id;
+  const session = memorySessions.get(id) || memorySessions.get(`fb_${id}`) || memorySessions.get(`wa_${id}`);
   if (!session) return res.status(404).json({ error: "Session not found" });
   res.json(session);
 });
 
-app.post(['/api/send-reply', '/api/messages/send'], async (req, res) => {
-  const { chat_id, message_text } = req.body || {};
-  if (!chat_id || !message_text) return res.status(400).json({ error: "Missing chat_id or message_text" });
+app.get('/api/messages', (req, res) => {
+  const chatId = req.query.chat_id || req.query.id || '';
+  const session = memorySessions.get(chatId) || memorySessions.get(`fb_${chatId}`) || memorySessions.get(`wa_${chatId}`);
+  if (!session) {
+    return res.json({ messages: [], admin_takeover: false });
+  }
+  res.json({
+    chat_id: session.chat_id || chatId,
+    sender_name: session.sender_name,
+    platform: session.platform || 'facebook',
+    admin_takeover: Boolean(session.admin_takeover),
+    messages: session.messages || []
+  });
+});
 
-  const fbResult = await sendFacebookMessage(chat_id, message_text);
-  res.json({ success: true, result: fbResult });
+app.post('/api/conversations/read', (req, res) => {
+  const chatId = req.body?.chat_id || req.body?.id;
+  const session = memorySessions.get(chatId);
+  if (session) {
+    session.unread_count = 0;
+    saveSession(chatId, session);
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/handover', (req, res) => {
+  const chatId = req.body?.chat_id || req.body?.id;
+  if (!chatId) return res.status(400).json({ error: "Missing chat_id" });
+  let session = memorySessions.get(chatId);
+  if (!session) {
+    session = {
+      chat_id: chatId,
+      sender_id: chatId.replace(/^(fb_|wa_)/, ''),
+      platform: chatId.startsWith('wa_') ? 'whatsapp' : 'facebook',
+      channel_type: chatId.startsWith('wa_') ? 'whatsapp' : 'messenger',
+      messages: [],
+      unread_count: 0,
+      admin_takeover: false
+    };
+  }
+  if (typeof req.body.admin_takeover === 'boolean') {
+    session.admin_takeover = req.body.admin_takeover;
+  } else if (req.body.mode) {
+    session.admin_takeover = (req.body.mode === 'human' || req.body.mode === 'admin');
+  } else {
+    session.admin_takeover = !Boolean(session.admin_takeover);
+  }
+  saveSession(chatId, session);
+  res.json({
+    success: true,
+    chat_id: chatId,
+    admin_takeover: session.admin_takeover
+  });
+});
+
+app.post(['/api/send-reply', '/api/messages/send', '/api/admin-reply'], async (req, res) => {
+  try {
+    const rawChatId = req.body?.chat_id || req.body?.recipient_id || req.body?.sender_id || '';
+    const text = (req.body?.message_text || req.body?.text || '').trim();
+    if (!rawChatId || !text) {
+      return res.status(400).json({ error: "Missing chat_id or message_text" });
+    }
+
+    let session = memorySessions.get(rawChatId)
+      || memorySessions.get(`fb_${rawChatId}`)
+      || memorySessions.get(`wa_${rawChatId}`);
+
+    const isWhatsApp = (req.body?.platform === 'whatsapp')
+      || String(rawChatId).startsWith('wa_')
+      || String(rawChatId).endsWith('@s.whatsapp.net')
+      || (session && session.platform === 'whatsapp');
+
+    const chatId = session?.chat_id || (isWhatsApp
+      ? (String(rawChatId).startsWith('wa_') ? rawChatId : `wa_${String(rawChatId).replace(/@.*$/, '')}`)
+      : (String(rawChatId).startsWith('fb_') ? rawChatId : `fb_${rawChatId}`));
+
+    if (!session) {
+      session = {
+        chat_id: chatId,
+        sender_id: String(rawChatId).replace(/^(fb_|wa_)/, ''),
+        sender_name: req.body?.sender_name || `Customer (${rawChatId})`,
+        platform: isWhatsApp ? 'whatsapp' : 'facebook',
+        channel_type: isWhatsApp ? 'whatsapp' : 'messenger',
+        messages: [],
+        unread_count: 0,
+        admin_takeover: true
+      };
+    }
+
+    let sendResult = null;
+    if (isWhatsApp) {
+      const targetJid = session.wa_jid || session.sender_id || rawChatId;
+      sendResult = await sendWhatsAppTextMessage(targetJid, text);
+    } else {
+      const targetFbId = String(session.sender_id || rawChatId).replace(/^fb_/, '');
+      sendResult = await sendFacebookMessage(targetFbId, text);
+    }
+
+    if (!Array.isArray(session.messages)) session.messages = [];
+    session.messages.push({
+      id: `admin_${Date.now()}`,
+      sender_type: "admin",
+      sender_name: "Admin",
+      message_text: text,
+      timestamp: new Date().toISOString()
+    });
+    session.last_message = text;
+    session.last_message_at = new Date().toISOString();
+    session.unread_count = 0;
+    // অ্যাডমিন নিজে মেসেজ পাঠালে সেশনটি অটোমেটিক Admin Takeover মোডে যাবে (যদি আলাদা করে false না পাঠানো হয়)
+    if (req.body?.keep_ai_active !== true) {
+      session.admin_takeover = true;
+    }
+    saveSession(chatId, session);
+
+    res.json({
+      success: true,
+      chat_id: chatId,
+      platform: isWhatsApp ? 'whatsapp' : 'facebook',
+      admin_takeover: session.admin_takeover,
+      result: sendResult
+    });
+  } catch (err) {
+    console.error("Admin send-reply error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/ai-suggest-reply', async (req, res) => {
+  try {
+    const chatId = req.body?.chat_id || '';
+    const session = memorySessions.get(chatId) || { messages: req.body?.history || [] };
+    const lastCustomerMsg = req.body?.customer_message
+      || [...(session.messages || [])].reverse().find(m => m.sender_type === 'customer')?.message_text
+      || "প্রোডাক্ট সম্পর্কে জানতে চাই";
+
+    const aiDecision = await callGeminiSalesAI(lastCustomerMsg, session.messages || [], session);
+    res.json({
+      success: true,
+      suggestion: aiDecision?.reply || "ধন্যবাদ আমাদের মেসেজ করার জন্য! কীভাবে আপনাকে সাহায্য করতে পারি?"
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ==========================================

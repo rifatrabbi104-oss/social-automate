@@ -251,84 +251,42 @@ export default {
       }
 
       // ==========================================
-      // ৭. ড্যাশবোর্ড থেকে আউটবাউন্ড অ্যাডমিন রিপ্লাই
+      // 💬 ZERO-D1 MESSAGING & WHATSAPP PROXY TO ALWAYSDATA
+      // (D1 এ মেসেজিংয়ের কোনো কাজ নেই - সব মেসেজ ও হোয়াটসঅ্যাপ Alwaysdata হ্যান্ডেল করে)
       // ==========================================
-      if (request.method === "POST" && (path === "/api/admin-reply" || path === "/api/admin/reply")) {
-        const body = await request.json();
-        return await handleAdminReply(body, env);
-      }
-
-      // ==========================================
-      // ৭.১ চ্যাট হ্যান্ডওভার টগল (AI vs Admin Takeover)
-      // ==========================================
-      if (request.method === "POST" && path === "/api/handover") {
-        const body = await request.json().catch(() => ({}));
-        const { chat_id, admin_takeover } = body;
-        if (!chat_id) return jsonResponse({ error: "Missing chat_id" }, 400);
-        const cleanId = String(chat_id).replace(/^(tg_|fb_|wa_)/, '');
-        if (env.DB) {
-          await ensureTables(env.DB);
-          await env.DB.prepare("UPDATE live_conversations SET admin_takeover = ? WHERE chat_id = ?").bind(admin_takeover ? 1 : 0, cleanId).run();
+      if (
+        path === "/api/conversations" ||
+        path === "/api/live-conversations" ||
+        path === "/api/conversations-check" ||
+        path === "/api/conversations/read" ||
+        path.startsWith("/api/conversations/") ||
+        path === "/api/messages" ||
+        path === "/api/messages/send" ||
+        path === "/api/send-reply" ||
+        path === "/api/admin-reply" ||
+        path === "/api/admin/reply" ||
+        path === "/api/handover" ||
+        path === "/api/ai-suggest-reply" ||
+        path.startsWith("/api/whatsapp/")
+      ) {
+        const alwaysdataUrl = `https://ranonex.alwaysdata.net${path}${url.search}`;
+        const proxyInit = {
+          method: request.method,
+          headers: { "Content-Type": "application/json" }
+        };
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          proxyInit.body = await request.text();
         }
-        const session = memorySessions.get(cleanId);
-        if (session) session.admin_takeover = Boolean(admin_takeover);
-        return jsonResponse({ success: true, chat_id: cleanId, admin_takeover: Boolean(admin_takeover) });
-      }
-
-      // ==========================================
-      // ৬. লাইভ সেশন ফেচ (শুধুমাত্র অ্যাডমিন রিফ্রেশ বাটনে চাপলে কল হবে)
-      // ==========================================
-      if (request.method === "GET" && path === "/api/conversations") {
-        let list = [];
-        if (env.DB) {
-          try {
-            await ensureTables(env.DB);
-            const { results } = await env.DB.prepare(
-              "SELECT chat_id as id, chat_id as sender_id, sender_name as name, sender_avatar, platform, channel_type, last_message, last_message_at, unread_count, admin_takeover, needs_attention, messages_json FROM live_conversations ORDER BY last_message_at DESC LIMIT 50"
-            ).all();
-            if (results && results.length > 0) {
-              list = results.map(r => {
-                let count = 0;
-                try { count = JSON.parse(r.messages_json || "[]").length; } catch (e) {}
-                return {
-                  id: r.id,
-                  sender_id: r.sender_id,
-                  name: r.name,
-                  sender_avatar: r.sender_avatar || "",
-                  platform: r.platform || "facebook",
-                  channel_type: r.channel_type || (r.platform === "whatsapp" ? "whatsapp" : "messenger"),
-                  last_message: r.last_message,
-                  last_message_at: r.last_message_at,
-                  unread_count: Number(r.unread_count || 0),
-                  admin_takeover: r.admin_takeover,
-                  needs_attention: r.needs_attention,
-                  messages_count: count
-                };
-              });
-            }
-          } catch (e) {
-            console.warn("Could not read D1 live_conversations:", e);
-          }
+        try {
+          const adRes = await fetch(alwaysdataUrl, proxyInit);
+          const adText = await adRes.text();
+          return new Response(adText, {
+            status: adRes.status,
+            headers: { "Content-Type": "application/json", ...CORS_HEADERS }
+          });
+        } catch (proxyErr) {
+          return jsonResponse({ error: "Alwaysdata Messaging Gateway unreachable: " + proxyErr.message }, 502);
         }
-
-        if (list.length === 0) {
-          list = Array.from(memorySessions.values()).map(s => ({
-            id: s.chat_id,
-            sender_id: s.chat_id,
-            name: s.sender_name,
-            sender_avatar: s.sender_avatar || "",
-            platform: s.platform || "facebook",
-            channel_type: s.channel_type || (s.platform === "whatsapp" ? "whatsapp" : "messenger"),
-            last_message: s.last_message,
-            last_message_at: s.last_message_at,
-            unread_count: Number(s.unread_count || 0),
-            admin_takeover: s.admin_takeover ? 1 : 0,
-            needs_attention: s.needs_attention ? 1 : 0,
-            messages_count: s.messages ? s.messages.length : 0
-          })).sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
-        }
-
-        return jsonResponse(list);
       }
 
       // ৬.১ ফেসবুক পেজের রিয়েল ইনবক্স ও কনভারসেশন ফেচ / সিঙ্ক API
@@ -336,77 +294,10 @@ export default {
         return await handleSyncFacebookConversations(env);
       }
 
-      // ৬.২ জিরো-কোটা লাইভ চেক API (প্রতি ৫-৮ সেকেন্ডে হালকা টাইমস্ট্যাম্প চেক)
-      if (request.method === "GET" && path === "/api/conversations-check") {
-        if (!env.DB) return jsonResponse({ changed: false, latest_time: "", total_count: 0 });
-        try {
-          const since = url.searchParams.get("since") || "";
-          const row = await env.DB.prepare(
-            "SELECT MAX(last_message_at) as latest_time, COUNT(*) as total_count FROM live_conversations"
-          ).first();
-          const latestTime = row?.latest_time || "";
-          const totalCount = Number(row?.total_count || 0);
-          const hasChanged = !since || (latestTime && latestTime > since);
-          return jsonResponse({
-            changed: Boolean(hasChanged),
-            latest_time: latestTime,
-            total_count: totalCount
-          });
-        } catch (e) {
-          return jsonResponse({ changed: false, error: e.message });
-        }
-      }
-
-      // ৬.৩ কনভারসেশন পঠিত (Mark as Read) করার API
-      if (request.method === "POST" && path === "/api/conversations/read") {
-        const body = await request.json().catch(() => ({}));
-        const { chat_id } = body;
-        if (!chat_id) return jsonResponse({ error: "Missing chat_id" }, 400);
-        const cleanId = String(chat_id).replace(/^(tg_|fb_|wa_)/, '');
-        if (env.DB) {
-          await ensureTables(env.DB);
-          await env.DB.prepare("UPDATE live_conversations SET unread_count = 0 WHERE chat_id = ?").bind(cleanId).run().catch(() => {});
-        }
-        const session = memorySessions.get(cleanId);
-        if (session) session.unread_count = 0;
-        return jsonResponse({ success: true, chat_id: cleanId, unread_count: 0 });
-      }
-
       // ৬.৪ Gemini AI ইঞ্জিন কনফিগার ও টেস্ট API
       if (request.method === "POST" && path === "/api/setup-ai") {
         const body = await request.json().catch(() => ({}));
         return await handleSetupAI(body, env);
-      }
-
-      // ৬.৫ AI স্মার্ট রিপ্লাই সাজেশন API (ড্যাশবোর্ড অ্যাডমিন বা অটো-অ্যাসিস্ট্যান্টের জন্য)
-      if (request.method === "POST" && path === "/api/ai-suggest-reply") {
-        const body = await request.json().catch(() => ({}));
-        const { chat_id } = body;
-        if (!chat_id) return jsonResponse({ error: "Missing chat_id" }, 400);
-        const cleanId = String(chat_id).replace(/^(tg_|fb_|wa_)/, '');
-        const session = await getSession(cleanId, env);
-        if (!session || !session.messages || session.messages.length === 0) {
-          return jsonResponse({ error: "No messages found in this chat session" }, 404);
-        }
-        const lastCustomerMsg = [...session.messages].reverse().find(m => m.sender_type === "customer" || m.sender_type === "user");
-        const incomingText = lastCustomerMsg ? lastCustomerMsg.message_text : "হ্যালো, আপনাদের প্রোডাক্ট সম্পর্কে জানতে চাই";
-        const businessContext = await getCachedBusinessContext(env.DB);
-        const aiDecision = await callGeminiStructured(incomingText, session.messages.slice(-8), businessContext, env);
-        return jsonResponse({
-          success: true,
-          suggested_reply: aiDecision.reply,
-          order_confirmed: aiDecision.order_confirmed,
-          order_data: aiDecision.order_data
-        });
-      }
-
-      if (request.method === "GET" && path === "/api/messages") {
-        const chatId = url.searchParams.get("chat_id") || url.searchParams.get("conversation_id");
-        if (!chatId) return jsonResponse({ error: "Missing chat_id parameter" }, 400);
-
-        const cleanId = String(chatId).replace(/^(tg_|fb_|wa_)/, '');
-        const session = await getSession(cleanId, env);
-        return jsonResponse(session ? session.messages : []);
       }
 
       // টেস্ট ইনকামিং মেসেজ (ডামি ইউজার ইনজেকশন বন্ধ - নিরাপদ হেলথ চেক)
@@ -678,58 +569,23 @@ export default {
       }
 
       // ==========================================
-      // ৭.১.৩ অলওয়েজডাটা থেকে চ্যাট হিস্ট্রি D1-এ সিঙ্ক API
+      // ৭.১.৩ চ্যাট সিঙ্ক API (Zero-D1: শুধুমাত্র মেমোরি ক্যাশ আপডেট)
       // ==========================================
       if (request.method === "POST" && path === "/api/sync-chat") {
-        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
-        await ensureTables(env.DB);
         const b = await request.json().catch(() => ({}));
         const chatId = b.chat_id;
         if (!chatId) return jsonResponse({ error: "Missing chat_id" }, 400);
-
-        let msgsJson = "[]";
-        if (b.messages && Array.isArray(b.messages)) {
-          try { msgsJson = JSON.stringify(b.messages); } catch (e) {}
-        } else {
-          try {
-            const existing = await env.DB.prepare("SELECT messages_json FROM live_conversations WHERE chat_id = ?").bind(chatId).first();
-            let parsed = [];
-            if (existing?.messages_json) parsed = JSON.parse(existing.messages_json);
-            parsed.push({
-              id: `msg_${Date.now()}`,
-              sender_type: "user",
-              sender_name: b.sender_name || "Customer",
-              message_text: b.last_message || "",
-              timestamp: new Date().toISOString()
-            });
-            msgsJson = JSON.stringify(parsed);
-          } catch (e) {}
-        }
-
-        await env.DB.prepare(`
-          INSERT INTO live_conversations (
-            chat_id, sender_name, sender_avatar, platform, channel_type, last_message, last_message_at, unread_count, admin_takeover, needs_attention, messages_json
-          ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 0, 0, ?)
-          ON CONFLICT(chat_id) DO UPDATE SET
-            sender_name = excluded.sender_name,
-            sender_avatar = CASE WHEN excluded.sender_avatar != '' THEN excluded.sender_avatar ELSE live_conversations.sender_avatar END,
-            platform = excluded.platform,
-            channel_type = excluded.channel_type,
-            last_message = excluded.last_message,
-            last_message_at = CURRENT_TIMESTAMP,
-            unread_count = live_conversations.unread_count + 1,
-            messages_json = excluded.messages_json
-        `).bind(
-          chatId,
-          b.sender_name || 'Customer',
-          b.sender_avatar || '',
-          b.platform || 'facebook',
-          b.channel_type || 'messenger',
-          b.last_message || '',
-          b.unread_count || 1,
-          msgsJson
-        ).run();
-
+        memorySessions.set(chatId, {
+          chat_id: chatId,
+          sender_name: b.sender_name || "Customer",
+          sender_avatar: b.sender_avatar || "",
+          platform: b.platform || "facebook",
+          channel_type: b.channel_type || "messenger",
+          last_message: b.last_message || "",
+          last_message_at: new Date().toISOString(),
+          unread_count: b.unread_count || 1,
+          messages: Array.isArray(b.messages) ? b.messages : []
+        });
         return jsonResponse({ success: true, chat_id: chatId });
       }
 
@@ -1774,35 +1630,7 @@ async function handleSyncFacebookConversations(env) {
       const lastMessageAt = conv.updated_time ? new Date(conv.updated_time).toISOString().replace("T", " ").replace("Z", "") : new Date().toISOString().replace("T", " ").slice(0, 19);
       const unreadCount = Number(conv.unread_count || 0);
 
-      // Save to D1
-      if (env.DB) {
-        try {
-          await env.DB.prepare(`
-            INSERT INTO live_conversations (
-              chat_id, sender_name, sender_avatar, platform, channel_type, last_message, last_message_at, unread_count, admin_takeover, needs_attention, messages_json
-            ) VALUES (?, ?, ?, 'facebook', 'messenger', ?, ?, ?, 0, 0, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET
-              sender_name = excluded.sender_name,
-              sender_avatar = CASE WHEN excluded.sender_avatar != '' THEN excluded.sender_avatar ELSE live_conversations.sender_avatar END,
-              last_message = excluded.last_message,
-              last_message_at = excluded.last_message_at,
-              unread_count = excluded.unread_count,
-              messages_json = excluded.messages_json
-          `).bind(
-            customerId,
-            customerName,
-            customerAvatar,
-            lastMessageText,
-            lastMessageAt,
-            unreadCount,
-            JSON.stringify(messages)
-          ).run();
-        } catch (dbErr) {
-          console.warn("DB save error during FB sync:", dbErr);
-        }
-      }
-
-      // Memory session update
+      // Memory session update (Zero-D1 for messaging)
       memorySessions.set(customerId, {
         chat_id: customerId,
         sender_name: customerName,
@@ -2149,11 +1977,15 @@ Respond ONLY with a valid JSON object matching this schema:
       const data = await res.json();
       const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (rawText) {
-        const parsed = JSON.parse(rawText);
+        const cleanJson = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+        const parsed = JSON.parse(cleanJson);
+        const replyStr = parsed.reply || rawText;
+        const isConfirmInText = /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হ(?:য়ে|য়ে)ছে|হলো|হল|করেছি|নিলাম)|📋\s*আপনার\s*অর্ডারের\s*তথ্যসমূহ)/i.test(replyStr);
+        const isOrderConfirmed = Boolean(parsed.order_confirmed || isConfirmInText);
         return {
-          reply: parsed.reply || rawText,
-          urgent_admin_alert: Boolean(parsed.urgent_admin_alert || parsed.order_confirmed),
-          order_confirmed: Boolean(parsed.order_confirmed),
+          reply: replyStr,
+          urgent_admin_alert: Boolean(parsed.urgent_admin_alert || isOrderConfirmed),
+          order_confirmed: isOrderConfirmed,
           order_data: parsed.order_data || null
         };
       }
@@ -2233,7 +2065,7 @@ async function invalidateBusinessCache() {
 }
 
 // ========================================================
-// 🧠 CACHE API & D1 LIVE CONVERSATIONS STORE
+// 🧠 ZERO-D1 IN-MEMORY & EDGE CACHE CONVERSATIONS STORE
 // ========================================================
 async function getSession(chatId, env = null) {
   if (memorySessions.has(chatId)) return memorySessions.get(chatId);
@@ -2247,30 +2079,6 @@ async function getSession(chatId, env = null) {
       return s;
     }
   } catch (e) {}
-
-  if (env && env.DB) {
-    try {
-      await ensureTables(env.DB);
-      const row = await env.DB.prepare("SELECT * FROM live_conversations WHERE chat_id = ?").bind(chatId).first();
-      if (row) {
-        let msgs = [];
-        try { msgs = JSON.parse(row.messages_json || "[]"); } catch (e) {}
-        const s = {
-          chat_id: row.chat_id,
-          sender_name: row.sender_name,
-          platform: row.platform || "facebook",
-          admin_takeover: Boolean(row.admin_takeover),
-          takeover_until: 0,
-          needs_attention: Boolean(row.needs_attention),
-          last_message: row.last_message,
-          last_message_at: row.last_message_at,
-          messages: msgs
-        };
-        memorySessions.set(chatId, s);
-        return s;
-      }
-    } catch (e) {}
-  }
   return null;
 }
 
@@ -2284,42 +2092,6 @@ async function saveSession(chatId, session, env = null) {
     });
     await cache.put(cacheUrl, res);
   } catch (e) {}
-
-  if (env && env.DB) {
-    try {
-      await ensureTables(env.DB);
-      const unread = Number(session.unread_count || 0);
-      const chType = session.channel_type || (session.platform === 'whatsapp' ? 'whatsapp' : (session.platform === 'fb_comment' ? 'comment' : 'messenger'));
-      await env.DB.prepare(`
-        INSERT INTO live_conversations (chat_id, sender_name, sender_avatar, platform, channel_type, last_message, last_message_at, unread_count, admin_takeover, needs_attention, messages_json)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
-        ON CONFLICT(chat_id) DO UPDATE SET
-          sender_name = excluded.sender_name,
-          sender_avatar = CASE WHEN excluded.sender_avatar != '' THEN excluded.sender_avatar ELSE live_conversations.sender_avatar END,
-          platform = excluded.platform,
-          channel_type = excluded.channel_type,
-          last_message = excluded.last_message,
-          last_message_at = CURRENT_TIMESTAMP,
-          unread_count = excluded.unread_count,
-          admin_takeover = excluded.admin_takeover,
-          needs_attention = excluded.needs_attention,
-          messages_json = excluded.messages_json
-      `).bind(
-        chatId,
-        session.sender_name || `User (${chatId.slice(-4)})`,
-        session.sender_avatar || "",
-        session.platform || "facebook",
-        chType,
-        session.last_message || "",
-        unread,
-        session.admin_takeover ? 1 : 0,
-        session.needs_attention ? 1 : 0,
-        JSON.stringify(session.messages || [])
-      ).run();
-    } catch (e) {
-      console.warn("Could not save conversation to D1:", e);
-    }
-  }
 }
 
 async function appendMessageToSession(chatId, senderName, senderType, text, platform = "meta", env = null, senderAvatar = null) {

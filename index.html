@@ -65,10 +65,14 @@
         </div>
 
         <div class="topbar-right">
+          <a href="https://ranonex.alwaysdata.net/" target="_blank" class="btn-refresh" style="padding: 8px 14px; font-size: 12px; font-weight: 700; text-decoration: none; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; display: flex; align-items: center; gap: 6px;">
+            <span>📱 Alwaysdata Live Inbox &amp; WA QR ↗</span>
+          </a>
+
           <div class="global-switch-card" style="padding: 8px 14px; gap: 12px;">
             <div class="switch-info">
-              <span class="switch-title">⚡ 0-Polling Mode Active</span>
-              <span class="switch-sub">লোকাল ক্যাশ থেকে ইনস্ট্যান্ট লোড</span>
+              <span class="switch-title">⚡ Zero-D1 Live Messaging</span>
+              <span class="switch-sub">100% Alwaysdata Direct</span>
             </div>
             <button class="btn-refresh" id="btn-manual-sync" title="ক্লাউড থেকে নতুন ডেটা সিঙ্ক করুন" style="padding: 6px 14px; font-size: 13px;">🔄 Sync</button>
           </div>
@@ -464,20 +468,46 @@
                 <input type="text" id="input-wa-phone" placeholder="যেমন: +8801874600203" value="+8801874600203" required>
               </div>
 
-              <!-- Section 1: QR Web Gateway (Best for Mobile WhatsApp App) -->
+              <!-- Section 1: QR Web Gateway (Alwaysdata Built-in Baileys QR Engine) -->
               <div id="section-wa-gateway" style="background: rgba(16, 185, 129, 0.05); border: 1px dashed rgba(16, 185, 129, 0.3); border-radius: var(--radius-md); padding: 16px; margin-bottom: 16px;">
                 <div style="font-size: 12px; color: #a7f3d0; line-height: 1.6; margin-bottom: 12px;">
-                  💡 <strong>মোবাইল অ্যাপ সুবিধা:</strong> এই মোডে আপনার ফোনের WhatsApp অ্যাপে আপনি স্বাভাবিকভাবেই সব চ্যাট দেখতে ও নিজে মেসেজ দিতে পারবেন। আর আপনি না থাকলে AI একা একাই D1 প্রোডাক্টের দাম ও ডেলিভারি তথ্য দিয়ে কাস্টমারকে উত্তর দেবে।
+                  🔒 <strong>Personal Chat Only গ্যারান্টি:</strong> আপনার WhatsApp কানেক্ট করলে AI শুধুমাত্র <strong>Personal 1-on-1 চ্যাটে</strong> কাস্টমারের সাথে কথা বলবে ও অর্ডার নেবে। কোনো <strong>Group (@g.us)</strong> বা <strong>Channel (@newsletter)</strong>-এ AI কোনো কিছুই করবে না।
                 </div>
-                <div class="form-group">
-                  <label>WhatsApp Gateway API URL (Outbound Reply Engine)</label>
-                  <input type="url" id="input-wa-gateway-url" placeholder="যেমন: https://my-wa-gateway.com/sendText বা ফাকা রাখুন">
-                  <small class="help-text">যেকোনো ফ্রি WhatsApp Web Gateway (Evolution API / Baileys / UltraMsg / GreenAPI) এর URL দিতে পারেন।</small>
+
+                <!-- Live Alwaysdata QR Code Scanner Box -->
+                <div style="background: rgba(9, 13, 22, 0.85); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 12px; padding: 16px; text-align: center; margin-bottom: 14px;">
+                  <div id="dash-wa-status-pill" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); margin-bottom: 12px;">
+                    <span id="dash-wa-status-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #fbbf24; display: inline-block;"></span>
+                    <span id="dash-wa-status-text">WhatsApp স্ট্যাটাস চেক হচ্ছে...</span>
+                  </div>
+
+                  <div id="dash-wa-qr-wrapper" style="width: 220px; height: 220px; margin: 0 auto 12px; background: #ffffff; border-radius: 14px; padding: 10px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 25px rgba(0,0,0,0.4);">
+                    <img id="dash-wa-qr-img" src="" alt="WhatsApp QR Code" style="width: 100%; height: 100%; object-fit: contain; display: none;" />
+                    <div id="dash-wa-qr-placeholder" style="color: #475569; font-size: 12px; line-height: 1.5; padding: 10px;">
+                      📱 QR কোড লোড হচ্ছে...<br><small>কয়েক সেকেন্ড অপেক্ষা করুন অথবা নিচে Generate QR চাপুন</small>
+                    </div>
+                  </div>
+
+                  <div id="dash-wa-connected-info" style="display: none; padding: 12px; border-radius: 10px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #a7f3d0; font-size: 13px; margin-bottom: 12px;">
+                    ✅ <strong>WhatsApp সফলভাবে সংযুক্ত!</strong><br>
+                    <span id="dash-wa-connected-phone" style="font-family: monospace; font-size: 12px;"></span>
+                  </div>
+
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;">
+                    <button type="button" class="btn-primary" onclick="window.connectAlwaysdataWhatsApp(false)" id="btn-dash-wa-qr" style="padding: 9px 14px; font-size: 12px; background: linear-gradient(135deg, #10b981, #059669); border: none;">
+                      ⚡ নতুন QR জেনারেট করুন
+                    </button>
+                    <button type="button" class="btn-refresh" onclick="window.logoutAlwaysdataWhatsApp()" style="padding: 9px 14px; font-size: 12px; color: #fca5a5; border-color: rgba(239, 68, 68, 0.35);">
+                      🔌 ডিসকানেক্ট / রিসেট
+                    </button>
+                    <a href="https://ranonex.alwaysdata.net/" target="_blank" class="btn-refresh" style="padding: 9px 14px; font-size: 12px; text-decoration: none; color: #93c5fd; border-color: rgba(59, 130, 246, 0.35);">
+                      🌐 Alwaysdata ফুল ভিউ ওপেন করুন ↗
+                    </a>
+                  </div>
                 </div>
-                <div class="form-group" style="margin-bottom: 0;">
-                  <label>Gateway API Token / Secret (যদি থাকে)</label>
-                  <input type="password" id="input-wa-gateway-token" placeholder="Gateway API Key বা পাসওয়ার্ড">
-                </div>
+
+                <input type="hidden" id="input-wa-gateway-url" value="https://ranonex.alwaysdata.net/api/send-reply">
+                <input type="hidden" id="input-wa-gateway-token" value="">
               </div>
 
               <!-- Section 2: Meta Cloud API -->

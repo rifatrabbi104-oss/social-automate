@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="bn" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ranonex Live Inbox & WhatsApp QR Gateway — Alwaysdata</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', 'Hind Siliguri', sans-serif;
+      background-color: #090d16;
+      color: #f1f5f9;
+    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    .glass-panel {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(51, 65, 85, 0.6);
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+    .pulse-dot { animation: pulse-ring 2s infinite; }
+  </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden select-none">
+
+  <!-- Top Navigation Header -->
+  <header class="h-16 glass-panel border-b border-slate-800 px-4 lg:px-6 flex items-center justify-between shrink-0 z-20">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-purple-500 to-emerald-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+        <i class="fa-solid fa-bolt text-white text-lg"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <h1 class="font-bold text-base lg:text-lg tracking-tight text-white">Ranonex Live Messaging Hub</h1>
+          <span class="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+            Zero-D1 • Alwaysdata Direct
+          </span>
+        </div>
+        <p class="text-xs text-slate-400 hidden sm:block">
+          Messenger &amp; WhatsApp Personal AI Gateway • Gemini 3.8 Live Multimodal
+        </p>
+      </div>
+    </div>
+
+    <!-- Live Status Pills & Quick Actions -->
+    <div class="flex items-center gap-2.5">
+      <!-- WhatsApp Connection Badge -->
+      <button onclick="toggleWaDrawer()" id="header-wa-btn" class="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all bg-slate-800/90 border-slate-700 hover:border-emerald-500/50 text-slate-200">
+        <i class="fa-brands fa-whatsapp text-emerald-400 text-sm"></i>
+        <span id="header-wa-status">WhatsApp QR</span>
+        <span id="header-wa-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+      </button>
+
+      <!-- Messenger Badge -->
+      <div class="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium bg-blue-500/10 border border-blue-500/30 text-blue-300">
+        <i class="fa-brands fa-facebook-messenger text-blue-400"></i>
+        <span>Messenger Active</span>
+      </div>
+
+      <!-- Refresh Button -->
+      <button onclick="manualRefresh()" class="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="রিফ্রেশ করুন">
+        <i id="refresh-icon" class="fa-solid fa-rotate"></i>
+      </button>
+
+      <!-- Main Dashboard Link -->
+      <a href="/status" target="_blank" class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="JSON Health Status">
+        <i class="fa-solid fa-server text-indigo-400"></i>
+        <span>API Status</span>
+      </a>
+    </div>
+  </header>
+
+  <!-- Main Workspace Container -->
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- LEFT SIDEBAR: Conversations List -->
+    <aside class="w-full sm:w-80 lg:w-96 border-r border-slate-800 bg-slate-900/70 flex flex-col shrink-0" id="conv-sidebar">
+      <!-- Filter Tabs -->
+      <div class="p-3 border-b border-slate-800 space-y-2.5">
+        <div class="grid grid-cols-4 gap-1 bg-slate-950/80 p-1 rounded-xl border border-slate-800/80 text-xs font-medium">
+          <button onclick="setChannelFilter('all')" id="tab-all" class="py-1.5 rounded-lg bg-indigo-600 text-white shadow transition">
+            সব <span id="count-all" class="ml-0.5 text-[10px] opacity-80">(0)</span>
+          </button>
+          <button onclick="setChannelFilter('messenger')" id="tab-messenger" class="py-1.5 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-1">
+            <i class="fa-brands fa-facebook-messenger text-blue-400"></i>
+            <span>FB</span>
+          </button>
+          <button onclick="setChannelFilter('whatsapp')" id="tab-whatsapp" class="py-1.5 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-1">
+            <i class="fa-brands fa-whatsapp text-emerald-400"></i>
+            <span>WA</span>
+          </button>
+          <button onclick="setChannelFilter('comment')" id="tab-comment" class="py-1.5 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-1">
+            <i class="fa-solid fa-comment-dots text-purple-400"></i>
+            <span>কমেন্ট</span>
+          </button>
+        </div>
+
+        <!-- Search Input -->
+        <div class="relative">
+          <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+          <input
+            type="text"
+            id="search-input"
+            oninput="renderConversationsList()"
+            placeholder="কাস্টমারের নাম, নম্বর বা মেসেজ খুঁজুন..."
+            class="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-800 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+      </div>
+
+      <!-- Conversations Scroll List -->
+      <div id="conversations-list" class="flex-1 overflow-y-auto divide-y divide-slate-800/60">
+        <div class="p-8 text-center text-slate-500 text-xs">
+          <i class="fa-solid fa-circle-notch fa-spin text-lg mb-2 text-indigo-400"></i>
+          <p>কনভার্সেশন লোড হচ্ছে...</p>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CENTER: Active Conversation Chat View -->
+    <main class="flex-1 flex flex-col bg-slate-950/50 overflow-hidden" id="chat-main">
+      <!-- Empty State -->
+      <div id="empty-chat-state" class="flex-1 flex flex-col items-center justify-center p-6 text-center">
+        <div class="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-4 shadow-inner">
+          <i class="fa-regular fa-comments text-2xl text-indigo-400"></i>
+        </div>
+        <h2 class="text-base font-bold text-slate-200 mb-1">কাস্টমার ইনবক্স ও লাইভ মেসেজিং</h2>
+        <p class="text-xs text-slate-400 max-w-md mb-5 leading-relaxed">
+          বাম পাশের তালিকা থেকে যেকোনো Facebook Messenger বা WhatsApp কাস্টমারের চ্যাট সিলেক্ট করে সরাসরি মেসেজ পাঠান অথবা ডান পাশের প্যানেল থেকে QR স্ক্যান করে WhatsApp কানেক্ট করুন।
+        </p>
+        <div class="flex flex-wrap items-center justify-center gap-3">
+          <button onclick="toggleWaDrawer(true)" class="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition">
+            <i class="fa-solid fa-qrcode"></i>
+            <span>WhatsApp QR কানেক্ট করুন</span>
+          </button>
+          <button onclick="manualRefresh()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-2 border border-slate-700 transition">
+            <i class="fa-solid fa-rotate"></i>
+            <span>ইনবক্স রিফ্রেশ করুন</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Chat Container (Hidden until a chat is selected) -->
+      <div id="active-chat-container" class="hidden flex-1 flex flex-col overflow-hidden">
+        <!-- Active Chat Header -->
+        <div class="h-16 px-4 border-b border-slate-800 bg-slate-900/90 flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-3 min-w-0">
+            <button onclick="closeMobileChat()" class="sm:hidden p-2 -ml-1 text-slate-400 hover:text-white">
+              <i class="fa-solid fa-arrow-left"></i>
+            </button>
+            <div id="active-chat-avatar" class="w-10 h-10 rounded-full bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center font-bold text-sm text-indigo-300 shrink-0">
+              C
+            </div>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <h3 id="active-chat-name" class="font-bold text-sm text-white truncate">Customer</h3>
+                <span id="active-chat-platform" class="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/30">
+                  Messenger
+                </span>
+              </div>
+              <p id="active-chat-id" class="text-[11px] text-slate-400 truncate font-mono"></p>
+            </div>
+          </div>
+
+          <!-- Handover / AI Mode Toggle -->
+          <div class="flex items-center gap-2">
+            <button
+              id="handover-toggle-btn"
+              onclick="toggleHandoverState()"
+              class="px-3 py-1.5 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20"
+              title="AI অটো-রিপ্লাই চালু/বন্ধ করুন"
+            >
+              <i id="handover-icon" class="fa-solid fa-robot"></i>
+              <span id="handover-label">AI চালু আছে</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Messages Scroll Box -->
+        <div id="chat-messages-box" class="flex-1 overflow-y-auto p-4 space-y-3 select-text bg-gradient-to-b from-slate-950 to-slate-900/90">
+        </div>
+
+        <!-- Admin Reply Composer -->
+        <div class="p-3 border-t border-slate-800 bg-slate-900/95 shrink-0">
+          <div class="flex items-center justify-between mb-2 px-1">
+            <div class="flex items-center gap-2 text-[11px] text-slate-400">
+              <span id="reply-mode-hint">💡 আপনি মেসেজ পাঠালে কাস্টমার সরাসরি তার Messenger/WhatsApp-এ পাবে।</span>
+            </div>
+            <button
+              onclick="requestAiSuggestion()"
+              id="ai-suggest-btn"
+              class="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-[11px] font-semibold flex items-center gap-1.5 transition"
+            >
+              <i class="fa-solid fa-wand-magic-sparkles text-indigo-400"></i>
+              <span>AI রিপ্লাই সাজেশন</span>
+            </button>
+          </div>
+
+          <div class="flex items-end gap-2">
+            <textarea
+              id="admin-reply-input"
+              rows="2"
+              placeholder="কাস্টমারকে মেসেজ লিখুন... (Enter চাপলে সেন্ড হবে, Shift+Enter নতুন লাইন)"
+              onkeydown="handleReplyKeydown(event)"
+              class="flex-1 px-3.5 py-2.5 text-sm rounded-xl bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 resize-none select-text"
+            ></textarea>
+            <button
+              onclick="sendAdminReply()"
+              id="send-reply-btn"
+              class="h-11 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-2 shadow-lg shadow-indigo-600/25 transition shrink-0"
+            >
+              <i class="fa-solid fa-paper-plane"></i>
+              <span>পাঠান</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- RIGHT DRAWER / PANEL: WhatsApp QR Connection & Controls -->
+    <aside
+      id="wa-drawer"
+      class="w-full sm:w-80 lg:w-96 border-l border-slate-800 bg-slate-900/95 flex flex-col shrink-0 transition-all duration-200 z-10"
+    >
+      <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+            <i class="fa-brands fa-whatsapp text-lg"></i>
+          </div>
+          <div>
+            <h2 class="font-bold text-sm text-white">WhatsApp QR কানেকশন</h2>
+            <p class="text-[11px] text-slate-400">Alwaysdata Direct Multi-Device</p>
+          </div>
+        </div>
+        <button onclick="toggleWaDrawer(false)" class="sm:hidden p-1.5 text-slate-400 hover:text-white">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        <!-- Strict Personal-Chat-Only Guarantee Card -->
+        <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-xs space-y-1">
+          <div class="flex items-center gap-2 font-bold text-emerald-300">
+            <i class="fa-solid fa-shield-halved"></i>
+            <span>শুধুমাত্র Personal Chat প্রোটেকশন সক্রিয়</span>
+          </div>
+          <p class="text-[11px] text-slate-300 leading-relaxed">
+            AI শুধুমাত্র <strong>Personal 1-on-1 ইনবক্স</strong> মেসেজে কথা বলবে। যেকোনো <strong>Group (@g.us)</strong>, <strong>Channel (@newsletter)</strong> বা <strong>Status Broadcast</strong>-এ AI কোনো কিছুই করবে না।
+          </p>
+        </div>
+
+        <!-- Connection Status Card -->
+        <div class="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col items-center text-center">
+          <div id="wa-status-badge" class="px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/30 mb-3 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+            <span id="wa-status-text">চেক করা হচ্ছে...</span>
+          </div>
+
+          <!-- QR Display Box -->
+          <div id="wa-qr-box" class="w-56 h-56 rounded-2xl bg-white p-3 flex items-center justify-center shadow-xl mb-3 relative">
+            <img id="wa-qr-image" src="" alt="WhatsApp QR Code" class="w-full h-full object-contain hidden" />
+            <div id="wa-qr-placeholder" class="text-slate-600 text-xs flex flex-col items-center gap-2 px-4">
+              <i id="wa-qr-spinner" class="fa-solid fa-qrcode text-4xl text-slate-400"></i>
+              <span id="wa-qr-placeholder-text">QR কোড তৈরি হচ্ছে...</span>
+            </div>
+          </div>
+
+          <!-- Connected Profile Info (Shown when connected) -->
+          <div id="wa-connected-box" class="hidden w-full p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 mb-3 text-left">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 text-lg shrink-0">
+                <i class="fa-solid fa-check-circle"></i>
+              </div>
+              <div class="min-w-0">
+                <p class="text-xs font-bold text-emerald-300 truncate" id="wa-connected-name">WhatsApp Connected</p>
+                <p class="text-[11px] text-slate-300 font-mono truncate" id="wa-connected-phone"></p>
+              </div>
+            </div>
+          </div>
+
+          <p id="wa-helper-text" class="text-[11px] text-slate-400 leading-relaxed mb-4">
+            আপনার ফোনের <strong>WhatsApp &gt; Linked Devices &gt; Link a Device</strong> থেকে উপরের QR কোডটি স্ক্যান করুন।
+          </p>
+
+          <!-- Action Buttons -->
+          <div class="w-full flex flex-col gap-2">
+            <button
+              onclick="triggerWaConnect()"
+              id="wa-connect-btn"
+              class="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 transition"
+            >
+              <i class="fa-solid fa-qrcode"></i>
+              <span>নতুন QR কোড জেনারেট করুন</span>
+            </button>
+
+            <button
+              onclick="triggerWaLogout()"
+              id="wa-logout-btn"
+              class="w-full py-2 px-4 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold text-xs flex items-center justify-center gap-2 transition"
+            >
+              <i class="fa-solid fa-power-off"></i>
+              <span>WhatsApp ডিসকানেক্ট / রিসেট করুন</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- System Stats Card -->
+        <div class="p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2 text-xs">
+          <div class="font-semibold text-slate-300 flex items-center justify-between">
+            <span>সার্ভার স্ট্যাটাস (Alwaysdata)</span>
+            <span class="text-[10px] text-emerald-400 font-mono">PORT 8100</span>
+          </div>
+          <div class="grid grid-cols-2 gap-2 pt-1">
+            <div class="p-2 rounded-lg bg-slate-900 border border-slate-800/80">
+              <div class="text-[10px] text-slate-400">মোট চ্যাট সেশন</div>
+              <div id="stat-sessions" class="text-sm font-bold text-white mt-0.5">0</div>
+            </div>
+            <div class="p-2 rounded-lg bg-slate-900 border border-slate-800/80">
+              <div class="text-[10px] text-slate-400">প্রোডাক্ট ক্যাটালগ</div>
+              <div id="stat-products" class="text-sm font-bold text-emerald-400 mt-0.5">Loaded</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast-box" class="fixed bottom-5 right-5 z-50 hidden px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs font-medium text-white shadow-2xl flex items-center gap-2">
+    <i id="toast-icon" class="fa-solid fa-circle-check text-emerald-400"></i>
+    <span id="toast-text"></span>
+  </div>
+
+  <script>
+    let allConversations = [];
+    let currentChannelFilter = 'all';
+    let activeChatId = null;
+    let activeChatSession = null;
+    let isSendingReply = false;
+
+    function showToast(message, isError = false) {
+      const box = document.getElementById('toast-box');
+      const icon = document.getElementById('toast-icon');
+      const text = document.getElementById('toast-text');
+      text.textContent = message;
+      icon.className = isError
+        ? 'fa-solid fa-triangle-exclamation text-rose-400'
+        : 'fa-solid fa-circle-check text-emerald-400';
+      box.classList.remove('hidden');
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => box.classList.add('hidden'), 3200);
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function formatRelativeTime(iso) {
+      if (!iso) return '';
+      const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (diff < 60) return 'এইমাত্র';
+      if (diff < 3600) return `${Math.floor(diff / 60)} মি. আগে`;
+      if (diff < 86400) return `${Math.floor(diff / 3600)} ঘ. আগে`;
+      return new Date(iso).toLocaleDateString('bn-BD');
+    }
+
+    function toggleWaDrawer(forceOpen) {
+      const drawer = document.getElementById('wa-drawer');
+      if (typeof forceOpen === 'boolean') {
+        drawer.classList.toggle('hidden', !forceOpen);
+      } else {
+        drawer.classList.toggle('hidden');
+      }
+    }
+
+    function setChannelFilter(channel) {
+      currentChannelFilter = channel;
+      ['all', 'messenger', 'whatsapp', 'comment'].forEach(c => {
+        const btn = document.getElementById(`tab-${c}`);
+        if (!btn) return;
+        if (c === channel) {
+          btn.className = 'py-1.5 rounded-lg bg-indigo-600 text-white shadow transition flex items-center justify-center gap-1';
+        } else {
+          btn.className = 'py-1.5 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-1';
+        }
+      });
+      renderConversationsList();
+    }
+
+    async function fetchConversations() {
+      try {
+        const res = await fetch('/api/conversations');
+        if (!res.ok) return;
+        const data = await res.json();
+        allConversations = Array.isArray(data) ? data : (data.conversations || []);
+        document.getElementById('count-all').textContent = `(${allConversations.length})`;
+        document.getElementById('stat-sessions').textContent = allConversations.length;
+        renderConversationsList();
+
+        if (activeChatId) {
+          await loadActiveConversation(activeChatId, false);
+        }
+      } catch (e) {
+        console.error('Error fetching conversations:', e);
+      }
+    }
+
+    function renderConversationsList() {
+      const container = document.getElementById('conversations-list');
+      const query = (document.getElementById('search-input')?.value || '').trim().toLowerCase();
+
+      const filtered = allConversations.filter(c => {
+        const platform = (c.platform || '').toLowerCase();
+        const channel = (c.channel_type || '').toLowerCase();
+        if (currentChannelFilter === 'messenger' && !(platform === 'facebook' && channel !== 'comment')) return false;
+        if (currentChannelFilter === 'whatsapp' && platform !== 'whatsapp') return false;
+        if (currentChannelFilter === 'comment' && channel !== 'comment') return false;
+
+        if (query) {
+          const hay = `${c.name || ''} ${c.sender_name || ''} ${c.sender_id || ''} ${c.id || ''} ${c.last_message || ''}`.toLowerCase();
+          if (!hay.includes(query)) return false;
+        }
+        return true;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="p-8 text-center text-slate-500 text-xs">
+            <i class="fa-regular fa-folder-open text-xl mb-2 text-slate-600"></i>
+            <p>কোনো কনভার্সেশন পাওয়া যায়নি</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = filtered.map(c => {
+        const id = c.id || c.chat_id;
+        const isSelected = id === activeChatId;
+        const isWa = (c.platform || '').toLowerCase() === 'whatsapp';
+        const isComment = (c.channel_type || '').toLowerCase() === 'comment';
+        const name = c.name || c.sender_name || id;
+        const initial = (name || 'C').trim().charAt(0).toUpperCase();
+        const unread = Number(c.unread_count || 0);
+        const adminTakeover = Boolean(c.admin_takeover);
+
+        const platformIcon = isWa
+          ? '<i class="fa-brands fa-whatsapp text-emerald-400"></i>'
+          : (isComment ? '<i class="fa-solid fa-comment-dots text-purple-400"></i>' : '<i class="fa-brands fa-facebook-messenger text-blue-400"></i>');
+
+        const modeBadge = adminTakeover
+          ? '<span class="px-1.5 py-0.5 text-[9px] rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">Admin</span>'
+          : '<span class="px-1.5 py-0.5 text-[9px] rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">AI</span>';
+
+        return `
+          <div
+            onclick="selectConversation('${escapeHtml(id)}')"
+            class="p-3.5 cursor-pointer transition flex items-start gap-3 ${isSelected ? 'bg-indigo-600/15 border-l-2 border-l-indigo-500' : 'hover:bg-slate-800/50'}"
+          >
+            <div class="relative shrink-0">
+              <div class="w-10 h-10 rounded-full ${isWa ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'} border flex items-center justify-center font-bold text-sm">
+                ${escapeHtml(initial)}
+              </div>
+              <div class="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-[10px]">
+                ${platformIcon}
+              </div>
+            </div>
+
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center justify-between gap-1 mb-0.5">
+                <h4 class="text-xs font-bold text-slate-100 truncate">${escapeHtml(name)}</h4>
+                <span class="text-[10px] text-slate-400 shrink-0">${formatRelativeTime(c.last_message_at)}</span>
+              </div>
+              <p class="text-[11px] text-slate-400 truncate mb-1">${escapeHtml(c.last_message || 'মেসেজ দেখুন...')}</p>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5">
+                  ${modeBadge}
+                  <span class="text-[10px] text-slate-500 font-mono truncate max-w-[120px]">${escapeHtml(c.sender_id || id)}</span>
+                </div>
+                ${unread > 0 ? `<span class="px-1.5 py-0.5 text-[10px] font-bold rounded-full bg-indigo-600 text-white">${unread}</span>` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function selectConversation(chatId) {
+      activeChatId = chatId;
+      document.getElementById('empty-chat-state').classList.add('hidden');
+      document.getElementById('active-chat-container').classList.remove('hidden');
+      renderConversationsList();
+      await loadActiveConversation(chatId, true);
+
+      // Mark as read
+      fetch('/api/conversations/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId })
+      }).catch(() => {});
+    }
+
+    function closeMobileChat() {
+      activeChatId = null;
+      document.getElementById('active-chat-container').classList.add('hidden');
+      document.getElementById('empty-chat-state').classList.remove('hidden');
+    }
+
+    async function loadActiveConversation(chatId, scrollToBottom = false) {
+      try {
+        const res = await fetch(`/api/conversations/${encodeURIComponent(chatId)}`);
+        if (!res.ok) return;
+        const session = await res.json();
+        activeChatSession = session;
+
+        const isWa = (session.platform || '').toLowerCase() === 'whatsapp' || chatId.startsWith('wa_');
+        const name = session.sender_name || session.name || chatId;
+        document.getElementById('active-chat-name').textContent = name;
+        document.getElementById('active-chat-id').textContent = session.sender_id || chatId;
+        document.getElementById('active-chat-avatar').textContent = (name || 'C').charAt(0).toUpperCase();
+
+        const platBadge = document.getElementById('active-chat-platform');
+        if (isWa) {
+          platBadge.className = 'px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+          platBadge.innerHTML = '<i class="fa-brands fa-whatsapp mr-1"></i>WhatsApp Personal';
+        } else {
+          platBadge.className = 'px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/30';
+          platBadge.innerHTML = '<i class="fa-brands fa-facebook-messenger mr-1"></i>Messenger';
+        }
+
+        updateHandoverButtonUI(Boolean(session.admin_takeover));
+        renderMessages(session.messages || [], scrollToBottom);
+      } catch (e) {
+        console.error('Failed to load session:', e);
+      }
+    }
+
+    function updateHandoverButtonUI(isAdminTakeover) {
+      const btn = document.getElementById('handover-toggle-btn');
+      const icon = document.getElementById('handover-icon');
+      const label = document.getElementById('handover-label');
+
+      if (isAdminTakeover) {
+        btn.className = 'px-3 py-1.5 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25';
+        icon.className = 'fa-solid fa-user-shield';
+        label.textContent = 'Admin মোড (AI বিরত)';
+      } else {
+        btn.className = 'px-3 py-1.5 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25';
+        icon.className = 'fa-solid fa-robot';
+        label.textContent = 'AI অটো-রিপ্লাই চালু';
+      }
+    }
+
+    async function toggleHandoverState() {
+      if (!activeChatId || !activeChatSession) return;
+      const nextState = !Boolean(activeChatSession.admin_takeover);
+      try {
+        const res = await fetch('/api/handover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: activeChatId,
+            admin_takeover: nextState
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          activeChatSession.admin_takeover = nextState;
+          updateHandoverButtonUI(nextState);
+          showToast(nextState ? '👨‍💻 Admin Takeover চালু করা হয়েছে (AI অটো-রিপ্লাই বন্ধ)' : '🤖 AI অটো-রিপ্লাই পুনরায় চালু করা হয়েছে');
+          fetchConversations();
+        }
+      } catch (e) {
+        showToast('হ্যান্ডওভার পরিবর্তন ব্যর্থ হয়েছে', true);
+      }
+    }
+
+    function renderMessages(messages, scrollToBottom = false) {
+      const box = document.getElementById('chat-messages-box');
+      const wasNearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+
+      if (!messages || messages.length === 0) {
+        box.innerHTML = `<div class="text-center text-slate-500 text-xs py-10">এই সেশনে এখনো কোনো মেসেজ নেই। নিচে লিখে প্রথম মেসেজ পাঠান।</div>`;
+        return;
+      }
+
+      box.innerHTML = messages.map(m => {
+        const isCustomer = m.sender_type === 'customer' || m.sender_type === 'user';
+        const isAdmin = m.sender_type === 'admin';
+        const senderLabel = isCustomer
+          ? escapeHtml(m.sender_name || 'Customer')
+          : (isAdmin ? '👨‍💻 Admin (আপনি)' : '🤖 Ranonex AI');
+
+        const timeStr = m.timestamp ? new Date(m.timestamp).toLocaleTimeString('bn-BD', { hour: '2-digit', minute: '2-digit' }) : '';
+
+        if (isCustomer) {
+          return `
+            <div class="flex flex-col items-start max-w-[82%]">
+              <span class="text-[10px] text-slate-400 mb-1 px-1">${senderLabel} • ${timeStr}</span>
+              <div class="px-3.5 py-2.5 rounded-2xl rounded-tl-sm bg-slate-800 border border-slate-700/80 text-slate-100 text-xs sm:text-sm whitespace-pre-wrap leading-relaxed shadow">
+                ${escapeHtml(m.message_text)}
+              </div>
+            </div>
+          `;
+        } else {
+          const bubbleStyle = isAdmin
+            ? 'bg-gradient-to-br from-emerald-600 to-teal-700 text-white border border-emerald-500/40'
+            : 'bg-gradient-to-br from-indigo-600/90 to-purple-700/90 text-white border border-indigo-400/30';
+          return `
+            <div class="flex flex-col items-end max-w-[82%] ml-auto">
+              <span class="text-[10px] text-slate-400 mb-1 px-1">${senderLabel} • ${timeStr}</span>
+              <div class="px-3.5 py-2.5 rounded-2xl rounded-tr-sm ${bubbleStyle} text-xs sm:text-sm whitespace-pre-wrap leading-relaxed shadow">
+                ${escapeHtml(m.message_text)}
+              </div>
+            </div>
+          `;
+        }
+      }).join('');
+
+      if (scrollToBottom || wasNearBottom) {
+        box.scrollTop = box.scrollHeight;
+      }
+    }
+
+    function handleReplyKeydown(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendAdminReply();
+      }
+    }
+
+    async function sendAdminReply() {
+      if (!activeChatId || isSendingReply) return;
+      const input = document.getElementById('admin-reply-input');
+      const text = (input.value || '').trim();
+      if (!text) return;
+
+      isSendingReply = true;
+      const btn = document.getElementById('send-reply-btn');
+      const oldHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>পাঠানো হচ্ছে...</span>';
+
+      try {
+        const res = await fetch('/api/send-reply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: activeChatId,
+            message_text: text
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          input.value = '';
+          showToast('মেসেজ সফলভাবে কাস্টমারের কাছে পাঠানো হয়েছে!');
+          await loadActiveConversation(activeChatId, true);
+          await fetchConversations();
+        } else {
+          showToast(data.error || 'মেসেজ পাঠানো যায়নি', true);
+        }
+      } catch (e) {
+        showToast('নেটওয়ার্ক ত্রুটি: মেসেজ পাঠানো যায়নি', true);
+      } finally {
+        isSendingReply = false;
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+      }
+    }
+
+    async function requestAiSuggestion() {
+      if (!activeChatId) return;
+      const btn = document.getElementById('ai-suggest-btn');
+      const oldHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>তৈরি হচ্ছে...</span>';
+
+      try {
+        const res = await fetch('/api/ai-suggest-reply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: activeChatId })
+        });
+        const data = await res.json();
+        if (data.success && data.suggestion) {
+          const input = document.getElementById('admin-reply-input');
+          input.value = data.suggestion;
+          input.focus();
+          showToast('✨ AI রিপ্লাই সাজেশন তৈরি হয়েছে!');
+        } else {
+          showToast(data.error || 'সাজেশন তৈরি করা যায়নি', true);
+        }
+      } catch (e) {
+        showToast('AI সাজেশন ত্রুটি', true);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+      }
+    }
+
+    // ==========================================
+    // 📱 WHATSAPP QR STATUS & ACTIONS
+    // ==========================================
+    async function pollWhatsAppStatus() {
+      try {
+        const res = await fetch('/api/whatsapp/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        updateWhatsAppUI(data);
+      } catch (e) {
+        console.error('WA status poll error:', e);
+      }
+    }
+
+    function updateWhatsAppUI(data) {
+      const status = data.status || 'disconnected';
+      const badge = document.getElementById('wa-status-badge');
+      const statusText = document.getElementById('wa-status-text');
+      const qrBox = document.getElementById('wa-qr-box');
+      const qrImg = document.getElementById('wa-qr-image');
+      const qrPlaceholder = document.getElementById('wa-qr-placeholder');
+      const qrPlaceholderText = document.getElementById('wa-qr-placeholder-text');
+      const connectedBox = document.getElementById('wa-connected-box');
+      const headerStatus = document.getElementById('header-wa-status');
+      const headerDot = document.getElementById('header-wa-dot');
+
+      if (status === 'connected') {
+        badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 mb-3 flex items-center gap-2';
+        statusText.textContent = 'Connected (সক্রিয়)';
+        headerStatus.textContent = data.phone ? `WA: +${data.phone}` : 'WA Connected';
+        headerDot.className = 'w-2 h-2 rounded-full bg-emerald-400 pulse-dot';
+
+        qrBox.classList.add('hidden');
+        connectedBox.classList.remove('hidden');
+        document.getElementById('wa-connected-name').textContent = data.name || 'WhatsApp Business / Personal';
+        document.getElementById('wa-connected-phone').textContent = data.phone ? `+${data.phone}` : (data.jid || 'Connected');
+      } else if (status === 'qr_ready' && data.qr_data_url) {
+        badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30 mb-3 flex items-center gap-2';
+        statusText.textContent = 'QR স্ক্যান করার জন্য প্রস্তুত';
+        headerStatus.textContent = 'Scan WA QR';
+        headerDot.className = 'w-2 h-2 rounded-full bg-amber-400';
+
+        connectedBox.classList.add('hidden');
+        qrBox.classList.remove('hidden');
+        qrImg.src = data.qr_data_url;
+        qrImg.classList.remove('hidden');
+        qrPlaceholder.classList.add('hidden');
+      } else if (status === 'connecting') {
+        badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-blue-500/15 text-blue-300 border border-blue-500/30 mb-3 flex items-center gap-2';
+        statusText.textContent = 'কানেক্ট হচ্ছে...';
+        headerStatus.textContent = 'WA Connecting...';
+        headerDot.className = 'w-2 h-2 rounded-full bg-blue-400';
+
+        connectedBox.classList.add('hidden');
+        qrBox.classList.remove('hidden');
+        qrImg.classList.add('hidden');
+        qrPlaceholder.classList.remove('hidden');
+        qrPlaceholderText.textContent = 'WhatsApp সেশন প্রস্তুত হচ্ছে, কয়েক সেকেন্ড অপেক্ষা করুন...';
+      } else {
+        badge.className = 'px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/15 text-rose-300 border border-rose-500/30 mb-3 flex items-center gap-2';
+        statusText.textContent = 'ডিসকানেক্টেড';
+        headerStatus.textContent = 'WA Disconnected';
+        headerDot.className = 'w-2 h-2 rounded-full bg-rose-400';
+
+        connectedBox.classList.add('hidden');
+        qrBox.classList.remove('hidden');
+        qrImg.classList.add('hidden');
+        qrPlaceholder.classList.remove('hidden');
+        qrPlaceholderText.textContent = 'নিচের "নতুন QR কোড জেনারেট করুন" বাটনে ক্লিক করুন।';
+      }
+    }
+
+    async function triggerWaConnect() {
+      const btn = document.getElementById('wa-connect-btn');
+      const oldHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>QR জেনারেট হচ্ছে...</span>';
+      try {
+        const res = await fetch('/api/whatsapp/connect', { method: 'POST' });
+        const data = await res.json();
+        showToast('WhatsApp QR সেশন শুরু হয়েছে!');
+        updateWhatsAppUI(data);
+        setTimeout(pollWhatsAppStatus, 1500);
+      } catch (e) {
+        showToast('QR জেনারেট করতে সমস্যা হয়েছে', true);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = oldHtml;
+      }
+    }
+
+    async function triggerWaLogout() {
+      if (!confirm('আপনি কি নিশ্চিতভাবে WhatsApp সেশন ডিসকানেক্ট ও রিসেট করতে চান?')) return;
+      try {
+        const res = await fetch('/api/whatsapp/logout', { method: 'POST' });
+        const data = await res.json();
+        showToast('WhatsApp সেশন ডিসকানেক্ট করা হয়েছে');
+        updateWhatsAppUI(data);
+      } catch (e) {
+        showToast('ডিসকানেক্ট করতে সমস্যা হয়েছে', true);
+      }
+    }
+
+    async function manualRefresh() {
+      const icon = document.getElementById('refresh-icon');
+      icon.classList.add('fa-spin');
+      await Promise.all([fetchConversations(), pollWhatsAppStatus()]);
+      setTimeout(() => icon.classList.remove('fa-spin'), 400);
+    }
+
+    // Initial load & live polling
+    fetchConversations();
+    pollWhatsAppStatus();
+    setInterval(fetchConversations, 3500);
+    setInterval(pollWhatsAppStatus, 4000);
+  </script>
+</body>
+</html>
+
