@@ -397,6 +397,13 @@ async function forceRefreshActiveChatMessages(chatId) {
       const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(5000) });
       if (adRes.ok) {
         const adData = await adRes.json();
+        if (adData) {
+          if (!appState.pagingInfo) appState.pagingInfo = {};
+          appState.pagingInfo[chatId] = {
+            paging_after: adData.paging_after || null,
+            has_more: adData.has_more !== false
+          };
+        }
         if (adData && Array.isArray(adData.messages)) {
           msgs = adData.messages.map(m => ({
             id: m.id,
@@ -618,6 +625,13 @@ async function loadChatMessages(chatId) {
       const adRes = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(chatId)}`, { signal: AbortSignal.timeout(5000) });
       if (adRes.ok) {
         const adData = await adRes.json();
+        if (adData) {
+          if (!appState.pagingInfo) appState.pagingInfo = {};
+          appState.pagingInfo[chatId] = {
+            paging_after: adData.paging_after || null,
+            has_more: adData.has_more !== false
+          };
+        }
         if (adData && Array.isArray(adData.messages)) {
           msgs = adData.messages.map(m => ({
             id: m.id,
@@ -719,6 +733,57 @@ function renderMessageBubbles(chatId) {
   });
 
   container.scrollTop = container.scrollHeight;
+
+  if (!container._hasOlderScrollListener) {
+    container._hasOlderScrollListener = true;
+    container.addEventListener('scroll', async () => {
+      if (container.scrollTop < 60 && appState.activeChatId) {
+        const pInfo = (appState.pagingInfo && appState.pagingInfo[appState.activeChatId]) || {};
+        if (pInfo.has_more === false || !pInfo.paging_after) return;
+        if (appState.isLoadingOlder) return;
+
+        appState.isLoadingOlder = true;
+        const prevScrollHeight = container.scrollHeight;
+        try {
+          const res = await fetch(`https://ranonex.alwaysdata.net/api/conversations/${encodeURIComponent(appState.activeChatId)}/older?after=${encodeURIComponent(pInfo.paging_after)}&limit=20`);
+          if (res.ok) {
+            const data = await res.json();
+            const older = Array.isArray(data.messages) ? data.messages : [];
+            if (older.length > 0) {
+              const mapped = older.map(m => ({
+                id: m.id,
+                sender_type: m.sender_type || 'customer',
+                message_text: m.message_text || '',
+                media_type: m.media_type || null,
+                media_url: m.media_url || null,
+                media_mime: m.media_mime || null,
+                attachments: m.attachments || [],
+                created_at: m.timestamp || new Date().toISOString()
+              }));
+              const currentMsgs = appState.messages[appState.activeChatId] || [];
+              const existingIds = new Set(currentMsgs.map(m => m.id));
+              const trulyOlder = mapped.filter(m => !existingIds.has(m.id));
+              if (trulyOlder.length > 0) {
+                appState.messages[appState.activeChatId] = [...trulyOlder, ...currentMsgs];
+                setLocalCache(CACHE_KEYS.MESSAGES, appState.messages);
+                pInfo.paging_after = data.cursor || null;
+                pInfo.has_more = Boolean(data.has_more);
+                renderMessageBubbles(appState.activeChatId);
+                container.scrollTop = container.scrollHeight - prevScrollHeight;
+              }
+            }
+            if (!data.has_more || older.length === 0) {
+              pInfo.has_more = false;
+            }
+          }
+        } catch (e) {
+          console.error("Older scroll error:", e);
+        } finally {
+          appState.isLoadingOlder = false;
+        }
+      }
+    });
+  }
 }
 
 // ========================================================

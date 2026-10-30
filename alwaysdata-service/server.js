@@ -48,10 +48,12 @@ try {
 } catch (e) {}
 
 // ==========================================
-// ⚙️ কনফিগারেশন ও এনভায়রনমেন্ট ভেরিয়েবল
+// ⚙️ কনফিগারেশন ও এনভায়রনমেন্ট ভেরিয়েবল (Universal Hosting: cPanel, hPanel, VPS, Local, Alwaysdata)
 // ==========================================
 const CONFIG = {
   port: process.env.PORT || 8100,
+  host: process.env.HOST || process.env.IP || '0.0.0.0',
+  baseUrl: process.env.APP_BASE_URL || process.env.BASE_URL || '',
   metaVerifyToken: process.env.META_VERIFY_TOKEN || "ranonex_social_secret_2026",
   metaPageId: process.env.META_PAGE_ID || "1287050647827199",
   metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN || "EAAP26tyiJpMBSwbPigSP59zUgrW3nVwverL5dGtxzJxS7wgGZCwa5FZBTwnp5yLYqBWzvGQco6SuJEXgC7csi3mHZApVZCvRpB7zDCu6KnucWzOZC3jNN8uZCI4VWVlOLyj13uzzYo6lNWlzAr4DSi1QBuYqwHZBiSAxSlbwkJaOZAEZBNBTLwoZA5zOZAIegyGZBGcmC4DeXCKs",
@@ -62,6 +64,20 @@ const CONFIG = {
   workerUrl: process.env.WORKER_URL || "https://social-automate.rifatrabbi104.workers.dev",
   storeHotline: "+8801874600203"
 };
+
+/**
+ * 🌐 ডাইনামিক বেস ইউআরএল ডিটেক্টর (যেকোনো হোস্টিং, cPanel, hPanel, Alwaysdata বা Localhost-এ কাজ করবে)
+ */
+function getBaseUrl(req = null) {
+  if (CONFIG.baseUrl) return CONFIG.baseUrl.replace(/\/+$/, '');
+  if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/+$/, '');
+  if (req) {
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.headers['x-forwarded-host'] || req.get('host');
+    if (host) return `${proto}://${host}`;
+  }
+  return 'https://ranonex.alwaysdata.net';
+}
 
 // Auto-sync tokens from Cloudflare D1 if missing
 async function syncCredentialsFromWorker() {
@@ -88,10 +104,54 @@ async function syncCredentialsFromWorker() {
 }
 syncCredentialsFromWorker();
 
-// ⚡ ইফেমেরাল ইন-মেমোরি রানটাইম সেশন (Zero Server Disk Database, Zero D1)
-// অ্যাডমিন ড্যাশবোর্ডে না থাকলে কোথাও স্থায়ীভাবে সেভ হবে না; ফেসবুক/হোয়াটসঅ্যাপ চ্যাটই আসল ডেটাবেস
-// এবং অ্যাডমিন ড্যাশবোর্ডে ঢুকলে ফেসবুক সার্ভার থেকে ফেচ হয়ে ব্রাউজারের লোকাল ডেটাবেসে (IndexedDB) থাকবে।
+// 🛡️ গ্লোবাল ক্র্যাশ প্রোটেকশন: Baileys সকেট টাইমআউট বা নেটওয়ার্ক এরর যেন পুরো Node.js সার্ভার ক্র্যাশ না করে
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ [Unhandled Promise Rejection Ignored]:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ [Uncaught Exception Ignored]:', err?.message || err);
+});
+
+// ⚡ ইফেমেরাল ইন-মেমোরি রানটাইম সেশন + হালকা হোয়াটসঅ্যাপ সেশন ক্যাশ (Zero D1)
 const memorySessions = new Map();
+const WA_SESSIONS_CACHE_FILE = path.join(__dirname, 'wa_sessions_cache.json');
+let waSessionsSaveTimer = null;
+
+function loadPersistedWhatsAppSessions() {
+  try {
+    if (fs.existsSync(WA_SESSIONS_CACHE_FILE)) {
+      const raw = fs.readFileSync(WA_SESSIONS_CACHE_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        for (const s of parsed) {
+          if (s && s.chat_id && (String(s.chat_id).startsWith('wa_') || s.platform === 'whatsapp')) {
+            memorySessions.set(s.chat_id, s);
+          }
+        }
+        console.log(`📦 [WhatsApp Cache Restored]: ${parsed.length} WhatsApp conversations loaded.`);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load WhatsApp sessions cache:', e.message);
+  }
+}
+
+function schedulePersistWhatsAppSessions() {
+  if (waSessionsSaveTimer) clearTimeout(waSessionsSaveTimer);
+  waSessionsSaveTimer = setTimeout(() => {
+    try {
+      const waList = [];
+      for (const s of memorySessions.values()) {
+        if (s && (String(s.chat_id).startsWith('wa_') || s.platform === 'whatsapp')) {
+          waList.push(s);
+        }
+      }
+      fs.writeFileSync(WA_SESSIONS_CACHE_FILE, JSON.stringify(waList), 'utf8');
+    } catch (e) {}
+  }, 400);
+}
+
+loadPersistedWhatsAppSessions();
 
 function saveSession(chatId, session) {
   if (!chatId || !session) return;
@@ -107,6 +167,9 @@ function saveSession(chatId, session) {
     }
   }
   memorySessions.set(chatId, session);
+  if (String(chatId).startsWith('wa_') || session.platform === 'whatsapp') {
+    schedulePersistWhatsAppSessions();
+  }
 }
 
 const audioCache = new Map(); // audioId -> { buffer: Buffer, createdAt: number }
@@ -114,7 +177,7 @@ const mediaCache = new Map(); // mediaId -> { buffer: Buffer, mimeType: string, 
 let productCatalogCache = { data: null, productsList: [], expiresAt: 0 };
 let totalMessagesHandled = 0;
 
-function storeMediaBuffer(buffer, mimeType = 'application/octet-stream') {
+function storeMediaBuffer(buffer, mimeType = 'application/octet-stream', req = null) {
   if (!buffer || !Buffer.isBuffer(buffer)) return null;
   const cleanMime = String(mimeType || 'application/octet-stream').split(';')[0].trim().toLowerCase();
   let ext = '.bin';
@@ -134,7 +197,47 @@ function storeMediaBuffer(buffer, mimeType = 'application/octet-stream') {
     mimeType: cleanMime,
     createdAt: Date.now()
   });
-  return `https://ranonex.alwaysdata.net/media/${mediaId}`;
+  const url = `${getBaseUrl(req)}/media/${mediaId}`;
+  return {
+    id: mediaId,
+    mediaId,
+    url,
+    mimeType: cleanMime,
+    toString() { return url; }
+  };
+}
+
+/**
+ * 🎙️ গ্রাহকের ভয়েস অডিও ট্রান্সক্রিপশন হেল্পার (Gemini 3.8 Flash Multimodal Audio)
+ * Facebook Messenger (.mp4/.aac) ও WhatsApp (.ogg) ভয়েস ক্লিপ ১০০% বাংলায় ট্রান্সক্রাইব করে
+ */
+async function transcribeAudioBuffer(audioBuffer, mimeType = 'audio/mp4') {
+  if (!audioBuffer || !Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0 || !CONFIG.geminiApiKey) {
+    return "";
+  }
+  try {
+    const cleanMime = String(mimeType || 'audio/mp4').split(';')[0].trim();
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${CONFIG.geminiApiKey}`;
+    const resp = await fetch(apiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { inlineData: { mimeType: cleanMime, data: audioBuffer.toString('base64') } },
+            { text: 'Listen to this customer audio voice note carefully. Transcribe exactly what the customer spoke in natural Bengali script (বাংলা লিপি). If they ask about products or anything, transcribe it accurately. Output ONLY the plain transcription text in Bengali script, nothing else.' }
+          ]
+        }]
+      })
+    });
+    if (!resp.ok) return "";
+    const data = await resp.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    return text.trim();
+  } catch (e) {
+    console.error("Voice transcribe error:", e.message);
+    return "";
+  }
 }
 
 // প্রতি ১০ মিনিট পর পর পুরাতন ইফেমেরাল মিডিয়া ও অডিও ক্যাশ ক্লিনআপ
@@ -1518,16 +1621,43 @@ async function sendFacebookHelplineCard(recipientId) {
   }
 }
 
-// ৫. অডিও ভয়েস মেসেজ সেন্ডার
-async function sendFacebookAudio(recipientId, audioUrl) {
-  return await sendFacebookAttachment(recipientId, "audio", audioUrl);
+// ৫. অডিও ভয়েস মেসেজ সেন্ডার (Buffer অথবা URL উভয় সাপোর্ট)
+async function sendFacebookAudio(recipientId, audioUrlOrBuffer) {
+  return await sendFacebookAttachment(recipientId, "audio", audioUrlOrBuffer, "audio/wav");
 }
 
-// ৫.১ জেনেরিক মেটা মিডিয়া সেন্ডার (image, video, audio, file)
-async function sendFacebookAttachment(recipientId, mediaType, mediaUrl) {
-  if (!CONFIG.metaPageAccessToken || !mediaUrl) return null;
+// ৫.১ জেনেরিক মেটা মিডিয়া সেন্ডার (image, video, audio, file - Direct Binary Upload + URL Fallback)
+async function sendFacebookAttachment(recipientId, mediaType, mediaUrlOrBuffer, mimeType = '') {
+  if (!CONFIG.metaPageAccessToken || !mediaUrlOrBuffer) return null;
   const validType = ['image', 'video', 'audio', 'file'].includes(mediaType) ? mediaType : 'file';
+
   try {
+    // 🚀 Native FormData Binary Upload (URL-স্বাধীন: cPanel, hPanel, Localhost বা যেকোনো আইপিতে ১০০% কাজ করবে)
+    if (Buffer.isBuffer(mediaUrlOrBuffer)) {
+      const ext = validType === 'image' ? 'jpg' : (validType === 'video' ? 'mp4' : (validType === 'audio' ? 'wav' : 'bin'));
+      const filename = `attachment_${Date.now()}.${ext}`;
+      const fd = new FormData();
+      fd.append('recipient', JSON.stringify({ id: recipientId }));
+      fd.append('messaging_type', 'RESPONSE');
+      fd.append('message', JSON.stringify({
+        attachment: {
+          type: validType,
+          payload: { is_reusable: true }
+        }
+      }));
+      fd.append('filedata', new Blob([mediaUrlOrBuffer], { type: mimeType || `${validType}/*` }), filename);
+
+      const res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${encodeURIComponent(CONFIG.metaPageAccessToken)}`, {
+        method: "POST",
+        body: fd
+      });
+      const data = await res.json();
+      console.log(`📤 [FB ${validType} direct binary upload]:`, JSON.stringify(data));
+      return data;
+    }
+
+    // Public URL payload send
+    const mediaUrl = typeof mediaUrlOrBuffer === 'object' && mediaUrlOrBuffer.url ? mediaUrlOrBuffer.url : String(mediaUrlOrBuffer);
     const res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${encodeURIComponent(CONFIG.metaPageAccessToken)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1542,7 +1672,9 @@ async function sendFacebookAttachment(recipientId, mediaType, mediaUrl) {
         }
       })
     });
-    return await res.json();
+    const data = await res.json();
+    console.log(`📤 [FB ${validType} url payload send]:`, JSON.stringify(data));
+    return data;
   } catch (e) {
     console.error(`FB ${validType} Send Error:`, e.message);
     return null;
@@ -2038,10 +2170,11 @@ app.post('/webhook/meta', (req, res) => {
             if (!incomingText && !userSentAudio && !userSentImage && !userSentVideo) continue;
 
             // ==========================================
-            // 🎙️ কাস্টমারের ভয়েস অডিও ডাউনলোড ও প্রসেসিং
+            // 🎙️ কাস্টমারের ভয়েস অডিও ডাউনলোড ও ট্রান্সক্রিপশন
             // ==========================================
             let incomingAudioBuffer = null;
             let audioMimeType = "audio/mp4";
+            let customerVoiceTranscription = "";
             if (userSentAudio) {
               const audioAttachment = message.attachments.find(a => a.type === 'audio');
               if (audioAttachment?.payload?.url) {
@@ -2053,6 +2186,12 @@ app.post('/webhook/meta', (req, res) => {
                     audioMimeType = (aRes.headers.get("content-type") || "audio/mp4").split(';')[0].trim();
                     if (!audioMimeType.startsWith("audio/")) audioMimeType = "audio/mp4";
                     console.log(`✅ Audio downloaded successfully (${incomingAudioBuffer.length} bytes, ${audioMimeType})`);
+
+                    // 🧠 Gemini 3.8 Flash দিয়ে সাথে সাথে বাংলা ভয়েস ট্রান্সক্রাইব করা
+                    customerVoiceTranscription = await transcribeAudioBuffer(incomingAudioBuffer, audioMimeType);
+                    if (customerVoiceTranscription) {
+                      console.log(`🗣️ [Customer Spoken Words Transcribed]: "${customerVoiceTranscription}"`);
+                    }
                   }
                 } catch (dlErr) {
                   console.error("Error downloading customer audio:", dlErr.message);
@@ -2136,10 +2275,10 @@ app.post('/webhook/meta', (req, res) => {
             }
 
             let userPromptText = incomingText ? incomingText.trim() : "";
-            if (userSentAudio) {
-              userPromptText = userPromptText
-                ? `The customer sent a voice note with caption: "${userPromptText}". LISTEN CAREFULLY to their voice audio. Understand their spoken inquiry in Bengali/Banglish and reply directly to what they asked in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog. If they ask about a product, mention name, exact price, link, and how to order. If they provide phone number (01XXXXXXXXX) and address, confirm the order immediately.`
-                : "The customer sent a voice note. LISTEN CAREFULLY to their voice audio. Understand their spoken inquiry in Bengali/Banglish and answer their question directly based on our Ranonex store catalog in pure Bengali script (বাংলা লিপি). If they ask about a product, state its name, exact price, link, and how to order. If they provide order details (Phone 01XXXXXXXXX, Address), confirm the order immediately.";
+            if (customerVoiceTranscription) {
+              userPromptText = customerVoiceTranscription;
+            } else if (userSentAudio) {
+              userPromptText = "The customer sent an audio voice note on Messenger. Greet them warmly in Bengali script and ask how we can help with Ranonex products.";
             } else if (userSentVideo) {
               userPromptText = userPromptText
                 ? `The customer sent a product video with caption: "${userPromptText}". WATCH AND ANALYZE THIS VIDEO CAREFULLY. Match the product shown with our Ranonex store catalog. State its exact name, price, key features, and product link in pure Bengali script (বাংলা লিপি), answer their caption, and ask if they want to order it.`
@@ -2164,9 +2303,11 @@ app.post('/webhook/meta', (req, res) => {
             }
 
             totalMessagesHandled++;
-            console.log(`📩 [Messenger from ${senderId}]: ${incomingText || (userSentAudio ? "[Voice Note]" : (userSentVideo ? "[Product Video]" : "[Product Screenshot]"))}`);
+            console.log(`📩 [Messenger from ${senderId}]: ${customerVoiceTranscription || incomingText || (userSentAudio ? "[Voice Note]" : (userSentVideo ? "[Product Video]" : "[Product Screenshot]"))}`);
 
-            const customerMsgText = incomingText || (userSentAudio ? "🎙️ [Voice Message]" : (userSentVideo ? "🎥 [Product Video]" : "📷 [Photo]"));
+            const customerMsgText = customerVoiceTranscription
+              ? `🎙️ "${customerVoiceTranscription}"`
+              : (incomingText || (userSentAudio ? "🎙️ [Voice Message]" : (userSentVideo ? "🎥 [Product Video]" : "📷 [Photo]")));
             const msgAttachments = [];
             if (Array.isArray(message?.attachments)) {
               for (const a of message.attachments) {
@@ -2175,13 +2316,13 @@ app.post('/webhook/meta', (req, res) => {
                   let attMime = a.type === 'image' ? imageMimeType : (a.type === 'video' ? videoMimeType : (a.type === 'audio' ? audioMimeType : 'application/octet-stream'));
                   if (a.type === 'audio' && incomingAudioBuffer) {
                     const hosted = storeMediaBuffer(incomingAudioBuffer, audioMimeType);
-                    if (hosted) attUrl = hosted.url;
+                    if (hosted) attUrl = hosted.url || hosted;
                   } else if (a.type === 'image' && incomingImageBuffer) {
                     const hosted = storeMediaBuffer(incomingImageBuffer, imageMimeType);
-                    if (hosted) attUrl = hosted.url;
+                    if (hosted) attUrl = hosted.url || hosted;
                   } else if (a.type === 'video' && incomingVideoBuffer) {
                     const hosted = storeMediaBuffer(incomingVideoBuffer, videoMimeType);
-                    if (hosted) attUrl = hosted.url;
+                    if (hosted) attUrl = hosted.url || hosted;
                   }
                   msgAttachments.push({
                     type: a.type || 'file',
@@ -2215,15 +2356,15 @@ app.post('/webhook/meta', (req, res) => {
               continue;
             }
 
-            const isVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|শুনতে চাই/i.test(incomingText || "");
+            const isVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|শুনতে চাই/i.test(incomingText || customerVoiceTranscription || "");
 
-            // Gemini 3.8 Live কল (WebSocket Session Reuse + Multimodal Image / Video / Audio)
+            // Gemini 3.8 Live কল (ভয়েস ট্রান্সক্রিপশন ইতিমধ্যে টেক্সটে কনভার্ট হওয়ায় audio/mp4 পাঠিয়ে সকেট ক্র্যাশ হবে না)
             const aiDecision = await callGeminiSalesAI(
               userPromptText,
               session.messages,
               session,
-              incomingAudioBuffer,
-              audioMimeType,
+              null,
+              null,
               incomingImageBuffer,
               imageMimeType,
               incomingVideoBuffer,
@@ -2367,9 +2508,14 @@ app.post('/webhook/meta', (req, res) => {
               // ৩. স্মার্ট কনটেক্সচুয়াল কুইক রিপ্লাই বাটন তৈরি
               const quickReplies = buildContextualQuickReplies(session, aiDecision, aiDecision.audio_id);
 
-              // ৪. ইউজার ভয়েস চাইলে সরাসরি অডিও পাঠানো
-              if (isVoiceRequested && aiDecision.audio_url) {
-                await sendFacebookAudio(senderId, aiDecision.audio_url);
+              // ৪. ইউজার ভয়েস চাইলে সরাসরি অডিও পাঠানো (Direct Binary Upload or URL)
+              if (isVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) {
+                const aItem = aiDecision.audio_id ? audioCache.get(aiDecision.audio_id) : null;
+                const audioToSend = aItem?.buffer || aiDecision.audio_url;
+                if (audioToSend) {
+                  console.log(`🎙️ [Sending Facebook Voice Response to ${senderId}] (${aItem?.buffer ? aItem.buffer.length + ' bytes WAV Buffer' : 'URL'})`);
+                  await sendFacebookAudio(senderId, audioToSend);
+                }
               }
 
               // ৫. টেক্সট মেসেজ পাঠানো
@@ -2400,10 +2546,10 @@ app.post('/webhook/meta', (req, res) => {
                 sender_type: "assistant",
                 sender_name: "Ranonex AI Assistant",
                 message_text: aiDecision.reply,
-                media_type: (isVoiceRequested && aiDecision.audio_url) ? "audio" : null,
+                media_type: (isVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) ? "audio" : null,
                 media_url: (isVoiceRequested && aiDecision.audio_url) ? aiDecision.audio_url : null,
-                media_mime: (isVoiceRequested && aiDecision.audio_url) ? "audio/wav" : null,
-                attachments: (isVoiceRequested && aiDecision.audio_url) ? [{ type: "audio", url: aiDecision.audio_url, mime_type: "audio/wav" }] : [],
+                media_mime: (isVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) ? "audio/wav" : null,
+                attachments: (isVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) ? [{ type: "audio", url: aiDecision.audio_url || '', mime_type: "audio/wav" }] : [],
                 timestamp: new Date().toISOString()
               });
             }
@@ -2550,6 +2696,7 @@ const waState = {
   qrDataUrl: null,
   qrUpdatedAt: 0,
   phone: null,
+  lid: null,
   name: null,
   jid: null,
   lastError: null
@@ -2558,6 +2705,20 @@ const waState = {
 let waSocket = null;
 let waStartingLock = false;
 let waReconnectTimer = null;
+const botSentWaMsgIds = new Set();
+const processedWaMsgIds = new Set();
+
+function trackBotSentWaMsg(res) {
+  const id = res?.key?.id;
+  if (id) {
+    botSentWaMsgIds.add(id);
+    if (botSentWaMsgIds.size > 500) {
+      const oldest = botSentWaMsgIds.values().next().value;
+      botSentWaMsgIds.delete(oldest);
+    }
+  }
+  return res;
+}
 
 /**
  * 🔒 STRICT PERSONAL-CHAT-ONLY FILTER FOR WHATSAPP
@@ -2599,7 +2760,8 @@ async function sendWhatsAppTextMessage(targetJidOrPhone, text) {
     throw new Error("WhatsApp বর্তমানে কানেক্টেড নেই। অনুগ্রহ করে প্রথমে QR স্ক্যান করে WhatsApp কানেক্ট করুন।");
   }
   const jid = resolvePersonalWhatsAppJid(targetJidOrPhone);
-  return await waSocket.sendMessage(jid, { text: String(text || '').trim() });
+  const sent = await waSocket.sendMessage(jid, { text: String(text || '').trim() });
+  return trackBotSentWaMsg(sent);
 }
 
 async function sendWhatsAppMediaMessage(targetJidOrPhone, { text, mediaBuffer, mediaType, mediaMime }) {
@@ -2612,37 +2774,45 @@ async function sendWhatsAppMediaMessage(targetJidOrPhone, { text, mediaBuffer, m
   if (mediaBuffer && Buffer.isBuffer(mediaBuffer) && mediaBuffer.length > 0) {
     const t = String(mediaType || '').toLowerCase();
     if (t === 'image') {
-      return await waSocket.sendMessage(jid, {
+      const sent = await waSocket.sendMessage(jid, {
         image: mediaBuffer,
         mimetype: mediaMime || 'image/jpeg',
         caption: cleanText || undefined
       });
+      return trackBotSentWaMsg(sent);
     } else if (t === 'video') {
-      return await waSocket.sendMessage(jid, {
+      const sent = await waSocket.sendMessage(jid, {
         video: mediaBuffer,
         mimetype: mediaMime || 'video/mp4',
         caption: cleanText || undefined
       });
+      return trackBotSentWaMsg(sent);
     } else if (t === 'audio') {
       const audioRes = await waSocket.sendMessage(jid, {
         audio: mediaBuffer,
         mimetype: mediaMime || 'audio/wav',
         ptt: false
       });
+      trackBotSentWaMsg(audioRes);
       if (cleanText) {
-        await waSocket.sendMessage(jid, { text: cleanText });
+        const txtRes = await waSocket.sendMessage(jid, { text: cleanText });
+        trackBotSentWaMsg(txtRes);
       }
       return audioRes;
     }
   }
   if (cleanText) {
-    return await waSocket.sendMessage(jid, { text: cleanText });
+    const sent = await waSocket.sendMessage(jid, { text: cleanText });
+    return trackBotSentWaMsg(sent);
   }
   return null;
 }
 
 async function startWhatsAppClient(forceReset = false) {
   if (waStartingLock) return waState;
+  if (!forceReset && waSocket && (waState.status === 'connected' || waState.status === 'connecting' || waState.status === 'qr_ready')) {
+    return waState;
+  }
   waStartingLock = true;
 
   try {
@@ -2653,9 +2823,10 @@ async function startWhatsAppClient(forceReset = false) {
 
     if (forceReset) {
       if (waSocket) {
-        try { waSocket.ev.removeAllListeners(); } catch (e) {}
-        try { waSocket.end(undefined); } catch (e) {}
+        const oldSock = waSocket;
         waSocket = null;
+        try { oldSock.ev.removeAllListeners(); } catch (e) {}
+        try { oldSock.end(undefined); } catch (e) {}
       }
       try {
         if (fs.existsSync(WA_AUTH_DIR)) {
@@ -2664,15 +2835,11 @@ async function startWhatsAppClient(forceReset = false) {
       } catch (e) {}
     }
 
-    if (waSocket && waState.status === 'connected' && !forceReset) {
-      waStartingLock = false;
-      return waState;
-    }
-
     if (waSocket) {
-      try { waSocket.ev.removeAllListeners(); } catch (e) {}
-      try { waSocket.end(undefined); } catch (e) {}
+      const oldSock = waSocket;
       waSocket = null;
+      try { oldSock.ev.removeAllListeners(); } catch (e) {}
+      try { oldSock.end(undefined); } catch (e) {}
     }
 
     waState.status = 'connecting';
@@ -2685,10 +2852,12 @@ async function startWhatsAppClient(forceReset = false) {
     const baileys = await import('@whiskeysockets/baileys');
     const makeWASocket = baileys.default?.default || baileys.default || baileys.makeWASocket;
     const useMultiFileAuthState = baileys.useMultiFileAuthState || baileys.default?.useMultiFileAuthState;
+    const makeCacheableSignalKeyStore = baileys.makeCacheableSignalKeyStore || baileys.default?.makeCacheableSignalKeyStore;
     const fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion || baileys.default?.fetchLatestBaileysVersion;
     const DisconnectReason = baileys.DisconnectReason || baileys.default?.DisconnectReason || {};
     const downloadMediaMessage = baileys.downloadMediaMessage || baileys.default?.downloadMediaMessage;
 
+    const silentLogger = pino({ level: 'silent' });
     const { state, saveCreds } = await useMultiFileAuthState(WA_AUTH_DIR);
     let version = [2, 3000, 1015901307];
     try {
@@ -2698,18 +2867,25 @@ async function startWhatsAppClient(forceReset = false) {
 
     const sock = makeWASocket({
       version,
-      auth: state,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore ? makeCacheableSignalKeyStore(state.keys, silentLogger) : state.keys
+      },
       printQRInTerminal: false,
-      logger: pino({ level: 'silent' }),
+      logger: silentLogger,
       browser: ['Ranonex SocialAutomate', 'Chrome', '122.0.0'],
       syncFullHistory: false,
-      markOnlineOnConnect: false
+      markOnlineOnConnect: false,
+      defaultQueryTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000,
+      retryRequestDelayMs: 500
     });
 
     waSocket = sock;
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
+      if (sock !== waSocket) return;
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
@@ -2725,16 +2901,19 @@ async function startWhatsAppClient(forceReset = false) {
       }
 
       if (connection === 'open') {
-        const userJid = sock.user?.id || '';
+        const userJid = sock.user?.id || state.creds?.me?.id || '';
+        const userLid = sock.user?.lid || state.creds?.me?.lid || '';
         const cleanNumber = userJid.split(':')[0].split('@')[0].replace(/\D/g, '');
+        const cleanLid = userLid.split(':')[0].split('@')[0].replace(/\D/g, '');
         waState.status = 'connected';
         waState.qrRaw = null;
         waState.qrDataUrl = null;
         waState.jid = userJid;
         waState.phone = cleanNumber || null;
-        waState.name = sock.user?.name || 'Ranonex WhatsApp';
+        waState.lid = cleanLid || null;
+        waState.name = sock.user?.name || state.creds?.me?.name || 'Ranonex WhatsApp';
         waState.lastError = null;
-        console.log(`✅ [WhatsApp Connected]: +${waState.phone} (${waState.name})`);
+        console.log(`✅ [WhatsApp Connected]: +${waState.phone} (${waState.name}) [LID: ${waState.lid || 'N/A'}]`);
       }
 
       if (connection === 'close') {
@@ -2748,6 +2927,7 @@ async function startWhatsAppClient(forceReset = false) {
           waState.qrRaw = null;
           waState.qrDataUrl = null;
           waState.phone = null;
+          waState.lid = null;
           waState.name = null;
           waState.jid = null;
           try {
@@ -2768,23 +2948,54 @@ async function startWhatsAppClient(forceReset = false) {
     // 📩 WHATSAPP INCOMING MESSAGES (STRICT PERSONAL CHATS ONLY)
     // ==========================================
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type !== 'notify' || !Array.isArray(messages)) return;
+      if (sock !== waSocket) return;
+      if ((type !== 'notify' && type !== 'append') || !Array.isArray(messages)) return;
 
       for (const msg of messages) {
         try {
-          if (!msg || !msg.message || msg.key?.fromMe) continue;
+          if (!msg) continue;
 
           const remoteJid = msg.key?.remoteJid || '';
           // 🔒 STRICT FILTER: শুধুমাত্র Personal 1-on-1 চ্যাট অনুমোদিত। Group (@g.us), Channel (@newsletter), Status ব্লকড!
-          if (!isPersonalWhatsAppJid(remoteJid) || msg.key?.participant) {
-            console.log(`🚫 [WhatsApp Ignored Non-Personal / Group / Channel Message]: ${remoteJid}`);
+          if (!isPersonalWhatsAppJid(remoteJid)) {
+            if (remoteJid) {
+              console.log(`🚫 [WhatsApp Ignored Non-Personal / Group / Channel Message]: ${remoteJid}`);
+            }
             continue;
           }
 
-          // আনর‍্যাপ মেসেজ অবজেক্ট (ephemeral / viewOnce থাকলে)
-          const innerMsg = msg.message.ephemeralMessage?.message
+          // যদি কোনো কারণে Signal Session ডিক্রিপ্ট ব্যর্থ হয় (CIPHERTEXT / Bad MAC), করাপ্টেড সেশন ফাইল রিসেট করা যাতে অটো-রিট্রাই সফল হয়
+          if (!msg.message) {
+            if (msg.messageStubType === 2) {
+              const stubReason = (msg.messageStubParameters || []).join(', ');
+              console.warn(`⚠️ [WhatsApp Ciphertext / Retry Pending] from ${remoteJid}: ${stubReason}`);
+              if (/bad mac|no matching sessions|invalid prekey/i.test(stubReason)) {
+                const corruptedUser = remoteJid.split('@')[0].split(':')[0];
+                try {
+                  await state.keys.set({ session: { [`${corruptedUser}.0`]: null, [`${corruptedUser}.1`]: null } });
+                } catch (e) {}
+              }
+            }
+            continue;
+          }
+
+          const msgId = msg.key?.id || '';
+          if (msgId && botSentWaMsgIds.has(msgId)) continue;
+          if (msgId && processedWaMsgIds.has(msgId)) continue;
+
+          // append টাইপের মেসেজের ক্ষেত্রে ১০ মিনিটের বেশি পুরনো হিস্ট্রি স্কিপ করা
+          const rawTs = msg.messageTimestamp;
+          const msgTsSec = typeof rawTs === 'number' ? rawTs : (rawTs?.low || Number(rawTs) || 0);
+          if (type === 'append' && msgTsSec > 0 && (Math.floor(Date.now() / 1000) - msgTsSec > 600)) {
+            continue;
+          }
+
+          // আনর‍্যাপ মেসেজ অবজেক্ট (deviceSent / ephemeral / viewOnce থাকলে)
+          const innerMsg = msg.message.deviceSentMessage?.message
+            || msg.message.ephemeralMessage?.message
             || msg.message.viewOnceMessage?.message
             || msg.message.viewOnceMessageV2?.message
+            || msg.message.documentWithCaptionMessage?.message
             || msg.message;
 
           const incomingText = (
@@ -2792,6 +3003,7 @@ async function startWhatsAppClient(forceReset = false) {
             innerMsg.extendedTextMessage?.text ||
             innerMsg.imageMessage?.caption ||
             innerMsg.videoMessage?.caption ||
+            innerMsg.documentMessage?.caption ||
             ""
           ).trim();
 
@@ -2801,15 +3013,34 @@ async function startWhatsAppClient(forceReset = false) {
 
           if (!incomingText && !userSentAudio && !userSentImage && !userSentVideo) continue;
 
-          const cleanPhone = remoteJid.split('@')[0].split(':')[0].replace(/\D/g, '');
-          const chatId = `wa_${cleanPhone || remoteJid}`;
-          const pushName = msg.pushName || `WhatsApp (${cleanPhone || remoteJid})`;
+          if (msgId) {
+            processedWaMsgIds.add(msgId);
+            if (processedWaMsgIds.size > 1000) {
+              const oldest = processedWaMsgIds.values().next().value;
+              processedWaMsgIds.delete(oldest);
+            }
+          }
+
+          const altJid = msg.key?.senderPn || msg.key?.remoteJidAlt || '';
+          const preferredJid = altJid.endsWith('@s.whatsapp.net') ? altJid : remoteJid;
+          const cleanPhone = preferredJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+          const rawRemoteUser = remoteJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+
+          const isSelfChat = Boolean(
+            (waState.phone && (cleanPhone === waState.phone || rawRemoteUser === waState.phone)) ||
+            (waState.lid && (rawRemoteUser === waState.lid || cleanPhone === waState.lid))
+          );
+
+          const chatId = `wa_${cleanPhone || rawRemoteUser || remoteJid}`;
+          const pushName = (msg.key?.fromMe && !isSelfChat)
+            ? `WhatsApp (${cleanPhone || rawRemoteUser})`
+            : (msg.pushName || (isSelfChat ? `${waState.name || 'Self'} (Test Chat)` : `WhatsApp (${cleanPhone || rawRemoteUser})`));
 
           let session = memorySessions.get(chatId);
           if (!session) {
             session = {
               chat_id: chatId,
-              sender_id: cleanPhone || remoteJid,
+              sender_id: cleanPhone || rawRemoteUser || remoteJid,
               wa_jid: remoteJid,
               sender_name: pushName,
               platform: "whatsapp",
@@ -2821,9 +3052,11 @@ async function startWhatsAppClient(forceReset = false) {
             };
           }
           session.chat_id = chatId;
-          session.sender_id = cleanPhone || remoteJid;
+          session.sender_id = cleanPhone || rawRemoteUser || remoteJid;
           session.wa_jid = remoteJid;
-          session.sender_name = pushName;
+          if (!msg.key?.fromMe || isSelfChat || !session.sender_name) {
+            session.sender_name = pushName;
+          }
           session.platform = "whatsapp";
           session.channel_type = "whatsapp";
           if (!Array.isArray(session.discussed_products)) session.discussed_products = [];
@@ -2831,6 +3064,7 @@ async function startWhatsAppClient(forceReset = false) {
           // মাল্টিমোডাল মিডিয়া ডাউনলোড (ভয়েস / ছবি / ভিডিও) — Admin Takeover থাকলেও ইনবক্সে দেখানোর জন্য প্রথমেই ডাউনলোড করা হচ্ছে
           let incomingAudioBuffer = null;
           let audioMimeType = "audio/ogg; codecs=opus";
+          let customerVoiceTranscription = "";
           let incomingImageBuffer = null;
           let imageMimeType = "image/jpeg";
           let incomingVideoBuffer = null;
@@ -2843,7 +3077,7 @@ async function startWhatsAppClient(forceReset = false) {
                 msg,
                 'buffer',
                 {},
-                { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage }
+                { logger: silentLogger, reuploadRequest: sock.updateMediaMessage }
               );
               if (mediaBuf && mediaBuf.length > 0) {
                 if (userSentAudio) {
@@ -2851,6 +3085,16 @@ async function startWhatsAppClient(forceReset = false) {
                   audioMimeType = (innerMsg.audioMessage?.mimetype || "audio/ogg").split(';')[0].trim();
                   const stored = storeMediaBuffer(incomingAudioBuffer, audioMimeType);
                   if (stored) hostedWaMedia = { type: 'audio', url: stored.url, mime_type: audioMimeType };
+                  try {
+                    console.log(`🎙️ [WhatsApp Voice Note Detected]: Transcribing ${incomingAudioBuffer.length} bytes...`);
+                    customerVoiceTranscription = await transcribeAudioBuffer(incomingAudioBuffer, audioMimeType);
+                    if (customerVoiceTranscription) {
+                      incomingText = customerVoiceTranscription;
+                      console.log(`🎙️ [WhatsApp Transcribed Bengali]: "${customerVoiceTranscription}"`);
+                    }
+                  } catch (tErr) {
+                    console.error("WhatsApp audio transcription error:", tErr.message);
+                  }
                 } else if (userSentImage) {
                   incomingImageBuffer = Buffer.from(mediaBuf);
                   imageMimeType = (innerMsg.imageMessage?.mimetype || "image/jpeg").split(';')[0].trim();
@@ -2868,9 +3112,32 @@ async function startWhatsAppClient(forceReset = false) {
             }
           }
 
-          const displayMsgText = incomingText || (userSentAudio ? "🎙️ [Voice Note]" : (userSentVideo ? "🎥 [Video]" : "📷 [Photo]"));
+          const displayMsgText = incomingText
+            ? (customerVoiceTranscription ? `🎙️ [ভয়েস মেসেজ]: "${customerVoiceTranscription}"` : incomingText)
+            : (userSentAudio ? "🎙️ [ভয়েস মেসেজ]" : (userSentVideo ? "🎥 [Video]" : "📷 [Photo]"));
+
+          // 📱 যদি অ্যাডমিন নিজের ফোনের WhatsApp অ্যাপ থেকে অন্য কারো পার্সোনাল চ্যাটে মেসেজ পাঠান, তবে সেটি ড্যাশবোর্ডে দেখানোর জন্য সেভ করা
+          if (msg.key?.fromMe && !isSelfChat) {
+            session.messages.push({
+              id: msgId || `wa_admin_${Date.now()}`,
+              sender_type: "admin",
+              sender_name: waState.name || "Admin",
+              message_text: displayMsgText,
+              media_type: hostedWaMedia ? hostedWaMedia.type : null,
+              media_url: hostedWaMedia ? hostedWaMedia.url : null,
+              media_mime: hostedWaMedia ? hostedWaMedia.mime_type : null,
+              attachments: hostedWaMedia ? [hostedWaMedia] : [],
+              timestamp: new Date().toISOString()
+            });
+            session.last_message = displayMsgText;
+            session.last_message_at = new Date().toISOString();
+            saveSession(chatId, session);
+            console.log(`📤 [WhatsApp Mobile Outbound synced to Inbox (${chatId})]: ${displayMsgText}`);
+            continue;
+          }
+
           session.messages.push({
-            id: msg.key?.id || `wa_${Date.now()}`,
+            id: msgId || `wa_${Date.now()}`,
             sender_type: "customer",
             sender_name: pushName,
             message_text: displayMsgText,
@@ -2886,7 +3153,7 @@ async function startWhatsAppClient(forceReset = false) {
           saveSession(chatId, session);
 
           totalMessagesHandled++;
-          console.log(`📩 [WhatsApp Personal from ${pushName} (${cleanPhone})]: ${displayMsgText}`);
+          console.log(`📩 [WhatsApp Personal from ${pushName} (${cleanPhone || remoteJid})]: ${displayMsgText}`);
 
           // 👨‍💻 যদি Admin Takeover চালু থাকে, তবে AI অটো-রিপ্লাই দিবে না
           if (session.admin_takeover) {
@@ -2908,10 +3175,10 @@ async function startWhatsAppClient(forceReset = false) {
           }
 
           let userPromptText = incomingText;
-          if (userSentAudio) {
-            userPromptText = userPromptText
-              ? `The customer sent a WhatsApp voice note with text: "${userPromptText}". LISTEN CAREFULLY to their voice audio and reply in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog.`
-              : "The customer sent a WhatsApp voice note. LISTEN CAREFULLY to their voice audio and answer their question in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog.";
+          if (customerVoiceTranscription) {
+            userPromptText = `The customer sent a WhatsApp voice note. They said in Bengali: "${customerVoiceTranscription}". Reply directly to what they said in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog.`;
+          } else if (userSentAudio) {
+            userPromptText = "The customer sent a WhatsApp voice note. Greet them warmly and answer in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog.";
           } else if (userSentImage) {
             userPromptText = userPromptText
               ? `The customer sent a product photo on WhatsApp with caption: "${userPromptText}". Match it with our Ranonex store catalog, state its exact name and price in pure Bengali script (বাংলা লিপি), and ask if they want to order.`
@@ -2924,8 +3191,8 @@ async function startWhatsAppClient(forceReset = false) {
             userPromptText,
             session.messages,
             session,
-            incomingAudioBuffer,
-            audioMimeType,
+            null, // incomingAudioBuffer null pass করা হচ্ছে যেন Live WebSocket 1008 এরর না দেয়
+            null,
             incomingImageBuffer,
             imageMimeType,
             incomingVideoBuffer,
@@ -2967,7 +3234,7 @@ async function startWhatsAppClient(forceReset = false) {
                 if ((!customerName || customerName === "Customer") && parsed.name) customerName = parsed.name;
               }
               // যদি কাস্টমারের হোয়াটসঅ্যাপ নম্বর ১১-১৩ ডিজিটের বাংলাদেশি নম্বর হয়, সেটি ফলব্যাক হিসেবে ব্যবহার করা
-              if ((!customerPhone || customerPhone.length < 11) && cleanPhone.length >= 11) {
+              if ((!customerPhone || customerPhone.length < 11) && cleanPhone.length >= 11 && cleanPhone.length <= 13) {
                 customerPhone = cleanPhone.startsWith('8801') ? cleanPhone.slice(2) : cleanPhone;
               }
               if (!customerName || customerName === "Customer") customerName = pushName;
@@ -3014,13 +3281,38 @@ async function startWhatsAppClient(forceReset = false) {
               aiDecision.reply = aiDecision.reply.trim() + `\n\n🔗 ${orderUrl}`;
             }
 
-            await sock.sendMessage(remoteJid, { text: aiDecision.reply });
+            const sentAiMsg = await sock.sendMessage(remoteJid, { text: aiDecision.reply });
+            trackBotSentWaMsg(sentAiMsg);
+
+            // 🎙️ যদি কাস্টমার ভয়েস নোট পাঠিয়ে থাকেন বা ভয়েস চান, তবে লাইভ ভয়েস রিপ্লাই পাঠানো
+            const isWaVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|কথা বল/i.test(incomingText || customerVoiceTranscription || "");
+            let sentWaVoiceMsg = null;
+            if (isWaVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) {
+              const aItem = aiDecision.audio_id ? audioCache.get(aiDecision.audio_id) : null;
+              if (aItem?.buffer) {
+                try {
+                  console.log(`🎙️ [Sending WhatsApp Voice Reply to ${cleanPhone || remoteJid}] (${aItem.buffer.length} bytes WAV/PTT)`);
+                  sentWaVoiceMsg = await sock.sendMessage(remoteJid, {
+                    audio: aItem.buffer,
+                    mimetype: 'audio/wav',
+                    ptt: true
+                  });
+                  trackBotSentWaMsg(sentWaVoiceMsg);
+                } catch (vErr) {
+                  console.error("Failed to send WhatsApp PTT voice reply:", vErr.message);
+                }
+              }
+            }
 
             session.messages.push({
-              id: `ai_wa_${Date.now()}`,
+              id: sentAiMsg?.key?.id || `ai_wa_${Date.now()}`,
               sender_type: "assistant",
               sender_name: "Ranonex AI Assistant",
               message_text: aiDecision.reply,
+              media_type: sentWaVoiceMsg ? "audio" : null,
+              media_url: aiDecision.audio_url || null,
+              media_mime: sentWaVoiceMsg ? "audio/wav" : null,
+              attachments: (sentWaVoiceMsg && aiDecision.audio_url) ? [{ type: "audio", url: aiDecision.audio_url, mime_type: "audio/wav" }] : [],
               timestamp: new Date().toISOString()
             });
             saveSession(chatId, session);
@@ -3064,15 +3356,13 @@ async function startWhatsAppClient(forceReset = false) {
 }
 
 // সার্ভার চালুর সাথে সাথে WhatsApp সেশন ইনিশিয়ালাইজ করা
-setTimeout(() => {
-  startWhatsAppClient(false).catch(err => console.error("Initial WhatsApp boot error:", err.message));
-}, 1000);
+startWhatsAppClient(false).catch(err => console.error("Initial WhatsApp boot error:", err.message));
 
 // ==========================================
 // 📱 WHATSAPP QR & CONNECTION API ENDPOINTS
 // ==========================================
 app.get(['/api/whatsapp/status', '/api/whatsapp/qr'], async (req, res) => {
-  if (waState.status === 'disconnected' && !waStartingLock && req.query.auto !== 'false') {
+  if (waState.status === 'disconnected' && !waStartingLock && !waSocket && !waReconnectTimer && req.query.auto !== 'false') {
     startWhatsAppClient(false).catch(() => {});
   }
   res.json({
@@ -3105,10 +3395,11 @@ app.post('/api/whatsapp/connect', async (req, res) => {
 app.post('/api/whatsapp/logout', async (req, res) => {
   try {
     if (waSocket) {
-      try { await waSocket.logout(); } catch (e) {}
-      try { waSocket.ev.removeAllListeners(); } catch (e) {}
-      try { waSocket.end(undefined); } catch (e) {}
+      const oldSock = waSocket;
       waSocket = null;
+      try { await oldSock.logout(); } catch (e) {}
+      try { oldSock.ev.removeAllListeners(); } catch (e) {}
+      try { oldSock.end(undefined); } catch (e) {}
     }
     if (fs.existsSync(WA_AUTH_DIR)) {
       fs.rmSync(WA_AUTH_DIR, { recursive: true, force: true });
@@ -3117,6 +3408,7 @@ app.post('/api/whatsapp/logout', async (req, res) => {
     waState.qrRaw = null;
     waState.qrDataUrl = null;
     waState.phone = null;
+    waState.lid = null;
     waState.name = null;
     waState.jid = null;
     // নতুন QR সেশন শুরু করা যাতে অ্যাডমিন সাথে সাথে আবার স্ক্যান করতে পারে
@@ -3244,12 +3536,16 @@ async function fetchLiveFacebookConversations(force = false) {
             channel_type: 'messenger',
             unread_count: Number(conv.unread_count || 0),
             admin_takeover: false,
+            paging_after: conv.messages?.paging?.cursors?.after || null,
+            has_more: typeof conv.messages?.paging?.next !== 'undefined' ? Boolean(conv.messages?.paging?.next) : true,
             messages: fbMessages,
             discussed_products: []
           };
         } else {
           existing.thread_id = conv.id;
           existing.sender_id = senderId;
+          existing.paging_after = conv.messages?.paging?.cursors?.after || existing.paging_after || null;
+          existing.has_more = typeof conv.messages?.paging?.next !== 'undefined' ? Boolean(conv.messages?.paging?.next) : (existing.has_more !== false);
           if (senderName && !senderName.startsWith('Facebook User')) {
             existing.sender_name = senderName;
           }
@@ -3377,6 +3673,78 @@ app.get('/api/conversations/:id', async (req, res) => {
   res.json(session);
 });
 
+// 📜 পূর্ববর্তী পুরানো মেসেজ ফেচ করার এন্ডপয়েন্ট (Cursor-based Pagination)
+app.get('/api/conversations/:id/older', async (req, res) => {
+  const id = req.params.id;
+  const cursor = req.query.after || req.query.cursor || '';
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 5), 50);
+
+  const session = memorySessions.get(id) || memorySessions.get(`fb_${id}`) || memorySessions.get(`wa_${id}`);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+
+  if (session.platform === 'whatsapp' || String(id).startsWith('wa_')) {
+    return res.json({ messages: [], has_more: false, cursor: null });
+  }
+
+  const threadId = session.thread_id;
+  if (!threadId || !CONFIG.metaPageAccessToken) {
+    return res.json({ messages: [], has_more: false, cursor: null });
+  }
+
+  try {
+    const fields = 'id,message,from,created_time,attachments{id,mime_type,name,file_url,image_data,video_data}';
+    let url = `https://graph.facebook.com/v19.0/${encodeURIComponent(threadId)}/messages?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${encodeURIComponent(CONFIG.metaPageAccessToken)}`;
+    if (cursor) {
+      url += `&after=${encodeURIComponent(cursor)}`;
+    }
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.error("Failed to fetch older Facebook messages:", errText);
+      return res.status(resp.status).json({ error: "Failed to fetch older messages from Facebook" });
+    }
+    const data = await resp.json();
+    const rawMsgs = Array.isArray(data?.data) ? [...data.data].reverse() : [];
+    const olderMessages = rawMsgs.map(m => {
+      const isPage = String(m.from?.id) === String(CONFIG.metaPageId);
+      const atts = parseGraphMessageAttachments(m);
+      const primaryAtt = atts[0] || null;
+      let text = String(m.message || '').trim();
+      if (!text && primaryAtt) {
+        text = primaryAtt.type === 'image' ? '📷 [Photo]'
+          : (primaryAtt.type === 'video' ? '🎥 [Video]'
+          : (primaryAtt.type === 'audio' ? '🎙️ [Voice Audio]' : '📎 [Attachment]'));
+      }
+      return {
+        id: m.id,
+        sender_type: isPage ? 'assistant' : 'customer',
+        sender_name: isPage ? 'Ranonex' : (m.from?.name || session.sender_name),
+        message_text: text,
+        media_type: primaryAtt ? primaryAtt.type : null,
+        media_url: primaryAtt ? primaryAtt.url : null,
+        media_mime: primaryAtt ? primaryAtt.mime_type : null,
+        attachments: atts,
+        timestamp: m.created_time || new Date().toISOString()
+      };
+    }).filter(m => m.message_text || (m.attachments && m.attachments.length > 0));
+
+    const nextCursor = data?.paging?.cursors?.after || null;
+    const hasMore = Boolean(data?.paging?.next);
+
+    session.paging_after = nextCursor;
+    session.has_more = hasMore;
+
+    res.json({
+      messages: olderMessages,
+      cursor: nextCursor,
+      has_more: hasMore
+    });
+  } catch (err) {
+    console.error("Error fetching older messages:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/messages', async (req, res) => {
   const chatId = req.query.chat_id || req.query.id || '';
   if (!String(chatId).startsWith('wa_')) {
@@ -3391,6 +3759,8 @@ app.get('/api/messages', async (req, res) => {
     sender_name: session.sender_name,
     platform: session.platform || 'facebook',
     admin_takeover: Boolean(session.admin_takeover),
+    paging_after: session.paging_after || null,
+    has_more: session.has_more !== false,
     messages: session.messages || []
   });
 });
@@ -3511,8 +3881,8 @@ app.post(['/api/send-reply', '/api/messages/send', '/api/admin-reply'], async (r
       }
     } else {
       const targetFbId = String(session.sender_id || rawChatId).replace(/^fb_/, '');
-      if (hostedMediaUrl && mediaType) {
-        sendResult = await sendFacebookAttachment(targetFbId, mediaType, hostedMediaUrl);
+      if (mediaType && (mediaBuffer || hostedMediaUrl)) {
+        sendResult = await sendFacebookAttachment(targetFbId, mediaType, mediaBuffer || hostedMediaUrl, mediaMime);
       }
       if (text) {
         sendResult = await sendFacebookMessage(targetFbId, text);
@@ -3891,9 +4261,9 @@ Output ONLY the final Facebook post caption, ready to publish. No conversational
   }
 });
 
-// ৯. সার্ভার চালু
+// ৯. সার্ভার চালু (Universal Hosting Compatible: cPanel, hPanel, Alwaysdata, VPS, Localhost)
 const PORT = process.env.PORT || CONFIG.port || 8100;
-const HOST = process.env.IP || '::';
+const HOST = process.env.HOST || process.env.IP || '0.0.0.0';
 app.listen(PORT, HOST, () => {
   console.log(`====================================================`);
   console.log(`🚀 SocialAutomate Alwaysdata Server is ONLINE!`);

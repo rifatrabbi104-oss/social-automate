@@ -816,6 +816,8 @@
           ...remoteSession,
           id: chatId,
           chat_id: chatId,
+          paging_after: remoteSession.paging_after || (localIdx >= 0 ? allConversations[localIdx].paging_after : null),
+          has_more: typeof remoteSession.has_more !== 'undefined' ? remoteSession.has_more : (localIdx >= 0 ? allConversations[localIdx].has_more : true),
           messages: mergedMsgs
         };
         activeChatSession = updatedSession;
@@ -990,6 +992,68 @@
       if (scrollToBottom || wasNearBottom) {
         box.scrollTop = box.scrollHeight;
       }
+    }
+
+    // 📜 অসীম স্ক্রল: স্ক্রল উপরে গেলে আগের পুরানো মেসেজ ফেচ করা (Infinite Scroll Pagination)
+    let isLoadingOlderMessages = false;
+    const chatMessagesBox = document.getElementById('chat-messages-box');
+    if (chatMessagesBox) {
+      chatMessagesBox.addEventListener('scroll', async () => {
+        if (chatMessagesBox.scrollTop < 60 && !isLoadingOlderMessages && activeChatId && activeChatSession) {
+          const isWa = (activeChatSession.platform || '').toLowerCase() === 'whatsapp' || String(activeChatId).startsWith('wa_');
+          if (isWa) return; // WhatsApp মেসেজ লোকাল সেশনে সংরক্ষিত থাকে
+          if (activeChatSession.has_more === false) return;
+
+          const cursor = activeChatSession.paging_after;
+          isLoadingOlderMessages = true;
+          const prevScrollHeight = chatMessagesBox.scrollHeight;
+
+          let loaderEl = document.getElementById('chat-older-loader');
+          if (!loaderEl) {
+            loaderEl = document.createElement('div');
+            loaderEl.id = 'chat-older-loader';
+            loaderEl.className = 'text-center py-2 text-xs text-indigo-400 flex items-center justify-center gap-2';
+            loaderEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>পূর্ববর্তী মেসেজ লোড হচ্ছে...</span>';
+            chatMessagesBox.prepend(loaderEl);
+          }
+
+          try {
+            const url = `/api/conversations/${encodeURIComponent(activeChatId)}/older?after=${encodeURIComponent(cursor || '')}&limit=20`;
+            const res = await fetch(url);
+            if (res.ok) {
+              const data = await res.json();
+              const older = Array.isArray(data.messages) ? data.messages : [];
+              if (older.length > 0) {
+                const existingIds = new Set((activeChatSession.messages || []).map(m => m.id));
+                const trulyOlder = older.filter(m => !existingIds.has(m.id));
+                if (trulyOlder.length > 0) {
+                  activeChatSession.messages = [...trulyOlder, ...(activeChatSession.messages || [])];
+                  activeChatSession.paging_after = data.cursor || null;
+                  activeChatSession.has_more = Boolean(data.has_more);
+
+                  const localIdx = allConversations.findIndex(c => (c.id || c.chat_id) === activeChatId);
+                  if (localIdx >= 0) {
+                    allConversations[localIdx] = activeChatSession;
+                  }
+                  await saveConversationsToLocalDB(allConversations);
+
+                  renderMessages(activeChatSession.messages, false);
+                  chatMessagesBox.scrollTop = chatMessagesBox.scrollHeight - prevScrollHeight;
+                }
+              }
+              if (!data.has_more || older.length === 0) {
+                activeChatSession.has_more = false;
+              }
+            }
+          } catch (e) {
+            console.error('Error fetching older messages:', e);
+          } finally {
+            isLoadingOlderMessages = false;
+            const loader = document.getElementById('chat-older-loader');
+            if (loader) loader.remove();
+          }
+        }
+      });
     }
 
     // ==========================================
