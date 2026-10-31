@@ -232,10 +232,47 @@ class SmartConcurrencyQueue {
   }
 }
 
-// ডিফল্ট ১০টি সমান্তরাল প্রসেস (2GB - 3GB RAM হোস্টিংয়ের জন্য অপ্টিমাইজড)
-const aiProcessQueue = new SmartConcurrencyQueue(
-  process.env.AI_CONCURRENCY ? parseInt(process.env.AI_CONCURRENCY, 10) : 10
+// ==========================================
+// ⚡ DUAL-LANE SMART CONCURRENCY QUEUE
+// ==========================================
+// ১. ফাস্ট টেক্সট লেন: হালকা টেক্সট মেসেজের জন্য হাই-কনকারেন্সি (ডিফল্ট ২৫ জন সমান্তরাল, র‍্যাম খরচ নেই)
+const textQueue = new SmartConcurrencyQueue(
+  process.env.TEXT_CONCURRENCY ? parseInt(process.env.TEXT_CONCURRENCY, 10) : 25
 );
+
+// ২. হেভি মিডিয়া লেন: ছবি, ভিডিও ও অডিও প্রসেসিংয়ের জন্য অপ্টিমাইজড কনকারেন্সি (ডিফল্ট ৮ জন সমান্তরাল)
+const mediaQueue = new SmartConcurrencyQueue(
+  process.env.MEDIA_CONCURRENCY ? parseInt(process.env.MEDIA_CONCURRENCY, 10) : 8
+);
+
+// সেন্ট্রাল ডুয়েল-লেন কিউ কন্ট্রোলার
+const aiProcessQueue = {
+  textQueue,
+  mediaQueue,
+  get concurrency() { return mediaQueue.concurrency; },
+  set concurrency(val) {
+    mediaQueue.concurrency = Math.max(2, parseInt(val, 10) || 8);
+    textQueue.concurrency = Math.max(15, mediaQueue.concurrency * 3);
+  },
+  add(taskFn, isMedia = false) {
+    return isMedia ? mediaQueue.add(taskFn) : textQueue.add(taskFn);
+  },
+  get stats() {
+    return {
+      running: textQueue.running + mediaQueue.running,
+      pending: textQueue.queue.length + mediaQueue.queue.length,
+      text_running: textQueue.running,
+      text_pending: textQueue.queue.length,
+      text_concurrency: textQueue.concurrency,
+      media_running: mediaQueue.running,
+      media_pending: mediaQueue.queue.length,
+      media_concurrency: mediaQueue.concurrency,
+      concurrency: mediaQueue.concurrency,
+      peak_pending: textQueue.peakPending + mediaQueue.peakPending,
+      total_processed: textQueue.totalProcessed + mediaQueue.totalProcessed
+    };
+  }
+};
 
 function storeMediaBuffer(buffer, mimeType = 'application/octet-stream', req = null) {
   if (!buffer || !Buffer.isBuffer(buffer)) return null;
@@ -1538,8 +1575,8 @@ async function sendTelegramOrderNote(noteText, customer, platform = "Facebook") 
 // 🔵 FACEBOOK GRAPH API OUTBOUND HELPERS
 // ==========================================
 
-// ১. সাধারণ টেক্সট মেসেজ (সাথে কুইক রিপ্লাই বাটন)
-async function sendFacebookMessage(recipientId, text, quickReplies = null) {
+// ১. সাধারণ টেক্সট মেসেজ (সাথে কুইক রিপ্লাই বাটন ও কনটেক্সচুয়াল কোটেড রিপ্লাই)
+async function sendFacebookMessage(recipientId, text, quickReplies = null, replyToMid = null) {
   if (!CONFIG.metaPageAccessToken) return null;
   try {
     const payload = {
@@ -1547,15 +1584,29 @@ async function sendFacebookMessage(recipientId, text, quickReplies = null) {
       messaging_type: "RESPONSE",
       message: { text }
     };
+    if (replyToMid) {
+      payload.message.reply_to = { mid: String(replyToMid) };
+    }
     if (Array.isArray(quickReplies) && quickReplies.length > 0) {
       payload.message.quick_replies = quickReplies;
     }
-    const res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${encodeURIComponent(CONFIG.metaPageAccessToken)}`, {
+    let res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${encodeURIComponent(CONFIG.metaPageAccessToken)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    return await res.json();
+    let data = await res.json();
+    // যদি কোনো কারণে ফেসবুক নির্দিষ্ট reply_to mid রিজেক্ট করে, তাৎক্ষণিক নরমাল মেসেজ হিসেবে সেন্ড করে দেওয়া
+    if (!res.ok && payload.message.reply_to) {
+      delete payload.message.reply_to;
+      res = await fetch(`https://graph.facebook.com/v19.0/me/messages?access_token=${encodeURIComponent(CONFIG.metaPageAccessToken)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      data = await res.json();
+    }
+    return data;
   } catch (e) {
     console.error("FB Send Error:", e.message);
     return null;
@@ -1979,12 +2030,14 @@ app.post('/webhook/meta', (req, res) => {
       for (const entry of (body.entry || [])) {
         if (entry.messaging && Array.isArray(entry.messaging)) {
           for (const event of entry.messaging) {
+            const hasMedia = Boolean(event.message?.attachments && event.message.attachments.some(a => ['audio', 'image', 'video'].includes(a.type)));
             aiProcessQueue.add(async () => {
               try {
                 const senderId = event.sender?.id;
-            const recipientId = event.recipient?.id;
-            const message = event.message;
-            const postback = event.postback;
+                const recipientId = event.recipient?.id;
+                const message = event.message;
+                const postback = event.postback;
+                const incomingMid = message?.mid || null;
 
             if (!senderId || senderId === CONFIG.metaPageId || senderId === '0') return;
             if (message && message.is_echo) return;
@@ -2612,8 +2665,8 @@ app.post('/webhook/meta', (req, res) => {
                 }
               }
 
-              // ৫. টেক্সট মেসেজ পাঠানো
-              await sendFacebookMessage(senderId, aiDecision.reply, quickReplies);
+              // ৫. টেক্সট মেসেজ পাঠানো (কনটেক্সচুয়াল কোটেড রিপ্লাই সহ)
+              await sendFacebookMessage(senderId, aiDecision.reply, quickReplies, incomingMid);
 
               // ৬. 🃏 প্রোডাক্ট কার্ড / ক্যারোসেল অ্যাকশন বাটন (In-App WebView সহ সরাসরি ভিউ ও অর্ডার সুবিধা)
               if (!isOrderConfirmedReply) {
@@ -2705,7 +2758,7 @@ app.post('/webhook/meta', (req, res) => {
               } catch (evErr) {
                 console.error("Error processing queued messenger event:", evErr.message);
               }
-            }).catch(qErr => console.error("Messenger queue task error:", qErr.message));
+            }, hasMedia).catch(qErr => console.error("Messenger queue task error:", qErr.message));
           }
         }
 
@@ -3114,6 +3167,7 @@ async function startWhatsAppClient(forceReset = false) {
           const userSentAudio = Boolean(innerMsg.audioMessage);
           const userSentImage = Boolean(innerMsg.imageMessage);
           const userSentVideo = Boolean(innerMsg.videoMessage);
+          const isWaMedia = Boolean(userSentAudio || userSentImage || userSentVideo);
 
           if (!incomingText && !userSentAudio && !userSentImage && !userSentVideo) continue;
 
@@ -3376,7 +3430,7 @@ async function startWhatsAppClient(forceReset = false) {
               aiDecision.reply = aiDecision.reply.trim() + `\n\n🔗 ${orderUrl}`;
             }
 
-            const sentAiMsg = await sock.sendMessage(remoteJid, { text: aiDecision.reply });
+            const sentAiMsg = await sock.sendMessage(remoteJid, { text: aiDecision.reply }, { quoted: msg });
             trackBotSentWaMsg(sentAiMsg);
 
             // 🎙️ যদি কাস্টমার ভয়েস নোট পাঠিয়ে থাকেন বা ভয়েস চান, তবে লাইভ ভয়েস রিপ্লাই পাঠানো
@@ -3391,7 +3445,7 @@ async function startWhatsAppClient(forceReset = false) {
                     audio: aItem.buffer,
                     mimetype: 'audio/wav',
                     ptt: true
-                  });
+                  }, { quoted: msg });
                   trackBotSentWaMsg(sentWaVoiceMsg);
                 } catch (vErr) {
                   console.error("Failed to send WhatsApp PTT voice reply:", vErr.message);
@@ -3438,7 +3492,7 @@ async function startWhatsAppClient(forceReset = false) {
         } catch (waInnerErr) {
           console.error("Error processing queued WhatsApp message:", waInnerErr.message);
         }
-      }).catch(qErr => console.error("WhatsApp queue task error:", qErr.message));
+      }, isWaMedia).catch(qErr => console.error("WhatsApp queue task error:", qErr.message));
     } catch (waMsgErr) {
       console.error("WhatsApp message handler error:", waMsgErr.message);
     }
