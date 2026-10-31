@@ -493,13 +493,29 @@ function parseOrderDetailsFromText(text) {
 // ==========================================
 // ⚡ বুলেটপ্রুফ অর্ডার অ্যাকশন ও ফার্স্ট-টার্ন ডিটেক্টর
 // ==========================================
-function extractOrderActions(raw, replyText = "", messages = [], activeProduct = null, productsList = []) {
+function extractOrderActions(raw, replyText = "", messages = [], activeProduct = null, productsList = [], incomingText = "") {
   let order_confirmed = false;
   let order_updated = false;
   let order_cancelled = false;
   let order_note = false;
   let order_data = null;
   let note = "";
+
+  const isCustomerOrdering = /(?:অর্ডার\s*(?:করব|করতে\s*চাই|করুন|দিন|নিলাম|নিব|হবে|কনফার্ম|করছি)|অর্ডার\s*নিতে\s*চাই|নিতে\s*চাই|কিনতে\s*চাই|আমি\s*(?:এটা|এইটা|এই\s*প্রোডাক্টটি?)\s*(?:নিব|নেব|নিবো|কিনব)|order\s*(?:now|koro|korbo|korte\s*chai|confirm|please)|buy\s*now|confirm\s*koro|confirm\s*order)/i.test(incomingText || "") || /(?:01[3-9]\d{8})/.test(incomingText || "");
+
+  const isMereInquiry = /(?:আছে|আসে|থাকলে|দেখান|দেখবো|দেখব|দাম\s*কত|মূল্য\s*কত|প্রাইস\s*কত|price\s*koto|dam\s*koto|koto\s*dam|details|বিবরণ|ছবি|ভিডিও|কালার|রং|রঙ|সাইজ|সাইজ\s*কত|size|কি\s*কি\s*আছে|কিভাবে\s*পাব|ঠিকানা\s*কোথায়|শপ\s*কোথায়|দোকান\s*কোথায়|hello|hi|হাই|হ্যালো|সালাম|আসসালামু)/i.test(incomingText || "") && !/(?:01[3-9]\d{8})/.test(incomingText || "") && !isCustomerOrdering;
+
+  if (isMereInquiry) {
+    // 🛡️ কাস্টমার শুধুই প্রোডাক্ট সম্পর্কে জানতে চেয়েছেন বা প্রশ্ন করেছেন, কোনো অবস্থাতেই অর্ডার কনফার্ম হবে না!
+    return {
+      order_confirmed: false,
+      order_updated: false,
+      order_cancelled: false,
+      order_note: false,
+      order_data: null,
+      note: ""
+    };
+  }
 
   // মেসেজ হিস্ট্রি ও বর্তমান রিপ্লাই থেকে কাস্টমারের দেওয়া ফোন, নাম ও ঠিকানা বের করা
   let foundPhone = "";
@@ -550,7 +566,7 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
   // ২. প্রথম টার্নেই কনফার্মেশন যাচাই (হয়েছে এবং হয়েছে উভয় ইউনিকোড সাপোর্ট সহ)
   const isAlreadyConfirmedReminder = /(?:আগেই|ইতিমধ্যে|ইতিপূর্বে)\s*(?:আপনার\s*)?(?:অর্ডার(?:টি)?\s*)?(?:কনফার্ম|নিশ্চিত)/i.test(replyText);
   const isConfirmSpoken = (orderJsonObj && (orderJsonObj.order_confirmed === true || orderJsonObj.order_confirmed === "true"))
-    || (!isAlreadyConfirmedReminder && /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হ(?:য়ে|য়ে)ছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed|📋\s*আপনার\s*অর্ডারের\s*তথ্যসমূহ)/i.test(replyText));
+    || (!isAlreadyConfirmedReminder && /(?:ধন্যবাদ[^\r\n]*আপনার\s*অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত)\s*(?:করা\s*)?(?:হ(?:য়ে|য়ে)ছে|হলো|হল)|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?কনফার্মড|order\s*(?:is\s*)?confirmed|📋\s*আপনার\s*অর্ডারের\s*তথ্যসমূহ\s*\(রিভিউ\))/i.test(replyText));
 
   // ৩. কঠোর সত্যতা যাচাই: ফোন নম্বর (১১ ডিজিট), ডেলিভারি ঠিকানা এবং বৈধ প্রোডাক্ট থাকলেই কেবল কনফার্ম হবে
   const hasPhone = foundPhone && foundPhone.length >= 11;
@@ -566,7 +582,7 @@ function extractOrderActions(raw, replyText = "", messages = [], activeProduct =
   } : null);
   const hasValidProduct = targetProduct && targetProduct.name && targetProduct.name !== "Ranonex Store Product";
 
-  if (isConfirmSpoken && hasPhone && hasAddress && hasValidProduct) {
+  if (isConfirmSpoken && isCustomerOrdering && hasPhone && hasAddress && hasValidProduct) {
     const isDhaka = /ঢাকা|dhaka/i.test(foundAddress) && !/ঢাকার\s*বাইরে|outside/i.test(foundAddress);
     const deliveryCharge = isDhaka ? 70 : 130;
     const basePrice = parseFloat(targetProduct.price || 0);
@@ -926,14 +942,20 @@ HELPLINE & DIRECT SUPPORT (internal marker):
   They are providing their contact number to receive the product parcel, NOT asking for customer care. Confirm their order immediately or ask for the missing address/details.
 
 ORDER TAKING & STRICT CONFIRMATION (AI CONFIRMS DIRECTLY WITH INVOICE FORM REVIEW):
-- CRITICAL: You (the AI) MUST CONFIRM THE ORDER DIRECTLY, CONFIDENTLY, AND IMMEDIATELY! Do NOT hesitate, do NOT ask the customer to confirm again, and do NOT ask for details you already have!
-- SINGLE PRODUCT OR PREVIOUSLY DISCUSSED PRODUCT:
-  If only 1 product was discussed, or the customer selected/mentioned a product earlier:
-  THE CUSTOMER DOES NOT NEED TO REPEAT OR CHOOSE THE PRODUCT AGAIN!
-  You already know which product they want. DO NOT ask "কোন প্রোডাক্টটি নিতে চান?" or "কোনটি নিবেন?"!
-- AS SOON AS YOU HAVE: Product + Customer Name + 11-digit Phone (01XXXXXXXXX) + Delivery Address (whether provided in one message or collected over earlier turns):
-  YOU MUST CONFIRM THE ORDER IMMEDIATELY IN THAT VERY TURN!
-  Your reply message MUST be formatted with this exact structured form-style invoice review:
+- CRITICAL RULE 1: INQUIRY VS ORDER (NEVER SEND ORDER FORM ON PRODUCT INQUIRY):
+  If the customer is asking questions, inquiring about products, asking what is available, asking price, features, sizes, photos, delivery charges, or browsing (e.g. "পাঞ্জাবি আছে?", "আপনাদের কি পাঞ্জাবি আছে?", "ঘড়ি আছে?", "দাম কত?", "ছবি দেখান", "সাইজ কত?", "ডেলিভারি চার্জ কত?", "শপ কোথায়?", "hi", "hello"):
+  THE CUSTOMER IS ONLY INQUIRING! THEY ARE NOT ORDERING!
+  DO NOT confirm any order!
+  DO NOT send the invoice review form!
+  DO NOT say "আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে"!
+  DO NOT output ORDER_JSON!
+  Simply answer their question warmly in Bengali, showcase the matching product(s) from the catalog with exact price and link, and ask if they would like to order or know anything else.
+
+- CRITICAL RULE 2: WHEN TO CONFIRM AN ORDER:
+  You must ONLY confirm an order when the customer EXPLICITLY expresses clear intent to purchase/order (e.g. "অর্ডার করতে চাই", "আমি এইটা নিব", "১টি দেন", "অর্ডার কনফার্ম করুন", "বুকিং দিন", "order now", "confirm koro", or sends their 11-digit mobile number in the current message turn to buy)!
+  NEVER reuse old phone numbers or addresses from previous completed conversations to automatically confirm a new order when the customer is simply inquiring about a new product!
+  When the customer explicitly orders AND you have: Specific Product + Customer Name + 11-digit Phone (01XXXXXXXXX) + Delivery Address:
+  CONFIRM THE ORDER IMMEDIATELY with this exact structured form-style invoice review:
 
 ধন্যবাদ [Customer Name]! আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে।
 
@@ -1007,10 +1029,13 @@ ${catalog}`;
 
   // অ্যাক্টিভ অর্ডার কনটেক্সট যুক্ত করা যাতে সকেট রিউজে কোনো লুপ তৈরি না হয়
   let turnPrompt = incomingText ? incomingText.trim() : "";
-  if (session?.selected_order_product) {
-    turnPrompt = `[ACTIVE ORDER SELECTION: The customer has already chosen '${session.selected_order_product.name}' (Price: ৳${session.selected_order_product.price}). DO NOT ask which product they want. If they provide name, 11-digit phone (01XXXXXXXXX) and address, confirm the order for '${session.selected_order_product.name}' immediately!] ${turnPrompt}`;
-  } else if (activeProduct && (!session?.discussed_products || session.discussed_products.length <= 1)) {
-    turnPrompt = `[SINGLE PRODUCT UNDER DISCUSSION: '${activeProduct.name}' (Price: ৳${activeProduct.price}). If customer sends phone/address, confirm this product immediately!] ${turnPrompt}`;
+  const hasOrderIntent = /(?:অর্ডার|order|confirm|কনফার্ম|নিতে\s*চাই|নিব|নেব|কিনব|buy|বুকিং)/i.test(incomingText || "") || /(?:01[3-9]\d{8})/.test(incomingText || "");
+  if (hasOrderIntent) {
+    if (session?.selected_order_product) {
+      turnPrompt = `[ACTIVE ORDER SELECTION: The customer has chosen '${session.selected_order_product.name}' (Price: ৳${session.selected_order_product.price}). If they provide name, 11-digit phone (01XXXXXXXXX) and address, confirm the order for '${session.selected_order_product.name}'!] ${turnPrompt}`;
+    } else if (activeProduct && (!session?.discussed_products || session.discussed_products.length <= 1)) {
+      turnPrompt = `[SINGLE PRODUCT UNDER DISCUSSION: '${activeProduct.name}' (Price: ৳${activeProduct.price}). If customer sends phone/address, confirm this product!] ${turnPrompt}`;
+    }
   }
 
   if (turnPrompt.trim()) {
@@ -1034,7 +1059,7 @@ ${catalog}`;
         if (!isFinished) {
           isFinished = true;
           const cleanReply = cleanCustomerReply(cached.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি।";
-          const actions = extractOrderActions(cached.accumulatedText, cleanReply, chatHistory, activeProduct, productsList);
+          const actions = extractOrderActions(cached.accumulatedText, cleanReply, chatHistory, activeProduct, productsList, incomingText);
           resolve({
             reply: cleanReply,
             rawReply: cached.accumulatedText,
@@ -1073,7 +1098,7 @@ ${catalog}`;
           }
 
           const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
-          const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct, productsList);
+          const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct, productsList, incomingText);
 
           resolve({
             reply: cleanReply,
@@ -1151,7 +1176,7 @@ ${catalog}`;
       if (!isFinished) {
         isFinished = true;
         const cleanReply = cleanCustomerReply(socketEntry.accumulatedText) || "ধন্যবাদ! আমরা আপনার মেসেজটি পেয়েছি। কিছুক্ষণের মধ্যে আমাদের টিম থেকে উত্তর দেওয়া হবে।";
-        const actions = extractOrderActions(socketEntry.accumulatedText, cleanReply, chatHistory, activeProduct, productsList);
+        const actions = extractOrderActions(socketEntry.accumulatedText, cleanReply, chatHistory, activeProduct, productsList, incomingText);
         resolve({
           reply: cleanReply,
           rawReply: socketEntry.accumulatedText,
@@ -1190,7 +1215,7 @@ ${catalog}`;
         }
 
         const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
-        const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct, productsList);
+        const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct, productsList, incomingText);
 
         resolve({
           reply: cleanReply,
@@ -2417,10 +2442,17 @@ app.post('/webhook/meta', (req, res) => {
                 session.discussed_products = [matchedProduct];
               }
 
-              // ২. অর্ডার কনফার্মেশন যাচাই ও ফর্ম স্টাইল রিভিউ মেসেজ তৈরি (হয়েছে এবং হয়েছে উভয় ইউনিকোড সাপোর্ট সহ)
-              const isAlreadyConfirmedReminder = /(?:আগেই|ইতিমধ্যে|ইতিপূর্বে)\s*(?:আপনার\s*)?(?:অর্ডার(?:টি)?\s*)?(?:কনফার্ম|নিশ্চিত)/i.test(aiDecision.reply || "");
-              isOrderConfirmedReply = aiDecision.order_confirmed 
-                || (!isAlreadyConfirmedReminder && /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হ(?:য়ে|য়ে)ছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed|📋\s*আপনার\s*অর্ডারের\s*তথ্যসমূহ)/i.test(aiDecision.reply || ""));
+              const isCustomerOrderIntent = /(?:অর্ডার\s*(?:করব|করতে\s*চাই|করুন|দিন|নিলাম|নিব|হবে|কনফার্ম|করছি)|অর্ডার\s*নিতে\s*চাই|নিতে\s*চাই|কিনতে\s*চাই|আমি\s*(?:এটা|এইটা|এই\s*প্রোডাক্টটি?)\s*(?:নিব|নেব|নিবো|কিনব)|order\s*(?:now|koro|korbo|korte\s*chai|confirm|please)|buy\s*now|confirm\s*koro|confirm\s*order)/i.test(incomingText || "") || /(?:01[3-9]\d{8})/.test(incomingText || "");
+
+              const isMereInquiry = /(?:আছে|আসে|থাকলে|দেখান|দেখবো|দেখব|দাম\s*কত|মূল্য\s*কত|প্রাইস\s*কত|price\s*koto|dam\s*koto|koto\s*dam|details|বিবরণ|ছবি|ভিডিও|কালার|রং|রঙ|সাইজ|সাইজ\s*কত|size|কি\s*কি\s*আছে|কিভাবে\s*পাব|ঠিকানা\s*কোথায়|শপ\s*কোথায়|দোকান\s*কোথায়|hello|hi|হাই|হ্যালো|সালাম|আসসালামু)/i.test(incomingText || "") && !/(?:01[3-9]\d{8})/.test(incomingText || "") && !isCustomerOrderIntent;
+
+              // যদি এটি সাধারণ ইনকোয়ারি হয়, পূর্বের অর্ডার সিলেকশন রিসেট করা
+              if (isMereInquiry) {
+                session.selected_order_product = null;
+              }
+
+              // ২. অর্ডার কনফার্মেশন যাচাই (শুধুমাত্র যখন কাস্টমার সত্যই অর্ডার করতে চেয়েছে এবং AI কনফার্ম করেছে)
+              isOrderConfirmedReply = Boolean(aiDecision.order_confirmed && aiDecision.order_data && !isMereInquiry);
 
               if (isOrderConfirmedReply) {
                 const resolvedProduct = session.selected_order_product 
@@ -2432,64 +2464,32 @@ app.post('/webhook/meta', (req, res) => {
                 let deliveryAddress = (aiDecision.order_data?.delivery_address || "").trim();
                 let customerName = (aiDecision.order_data && aiDecision.order_data.customer_name && !aiDecision.order_data.customer_name.startsWith("Facebook User"))
                   ? aiDecision.order_data.customer_name
-                  : "";
+                  : (profile.name || "Customer");
 
-                // 🔍 চ্যাট হিস্ট্রি, ইনকামিং মেসেজ ও AI রিপ্লাই থেকে সরাসরি ফোন, নাম ও ঠিকানা উদ্ধার (যদি AI JSON এ কোনো ঘাটতি থাকে)
-                const allTexts = [...(session.messages || []).map(m => m.message_text || ""), incomingText || "", aiDecision.reply || ""];
-                for (let i = allTexts.length - 1; i >= 0; i--) {
-                  const text = allTexts[i];
-                  const parsed = parseOrderDetailsFromText(text);
-                  if ((!customerPhone || customerPhone.length < 11) && parsed.phone) {
-                    customerPhone = parsed.phone.replace(/\D/g, '');
-                  }
-                  if ((!deliveryAddress || deliveryAddress.length < 4 || deliveryAddress === "ইনবক্সে প্রদত্ত ঠিকানা") && parsed.address) {
-                    deliveryAddress = parsed.address;
-                  }
-                  if ((!customerName || customerName === "Customer") && parsed.name) {
-                    customerName = parsed.name;
-                  }
-                }
+                if (customerPhone.length >= 11 && deliveryAddress.length >= 4 && deliveryAddress !== "ইনবক্সে প্রদত্ত ঠিকানা") {
+                  const prodName = (aiDecision.order_data && aiDecision.order_data.product_name && aiDecision.order_data.product_name !== "Ranonex Store Product")
+                    ? aiDecision.order_data.product_name
+                    : (resolvedProduct?.name || "Ranonex Store Product");
 
-                if (!customerName || customerName === "Customer") {
-                  customerName = profile.name || "Customer";
-                }
+                  const basePrice = resolvedProduct ? parseFloat(resolvedProduct.price || 0) : (session.selected_order_product ? parseFloat(session.selected_order_product.price || 0) : 0);
+                  const isDhaka = /ঢাকা|dhaka/i.test(deliveryAddress) && !/ঢাকার\s*বাইরে|outside/i.test(deliveryAddress);
+                  const deliveryCharge = isDhaka ? 70 : 130;
+                  const totalAmount = basePrice > 0 ? (basePrice + deliveryCharge) : (aiDecision.order_data?.total_amount || 0);
 
-                const prodFromReplyLine = (aiDecision.reply || "").match(/📦\s*প্রোডাক্ট\s*[:ঃ-]?\s*([^\r\n]+)/i)?.[1]?.trim() || "";
-                const prodName = (aiDecision.order_data && aiDecision.order_data.product_name && aiDecision.order_data.product_name !== "Ranonex Store Product")
-                  ? aiDecision.order_data.product_name
-                  : (resolvedProduct?.name || prodFromReplyLine || "Ranonex Store Product");
-
-                const basePrice = resolvedProduct ? parseFloat(resolvedProduct.price || 0) : (session.selected_order_product ? parseFloat(session.selected_order_product.price || 0) : 0);
-                const isDhaka = /ঢাকা|dhaka/i.test(deliveryAddress) && !/ঢাকার\s*বাইরে|outside/i.test(deliveryAddress);
-                const deliveryCharge = isDhaka ? 70 : 130;
-                const totalAmount = basePrice > 0 ? (basePrice + deliveryCharge) : (aiDecision.order_data?.total_amount || 0);
-
-                orderInfo = {
-                  customer_name: customerName,
-                  customer_phone: customerPhone,
-                  delivery_address: deliveryAddress || "ইনবক্সে প্রদত্ত ঠিকানা",
-                  product_name: prodName,
-                  variant: aiDecision.order_data?.variant || "Standard",
-                  total_amount: totalAmount,
-                  product_id: resolvedProduct?.id || aiDecision.order_data?.product_id || null,
-                  product_url: resolvedProduct?.url || aiDecision.order_data?.product_url || null,
-                  order_summary: aiDecision.order_data?.order_summary || `কাস্টমার ইনবক্সে সরাসরি ${prodName} পছন্দ করে ক্যাশ অন ডেলিভারিতে অর্ডার নিশ্চিত করেছেন।`
-                };
-
-                // 📝 ফর্মের মতো সুন্দর স্ট্রাকচার্ড রিভিউ মেসেজ তৈরি (যাতে কাস্টমার সহজেই চেক করতে পারে)
-                const formReview = `📋 আপনার অর্ডারের তথ্যসমূহ (রিভিউ):
-━━━━━━━━━━━━━━━━━━━
-📦 প্রোডাক্ট: ${orderInfo.product_name}
-👤 নাম: ${orderInfo.customer_name}
-📞 মোবাইল: ${orderInfo.customer_phone}
-📍 ঠিকানা: ${orderInfo.delivery_address}
-💰 সর্বমোট প্রদেয় মূল্য: ৳${orderInfo.total_amount}/- (ক্যাশ অন ডেলিভারি)
-━━━━━━━━━━━━━━━━━━━
-অনুগ্রহ করে উপরের তথ্যগুলো একবার মিলিয়ে দেখে নিন। পরবর্তী ১৫ মিনিটের মধ্যে নাম, মোবাইল নম্বর বা ডেলিভারি ঠিকানায় কোনো পরিবর্তন প্রয়োজন হলে আমাদের এখানে লিখে জানাতে পারেন।`;
-
-                // যদি AI রিপ্লাইতে অলরেডি পুরো ফর্ম না থাকে, সুন্দর করে ফর্মটি যুক্ত করা
-                if (!aiDecision.reply.includes("📦 প্রোডাক্ট:") && !aiDecision.reply.includes("সর্বমোট প্রদেয় মূল্য")) {
-                  aiDecision.reply = `ধন্যবাদ ${orderInfo.customer_name}! আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে।\n\n${formReview}`;
+                  orderInfo = {
+                    customer_name: customerName,
+                    customer_phone: customerPhone,
+                    delivery_address: deliveryAddress,
+                    product_name: prodName,
+                    variant: aiDecision.order_data?.variant || "Standard",
+                    total_amount: totalAmount,
+                    product_id: resolvedProduct?.id || aiDecision.order_data?.product_id || null,
+                    product_url: resolvedProduct?.url || aiDecision.order_data?.product_url || null,
+                    order_summary: aiDecision.order_data?.order_summary || `কাস্টমার ইনবক্সে সরাসরি ${prodName} পছন্দ করে ক্যাশ অন ডেলিভারিতে অর্ডার নিশ্চিত করেছেন।`
+                  };
+                } else {
+                  isOrderConfirmedReply = false;
+                  orderInfo = null;
                 }
               }
 
@@ -3215,64 +3215,53 @@ async function startWhatsAppClient(forceReset = false) {
               }
             }
 
-            const isAlreadyConfirmedReminder = /(?:আগেই|ইতিমধ্যে|ইতিপূর্বে)\s*(?:আপনার\s*)?(?:অর্ডার(?:টি)?\s*)?(?:কনফার্ম|নিশ্চিত)/i.test(aiDecision.reply || "");
-            const isOrderConfirmedReply = aiDecision.order_confirmed
-              || (!isAlreadyConfirmedReminder && /(?:অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|নিশ্চিত|গ্রহণ)(?:\s*করা)?\s*(?:হ(?:য়ে|য়ে)ছে|হলো|হল|করেছি|নিলাম)|অর্ডার(?:টি)?\s*(?:সফলভাবে\s*)?(?:কনফার্ম|কনফার্মড)|order\s*(?:is\s*)?confirmed|📋\s*আপনার\s*অর্ডারের\s*তথ্যসমূহ)/i.test(aiDecision.reply || ""));
+            const isWaOrderIntent = /(?:অর্ডার\s*(?:করব|করতে\s*চাই|করুন|দিন|নিলাম|নিব|হবে|কনফার্ম|করছি)|অর্ডার\s*নিতে\s*চাই|নিতে\s*চাই|কিনতে\s*চাই|আমি\s*(?:এটা|এইটা|এই\s*প্রোডাক্টটি?)\s*(?:নিব|নেব|নিবো|কিনব)|order\s*(?:now|koro|korbo|korte\s*chai|confirm|please)|buy\s*now|confirm\s*koro|confirm\s*order)/i.test(incomingText || "") || /(?:01[3-9]\d{8})/.test(incomingText || "");
+
+            const isWaMereInquiry = /(?:আছে|আসে|থাকলে|দেখান|দেখবো|দেখব|দাম\s*কত|মূল্য\s*কত|প্রাইস\s*কত|price\s*koto|dam\s*koto|koto\s*dam|details|বিবরণ|ছবি|ভিডিও|কালার|রং|রঙ|সাইজ|সাইজ\s*কত|size|কি\s*কি\s*আছে|কিভাবে\s*পাব|ঠিকানা\s*কোথায়|শপ\s*কোথায়|দোকান\s*কোথায়|hello|hi|হাই|হ্যালো|সালাম|আসসালামু)/i.test(incomingText || "") && !/(?:01[3-9]\d{8})/.test(incomingText || "") && !isWaOrderIntent;
+
+            if (isWaMereInquiry) {
+              session.selected_order_product = null;
+            }
+
+            const isOrderConfirmedReply = Boolean(aiDecision.order_confirmed && aiDecision.order_data && !isWaMereInquiry);
 
             let orderInfo = null;
             if (isOrderConfirmedReply) {
               const resolvedProduct = session.selected_order_product || matchedProduct || session.last_discussed_product;
               let customerPhone = (aiDecision.order_data?.customer_phone || "").replace(/\D/g, '');
               let deliveryAddress = (aiDecision.order_data?.delivery_address || "").trim();
-              let customerName = aiDecision.order_data?.customer_name || "";
+              let customerName = (aiDecision.order_data?.customer_name && aiDecision.order_data.customer_name !== "Customer")
+                ? aiDecision.order_data.customer_name
+                : pushName;
 
-              const allTexts = [...(session.messages || []).map(m => m.message_text || ""), incomingText || "", aiDecision.reply || ""];
-              for (let i = allTexts.length - 1; i >= 0; i--) {
-                const parsed = parseOrderDetailsFromText(allTexts[i]);
-                if ((!customerPhone || customerPhone.length < 11) && parsed.phone) customerPhone = parsed.phone.replace(/\D/g, '');
-                if ((!deliveryAddress || deliveryAddress.length < 4 || deliveryAddress === "ইনবক্সে প্রদত্ত ঠিকানা") && parsed.address) deliveryAddress = parsed.address;
-                if ((!customerName || customerName === "Customer") && parsed.name) customerName = parsed.name;
-              }
-              // যদি কাস্টমারের হোয়াটসঅ্যাপ নম্বর ১১-১৩ ডিজিটের বাংলাদেশি নম্বর হয়, সেটি ফলব্যাক হিসেবে ব্যবহার করা
               if ((!customerPhone || customerPhone.length < 11) && cleanPhone.length >= 11 && cleanPhone.length <= 13) {
                 customerPhone = cleanPhone.startsWith('8801') ? cleanPhone.slice(2) : cleanPhone;
               }
-              if (!customerName || customerName === "Customer") customerName = pushName;
 
-              const prodFromReplyLine = (aiDecision.reply || "").match(/📦\s*প্রোডাক্ট\s*[:ঃ-]?\s*([^\r\n]+)/i)?.[1]?.trim() || "";
-              const prodName = (aiDecision.order_data?.product_name && aiDecision.order_data.product_name !== "Ranonex Store Product")
-                ? aiDecision.order_data.product_name
-                : (resolvedProduct?.name || prodFromReplyLine || "Ranonex Store Product");
+              if (customerPhone.length >= 11 && deliveryAddress.length >= 4 && deliveryAddress !== "হোয়াটসঅ্যাপে প্রদত্ত ঠিকানা" && deliveryAddress !== "ইনবক্সে প্রদত্ত ঠিকানা") {
+                const prodName = (aiDecision.order_data?.product_name && aiDecision.order_data.product_name !== "Ranonex Store Product")
+                  ? aiDecision.order_data.product_name
+                  : (resolvedProduct?.name || "Ranonex Store Product");
 
-              const basePrice = resolvedProduct ? parseFloat(resolvedProduct.price || 0) : 0;
-              const isDhaka = /ঢাকা|dhaka/i.test(deliveryAddress) && !/ঢাকার\s*বাইরে|outside/i.test(deliveryAddress);
-              const deliveryCharge = isDhaka ? 70 : 130;
-              const totalAmount = basePrice > 0 ? (basePrice + deliveryCharge) : (aiDecision.order_data?.total_amount || 0);
+                const basePrice = resolvedProduct ? parseFloat(resolvedProduct.price || 0) : 0;
+                const isDhaka = /ঢাকা|dhaka/i.test(deliveryAddress) && !/ঢাকার\s*বাইরে|outside/i.test(deliveryAddress);
+                const deliveryCharge = isDhaka ? 70 : 130;
+                const totalAmount = basePrice > 0 ? (basePrice + deliveryCharge) : (aiDecision.order_data?.total_amount || 0);
 
-              orderInfo = {
-                customer_name: customerName,
-                customer_phone: customerPhone,
-                delivery_address: deliveryAddress || "হোয়াটসঅ্যাপে প্রদত্ত ঠিকানা",
-                product_name: prodName,
-                variant: aiDecision.order_data?.variant || "Standard",
-                total_amount: totalAmount,
-                product_id: resolvedProduct?.id || null,
-                product_url: resolvedProduct?.url || null,
-                order_summary: `কাস্টমার WhatsApp পার্সোনাল চ্যাটে সরাসরি ${prodName} ক্যাশ অন ডেলিভারিতে অর্ডার নিশ্চিত করেছেন।`
-              };
-
-              const formReview = `📋 আপনার অর্ডারের তথ্যসমূহ (রিভিউ):
-━━━━━━━━━━━━━━━━━━━
-📦 প্রোডাক্ট: ${orderInfo.product_name}
-👤 নাম: ${orderInfo.customer_name}
-📞 মোবাইল: ${orderInfo.customer_phone}
-📍 ঠিকানা: ${orderInfo.delivery_address}
-💰 সর্বমোট প্রদেয় মূল্য: ৳${orderInfo.total_amount}/- (ক্যাশ অন ডেলিভারি)
-━━━━━━━━━━━━━━━━━━━
-অনুগ্রহ করে উপরের তথ্যগুলো একবার মিলিয়ে দেখে নিন। পরবর্তী ১৫ মিনিটের মধ্যে কোনো পরিবর্তন প্রয়োজন হলে এখানে লিখে জানাতে পারেন।`;
-
-              if (!aiDecision.reply.includes("📦 প্রোডাক্ট:") && !aiDecision.reply.includes("সর্বমোট প্রদেয় মূল্য")) {
-                aiDecision.reply = `ধন্যবাদ ${orderInfo.customer_name}! আপনার অর্ডারটি সফলভাবে কনফার্ম করা হয়েছে।\n\n${formReview}`;
+                orderInfo = {
+                  customer_name: customerName,
+                  customer_phone: customerPhone,
+                  delivery_address: deliveryAddress,
+                  product_name: prodName,
+                  variant: aiDecision.order_data?.variant || "Standard",
+                  total_amount: totalAmount,
+                  product_id: resolvedProduct?.id || null,
+                  product_url: resolvedProduct?.url || null,
+                  order_summary: `কাস্টমার WhatsApp পার্সোনাল চ্যাটে সরাসরি ${prodName} ক্যাশ অন ডেলিভারিতে অর্ডার নিশ্চিত করেছেন।`
+                };
+              } else {
+                isOrderConfirmedReply = false;
+                orderInfo = null;
               }
             }
 
