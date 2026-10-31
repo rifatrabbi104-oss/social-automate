@@ -232,9 +232,9 @@ class SmartConcurrencyQueue {
   }
 }
 
-// ডিফল্ট ৩টি সমান্তরাল প্রসেস (বাকি কাজ কিউতে থাকবে যেন র‍্যাম কখনো ওভারফ্লো না হয়)
+// ডিফল্ট ১০টি সমান্তরাল প্রসেস (2GB - 3GB RAM হোস্টিংয়ের জন্য অপ্টিমাইজড)
 const aiProcessQueue = new SmartConcurrencyQueue(
-  process.env.AI_CONCURRENCY ? parseInt(process.env.AI_CONCURRENCY, 10) : 3
+  process.env.AI_CONCURRENCY ? parseInt(process.env.AI_CONCURRENCY, 10) : 10
 );
 
 function storeMediaBuffer(buffer, mimeType = 'application/octet-stream', req = null) {
@@ -275,30 +275,44 @@ async function transcribeAudioBuffer(audioBuffer, mimeType = 'audio/mp4') {
   if (!audioBuffer || !Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0 || !CONFIG.geminiApiKey) {
     return "";
   }
-  try {
-    const cleanMime = String(mimeType || 'audio/mp4').split(';')[0].trim();
-    const activeModel = String(CONFIG.geminiModel || "models/gemini-3.8-live").replace(/^models\//, '');
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${CONFIG.geminiApiKey}`;
-    const resp = await fetch(apiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { inlineData: { mimeType: cleanMime, data: audioBuffer.toString('base64') } },
-            { text: 'Listen to this customer audio voice note carefully. Transcribe exactly what the customer spoke in natural Bengali script (বাংলা লিপি). If they ask about products or anything, transcribe it accurately. Output ONLY the plain transcription text in Bengali script, nothing else.' }
-          ]
-        }]
-      })
-    });
-    if (!resp.ok) return "";
-    const data = await resp.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    return text.trim();
-  } catch (e) {
-    console.error("Voice transcribe error:", e.message);
-    return "";
+  const cleanMime = String(mimeType || 'audio/mp4').split(';')[0].trim();
+  const configuredModel = String(CONFIG.geminiModel || "models/gemini-3.8-live").replace(/^models\//, '');
+  
+  // ট্রাই লিস্ট: কনফিগার করা মডেল যদি REST অডিও ট্রান্সক্রিপশনে 404 দেয়, তবে সক্রিয় অডিও মডেল দিয়ে ডিকোড করা
+  const candidateModels = [configuredModel, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+  const uniqueCandidates = [...new Set(candidateModels)];
+
+  for (const model of uniqueCandidates) {
+    try {
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.geminiApiKey}`;
+      const resp = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inlineData: { mimeType: cleanMime, data: audioBuffer.toString('base64') } },
+              { text: 'Listen to this customer audio voice note carefully. Transcribe exactly what the customer spoke in natural Bengali script (বাংলা লিপি). If they ask about products or anything, transcribe it accurately. Output ONLY the plain transcription text in Bengali script, nothing else.' }
+            ]
+          }]
+        })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        if (text && text.trim()) {
+          console.log(`🎙️ [Customer Voice Decoded via ${model}]: "${text.trim()}"`);
+          return text.trim();
+        }
+      } else {
+        const errTxt = await resp.text().catch(() => "");
+        console.warn(`⚠️ [Audio Transcribe with ${model} returned ${resp.status}]:`, errTxt.slice(0, 120));
+      }
+    } catch (err) {
+      console.warn(`⚠️ [Audio Transcribe ${model} fetch error]:`, err.message);
+    }
   }
+  return "";
 }
 
 // প্রতি ১০ মিনিট পর পর পুরাতন ইফেমেরাল মিডিয়া ও অডিও ক্যাশ ক্লিনআপ
@@ -1921,6 +1935,22 @@ app.get(['/status', '/api/status'], (req, res) => {
 app.get('/api/system-restart', (req, res) => {
   res.json({ success: true, message: "Server daemon restarting..." });
   setTimeout(() => process.exit(0), 150);
+});
+
+// ১.১.৫ লাইভ অপ্টিমাইজেশন ও কনকারেন্সি লেভেল চেঞ্জ API
+app.post('/api/settings/concurrency', (req, res) => {
+  const newConcurrency = parseInt(req.body?.concurrency, 10);
+  if (!newConcurrency || newConcurrency < 1 || newConcurrency > 100) {
+    return res.status(400).json({ success: false, error: "Concurrency must be between 1 and 100" });
+  }
+  const oldConcurrency = aiProcessQueue.concurrency;
+  aiProcessQueue.concurrency = newConcurrency;
+  console.log(`⚡ [Concurrency Updated]: Optimization level changed from ${oldConcurrency} to ${newConcurrency} workers.`);
+  res.json({
+    success: true,
+    concurrency: aiProcessQueue.concurrency,
+    stats: aiProcessQueue.stats
+  });
 });
 
 // ২. মেটা ফেসবুক Webhook ভেরিফিকেশন (GET /webhook/meta)

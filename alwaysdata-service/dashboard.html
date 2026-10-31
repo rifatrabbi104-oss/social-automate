@@ -82,6 +82,12 @@
         <i id="refresh-icon" class="fa-solid fa-rotate"></i>
       </button>
 
+      <!-- AI Optimization Level Button -->
+      <button onclick="openOptimizationModal()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition shadow-sm" title="AI Concurrency & RAM Optimization Settings">
+        <i class="fa-solid fa-bolt text-amber-400"></i>
+        <span>Optimization: <strong id="header-opt-text" class="text-amber-300">Level 3 (10 Workers)</strong></span>
+      </button>
+
       <!-- Main Dashboard Link -->
       <a href="/status" target="_blank" class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition" title="JSON Health Status">
         <i class="fa-solid fa-server text-indigo-400"></i>
@@ -418,6 +424,121 @@
     <img id="media-lightbox-img" src="" alt="Full View" onclick="event.stopPropagation()" class="max-w-full max-h-[90vh] rounded-xl object-contain shadow-2xl border border-white/10" />
   </div>
 
+  <!-- AI Optimization & Concurrency Preset Modal -->
+  <div id="optimization-modal" onclick="closeOptimizationModal()" class="fixed inset-0 z-50 hidden bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div onclick="event.stopPropagation()" class="w-full max-w-xl rounded-2xl bg-slate-900 border border-slate-700/80 p-5 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div class="flex items-center gap-2">
+          <div class="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center">
+            <i class="fa-solid fa-bolt"></i>
+          </div>
+          <div>
+            <h3 class="font-bold text-white text-sm">AI Optimization & Concurrency Level</h3>
+            <p class="text-[11px] text-slate-400">আপনার সার্ভারের র‍্যাম (2GB / 3GB / VPS) অনুযায়ী প্রসেসিং স্পিড ও কিউ নিয়ন্ত্রণ করুন</p>
+          </div>
+        </div>
+        <button onclick="closeOptimizationModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- Live Queue Metrics -->
+      <div class="grid grid-cols-4 gap-2 bg-slate-950/80 p-3 rounded-xl border border-slate-800 text-center">
+        <div>
+          <div class="text-[10px] text-slate-400">সক্রিয় প্রসেস</div>
+          <div id="modal-queue-running" class="text-sm font-bold text-emerald-400">0</div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">লাইনে জমা (Queue)</div>
+          <div id="modal-queue-pending" class="text-sm font-bold text-amber-400">0</div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">পিক কিউ রেকর্ড</div>
+          <div id="modal-queue-peak" class="text-sm font-bold text-indigo-400">0</div>
+        </div>
+        <div>
+          <div class="text-[10px] text-slate-400">মোট সফল রিপ্লাই</div>
+          <div id="modal-queue-total" class="text-sm font-bold text-white">0</div>
+        </div>
+      </div>
+
+      <!-- Presets List -->
+      <div class="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+        <!-- Level 1 -->
+        <div onclick="setOptimizationLevel(1, 3)" class="opt-card p-3 rounded-xl border border-slate-800 hover:border-amber-500/50 bg-slate-800/40 hover:bg-slate-800/80 cursor-pointer transition flex items-center justify-between" id="opt-level-1">
+          <div class="space-y-0.5">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-white">Level 1: Eco / Safe (৩ জন সমান্তরাল)</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">512MB – 1GB RAM</span>
+            </div>
+            <p class="text-[11px] text-slate-400">সর্বোচ্চ র‍্যাম খরচ: ~১৫ MB • স্পিড: ২ রিপ্লাই/সেক • একদম টাইট মেমরির জন্য নিরাপদ</p>
+          </div>
+          <span class="opt-check hidden text-amber-400 text-sm"><i class="fa-solid fa-circle-check"></i></span>
+        </div>
+
+        <!-- Level 2 -->
+        <div onclick="setOptimizationLevel(2, 6)" class="opt-card p-3 rounded-xl border border-slate-800 hover:border-amber-500/50 bg-slate-800/40 hover:bg-slate-800/80 cursor-pointer transition flex items-center justify-between" id="opt-level-2">
+          <div class="space-y-0.5">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-white">Level 2: Balanced Standard (৬ জন সমান্তরাল)</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">1GB – 1.5GB RAM</span>
+            </div>
+            <p class="text-[11px] text-slate-400">সর্বোচ্চ র‍্যাম খরচ: ~৩০ MB • স্পিড: ৪-৫ রিপ্লাই/সেক • স্ট্যান্ডার্ড শেয়ার্ড হোস্টিং</p>
+          </div>
+          <span class="opt-check hidden text-amber-400 text-sm"><i class="fa-solid fa-circle-check"></i></span>
+        </div>
+
+        <!-- Level 3 (Recommended) -->
+        <div onclick="setOptimizationLevel(3, 10)" class="opt-card p-3 rounded-xl border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/15 cursor-pointer transition flex items-center justify-between" id="opt-level-3">
+          <div class="space-y-0.5">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-amber-300">Level 3: High Performance (১০ জন সমান্তরাল)</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold">Recommended for 2GB RAM</span>
+            </div>
+            <p class="text-[11px] text-slate-300">সর্বোচ্চ র‍্যাম খরচ: ~৫০ MB • স্পিড: ৭-৮ রিপ্লাই/সেক • ২৯৯/৩৯৯ প্ল্যানের সেরা ব্যালেন্স</p>
+          </div>
+          <span class="opt-check text-amber-400 text-sm"><i class="fa-solid fa-circle-check"></i></span>
+        </div>
+
+        <!-- Level 4 -->
+        <div onclick="setOptimizationLevel(4, 16)" class="opt-card p-3 rounded-xl border border-slate-800 hover:border-amber-500/50 bg-slate-800/40 hover:bg-slate-800/80 cursor-pointer transition flex items-center justify-between" id="opt-level-4">
+          <div class="space-y-0.5">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-white">Level 4: Turbo Commerce (১৬ জন সমান্তরাল)</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">3GB – 4GB RAM</span>
+            </div>
+            <p class="text-[11px] text-slate-400">সর্বোচ্চ র‍্যাম খরচ: ~৮০ MB • স্পিড: ১২-১৪ রিপ্লাই/সেক • ক্যাম্পেইন ও অ্যাড বুস্টের জন্য</p>
+          </div>
+          <span class="opt-check hidden text-amber-400 text-sm"><i class="fa-solid fa-circle-check"></i></span>
+        </div>
+
+        <!-- Level 5 -->
+        <div onclick="setOptimizationLevel(5, 25)" class="opt-card p-3 rounded-xl border border-slate-800 hover:border-amber-500/50 bg-slate-800/40 hover:bg-slate-800/80 cursor-pointer transition flex items-center justify-between" id="opt-level-5">
+          <div class="space-y-0.5">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-white">Level 5: Ultra Enterprise (২৫ জন সমান্তরাল)</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300">4GB – 8GB+ RAM</span>
+            </div>
+            <p class="text-[11px] text-slate-400">সর্বোচ্চ র‍্যাম খরচ: ~১৩০ MB • স্পিড: ১৮-২০ রিপ্লাই/সেক • হেভি ট্রাফিকে সুপারফাস্ট</p>
+          </div>
+          <span class="opt-check hidden text-amber-400 text-sm"><i class="fa-solid fa-circle-check"></i></span>
+        </div>
+
+        <!-- Level 6 -->
+        <div onclick="setOptimizationLevel(6, 40)" class="opt-card p-3 rounded-xl border border-slate-800 hover:border-amber-500/50 bg-slate-800/40 hover:bg-slate-800/80 cursor-pointer transition flex items-center justify-between" id="opt-level-6">
+          <div class="space-y-0.5">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold text-white">Level 6: Extreme Burst (৪০ জন সমান্তরাল)</span>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300">16GB – 24GB VPS</span>
+            </div>
+            <p class="text-[11px] text-slate-400">সর্বোচ্চ র‍্যাম খরচ: ~২০০ MB • স্পিড: ৩০+ রিপ্লাই/সেক • সেন্ট্রাল SaaS ব্রেন স্কেল</p>
+          </div>
+          <span class="opt-check hidden text-amber-400 text-sm"><i class="fa-solid fa-circle-check"></i></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast-box" class="fixed bottom-5 right-5 z-50 hidden px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs font-medium text-white shadow-2xl flex items-center gap-2">
     <i id="toast-icon" class="fa-solid fa-circle-check text-emerald-400"></i>
@@ -596,6 +717,93 @@
       const img = document.getElementById('media-lightbox-img');
       img.src = '';
       modal.classList.add('hidden');
+    }
+
+    // ⚡ AI OPTIMIZATION & CONCURRENCY CONTROLS
+    let currentOptLevel = 3;
+    let currentConcurrency = 10;
+
+    function openOptimizationModal() {
+      const modal = document.getElementById('optimization-modal');
+      if (modal) modal.classList.remove('hidden');
+      refreshQueueStats();
+    }
+
+    function closeOptimizationModal() {
+      const modal = document.getElementById('optimization-modal');
+      if (modal) modal.classList.add('hidden');
+    }
+
+    async function refreshQueueStats() {
+      try {
+        const res = await fetch('/api/status');
+        if (res.ok) {
+          const d = await res.json();
+          const q = d.ai_queue || {};
+          const elRun = document.getElementById('modal-queue-running');
+          const elPend = document.getElementById('modal-queue-pending');
+          const elPeak = document.getElementById('modal-queue-peak');
+          const elTot = document.getElementById('modal-queue-total');
+          if (elRun) elRun.textContent = q.running ?? 0;
+          if (elPend) elPend.textContent = q.pending ?? 0;
+          if (elPeak) elPeak.textContent = q.peak_pending ?? 0;
+          if (elTot) elTot.textContent = q.total_processed ?? 0;
+          if (q.concurrency) {
+            updateOptUI(q.concurrency);
+          }
+        }
+      } catch (e) {}
+    }
+
+    function updateOptUI(conc) {
+      currentConcurrency = conc;
+      let level = 3;
+      if (conc <= 3) level = 1;
+      else if (conc <= 6) level = 2;
+      else if (conc <= 10) level = 3;
+      else if (conc <= 16) level = 4;
+      else if (conc <= 25) level = 5;
+      else level = 6;
+      currentOptLevel = level;
+
+      const headerText = document.getElementById('header-opt-text');
+      if (headerText) headerText.textContent = `Level ${level} (${conc} Workers)`;
+
+      // Highlight active card
+      for (let i = 1; i <= 6; i++) {
+        const card = document.getElementById(`opt-level-${i}`);
+        if (!card) continue;
+        const check = card.querySelector('.opt-check');
+        if (i === level) {
+          card.classList.add('border-amber-500/50', 'bg-amber-500/10');
+          card.classList.remove('border-slate-800', 'bg-slate-800/40');
+          if (check) check.classList.remove('hidden');
+        } else {
+          card.classList.remove('border-amber-500/50', 'bg-amber-500/10');
+          card.classList.add('border-slate-800', 'bg-slate-800/40');
+          if (check) check.classList.add('hidden');
+        }
+      }
+    }
+
+    async function setOptimizationLevel(level, concurrency) {
+      try {
+        const res = await fetch('/api/settings/concurrency', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ level, concurrency })
+        });
+        const data = await res.json();
+        if (data.success) {
+          updateOptUI(data.concurrency || concurrency);
+          showToast(`⚡ অপ্টিমাইজেশন আপডেট: Level ${level} (${concurrency} Workers) সক্রিয় করা হয়েছে!`);
+          setTimeout(() => closeOptimizationModal(), 600);
+        } else {
+          showToast(data.error || 'অপ্টিমাইজেশন আপডেট ব্যর্থ হয়েছে', true);
+        }
+      } catch (err) {
+        showToast('সার্ভার রিকোয়েস্টে সমস্যা হয়েছে', true);
+      }
     }
 
     function toggleWaDrawer(forceOpen) {
@@ -1487,8 +1695,10 @@
     // Initial load: Local Temp DB first + Live Facebook Server Fetch
     initLocalAndLiveInbox();
     pollWhatsAppStatus();
+    refreshQueueStats();
     setInterval(() => fetchConversations(false), 4000);
     setInterval(pollWhatsAppStatus, 4500);
+    setInterval(refreshQueueStats, 6000);
   </script>
 </body>
 </html>
