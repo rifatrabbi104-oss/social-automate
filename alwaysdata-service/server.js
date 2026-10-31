@@ -2362,6 +2362,7 @@ app.post('/webhook/meta', (req, res) => {
                     // 🧠 Gemini 3.8 Live দিয়ে সাথে সাথে বাংলা ভয়েস ট্রান্সক্রাইব করা
                     customerVoiceTranscription = await transcribeAudioBuffer(incomingAudioBuffer, audioMimeType);
                     if (customerVoiceTranscription) {
+                      incomingText = customerVoiceTranscription;
                       console.log(`🗣️ [Customer Spoken Words Transcribed]: "${customerVoiceTranscription}"`);
                     }
                   }
@@ -2448,9 +2449,9 @@ app.post('/webhook/meta', (req, res) => {
 
             let userPromptText = incomingText ? incomingText.trim() : "";
             if (customerVoiceTranscription) {
-              userPromptText = customerVoiceTranscription;
+              userPromptText = `The customer sent an audio voice note on Messenger. They said in natural Bengali: "${customerVoiceTranscription}". Reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products, state the price, stock and order instructions!`;
             } else if (userSentAudio) {
-              userPromptText = "The customer sent an audio voice note on Messenger. Greet them warmly in Bengali script and ask how we can help with Ranonex products.";
+              userPromptText = "The customer sent an audio voice note on Messenger, but the audio was silent or inaudible. Politely reply in natural Bengali script (বাংলা লিপি) that their voice note was not clearly audible, and ask them to kindly send the audio note again or write what product they need.";
             } else if (userSentVideo) {
               userPromptText = userPromptText
                 ? `The customer sent a product video with caption: "${userPromptText}". WATCH AND ANALYZE THIS VIDEO CAREFULLY. Match the product shown with our Ranonex store catalog. State its exact name, price, key features, and product link in pure Bengali script (বাংলা লিপি), answer their caption, and ask if they want to order it.`
@@ -3336,9 +3337,9 @@ async function startWhatsAppClient(forceReset = false) {
 
           let userPromptText = incomingText;
           if (customerVoiceTranscription) {
-            userPromptText = `The customer sent a WhatsApp voice note. They said in Bengali: "${customerVoiceTranscription}". Reply directly to what they said in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog.`;
+            userPromptText = `The customer sent a WhatsApp voice note. They said in natural Bengali: "${customerVoiceTranscription}". Reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products, state the price, stock and order instructions!`;
           } else if (userSentAudio) {
-            userPromptText = "The customer sent a WhatsApp voice note. Greet them warmly and answer in pure Bengali script (বাংলা লিপি) based on our Ranonex store catalog.";
+            userPromptText = "The customer sent a WhatsApp voice note, but the audio was silent or inaudible. Politely reply in natural Bengali script (বাংলা লিপি) that their voice note was not clearly audible, and ask them to kindly send the audio note again or write what product they need.";
           } else if (userSentImage) {
             userPromptText = userPromptText
               ? `The customer sent a product photo on WhatsApp with caption: "${userPromptText}". Match it with our Ranonex store catalog, state its exact name and price in pure Bengali script (বাংলা লিপি), and ask if they want to order.`
