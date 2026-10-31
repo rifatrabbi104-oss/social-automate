@@ -208,7 +208,7 @@ function storeMediaBuffer(buffer, mimeType = 'application/octet-stream', req = n
 }
 
 /**
- * 🎙️ গ্রাহকের ভয়েস অডিও ট্রান্সক্রিপশন হেল্পার (Gemini 3.8 Flash Multimodal Audio)
+ * 🎙️ গ্রাহকের ভয়েস অডিও ট্রান্সক্রিপশন হেল্পার (Gemini 3.8 Live Multimodal Engine)
  * Facebook Messenger (.mp4/.aac) ও WhatsApp (.ogg) ভয়েস ক্লিপ ১০০% বাংলায় ট্রান্সক্রাইব করে
  */
 async function transcribeAudioBuffer(audioBuffer, mimeType = 'audio/mp4') {
@@ -217,7 +217,8 @@ async function transcribeAudioBuffer(audioBuffer, mimeType = 'audio/mp4') {
   }
   try {
     const cleanMime = String(mimeType || 'audio/mp4').split(';')[0].trim();
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${CONFIG.geminiApiKey}`;
+    const activeModel = String(CONFIG.geminiModel || "models/gemini-3.8-live").replace(/^models\//, '');
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${CONFIG.geminiApiKey}`;
     const resp = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2212,7 +2213,7 @@ app.post('/webhook/meta', (req, res) => {
                     if (!audioMimeType.startsWith("audio/")) audioMimeType = "audio/mp4";
                     console.log(`✅ Audio downloaded successfully (${incomingAudioBuffer.length} bytes, ${audioMimeType})`);
 
-                    // 🧠 Gemini 3.8 Flash দিয়ে সাথে সাথে বাংলা ভয়েস ট্রান্সক্রাইব করা
+                    // 🧠 Gemini 3.8 Live দিয়ে সাথে সাথে বাংলা ভয়েস ট্রান্সক্রাইব করা
                     customerVoiceTranscription = await transcribeAudioBuffer(incomingAudioBuffer, audioMimeType);
                     if (customerVoiceTranscription) {
                       console.log(`🗣️ [Customer Spoken Words Transcribed]: "${customerVoiceTranscription}"`);
