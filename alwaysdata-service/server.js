@@ -177,6 +177,66 @@ const mediaCache = new Map(); // mediaId -> { buffer: Buffer, mimeType: string, 
 let productCatalogCache = { data: null, productsList: [], expiresAt: 0 };
 let totalMessagesHandled = 0;
 
+// ==========================================
+// 🛡️ SMART CONCURRENCY QUEUE (Zero-Overflow Task Semaphore)
+// ==========================================
+class SmartConcurrencyQueue {
+  constructor(concurrency = 3) {
+    this.concurrency = Math.max(1, concurrency);
+    this.running = 0;
+    this.queue = [];
+    this.peakPending = 0;
+    this.totalProcessed = 0;
+  }
+
+  add(taskFn) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ taskFn, resolve, reject, queuedAt: Date.now() });
+      if (this.queue.length > this.peakPending) {
+        this.peakPending = this.queue.length;
+      }
+      this.next();
+    });
+  }
+
+  async next() {
+    if (this.running >= this.concurrency || this.queue.length === 0) {
+      return;
+    }
+    this.running++;
+    const item = this.queue.shift();
+    const waitTime = Date.now() - item.queuedAt;
+    if (waitTime > 800) {
+      console.log(`⏱️ [Concurrency Queue]: Task dequeued after ${waitTime}ms wait (Active: ${this.running}/${this.concurrency}, Pending: ${this.queue.length})`);
+    }
+    try {
+      const result = await item.taskFn();
+      this.totalProcessed++;
+      item.resolve(result);
+    } catch (err) {
+      item.reject(err);
+    } finally {
+      this.running--;
+      setImmediate(() => this.next());
+    }
+  }
+
+  get stats() {
+    return {
+      running: this.running,
+      pending: this.queue.length,
+      concurrency: this.concurrency,
+      peak_pending: this.peakPending,
+      total_processed: this.totalProcessed
+    };
+  }
+}
+
+// ডিফল্ট ৩টি সমান্তরাল প্রসেস (বাকি কাজ কিউতে থাকবে যেন র‍্যাম কখনো ওভারফ্লো না হয়)
+const aiProcessQueue = new SmartConcurrencyQueue(
+  process.env.AI_CONCURRENCY ? parseInt(process.env.AI_CONCURRENCY, 10) : 3
+);
+
 function storeMediaBuffer(buffer, mimeType = 'application/octet-stream', req = null) {
   if (!buffer || !Buffer.isBuffer(buffer)) return null;
   const cleanMime = String(mimeType || 'application/octet-stream').split(';')[0].trim().toLowerCase();
@@ -1830,6 +1890,7 @@ app.get(['/status', '/api/status'], (req, res) => {
     memory_usage_mb: (process.memoryUsage().rss / (1024 * 1024)).toFixed(1),
     total_messages_handled: totalMessagesHandled,
     active_sessions_count: memorySessions.size,
+    ai_queue: aiProcessQueue.stats,
     channels: {
       facebook_messenger: Boolean(CONFIG.metaPageAccessToken),
       facebook_page_id: CONFIG.metaPageId,
@@ -1888,13 +1949,15 @@ app.post('/webhook/meta', (req, res) => {
       for (const entry of (body.entry || [])) {
         if (entry.messaging && Array.isArray(entry.messaging)) {
           for (const event of entry.messaging) {
-            const senderId = event.sender?.id;
+            aiProcessQueue.add(async () => {
+              try {
+                const senderId = event.sender?.id;
             const recipientId = event.recipient?.id;
             const message = event.message;
             const postback = event.postback;
 
-            if (!senderId || senderId === CONFIG.metaPageId || senderId === '0') continue;
-            if (message && message.is_echo) continue;
+            if (!senderId || senderId === CONFIG.metaPageId || senderId === '0') return;
+            if (message && message.is_echo) return;
 
             const quickReplyPayload = message?.quick_reply ? message.quick_reply.payload : "";
             const postbackPayload = postback ? postback.payload : "";
@@ -2017,7 +2080,7 @@ app.post('/webhook/meta', (req, res) => {
                 });
                 memorySessions.set(chatId, session);
               }
-              continue;
+              return;
             }
 
             // ১. [🔊 ভয়েস শুনুন] বাটন ক্লিক
@@ -2035,7 +2098,7 @@ app.post('/webhook/meta', (req, res) => {
                   await sendFacebookAudio(senderId, genRes.audioUrl);
                 }
               }
-              continue;
+              return;
             }
 
             // ২. [🛍️ এখনই অর্ডার করব] বাটন ক্লিক বা অর্ডার ইনটেন্ট
@@ -2052,7 +2115,7 @@ app.post('/webhook/meta', (req, res) => {
                   return { content_type: "text", title: `${bNum}. ${p.name.slice(0, 16)}`, payload: `SELECT_PRODUCT_${p.id}` };
                 });
                 await sendFacebookMessage(senderId, askText, qr);
-                continue;
+                return;
               }
 
               const targetProd = session.selected_order_product || (session.discussed_products.length === 1 ? session.discussed_products[0] : session.last_discussed_product);
@@ -2064,7 +2127,7 @@ app.post('/webhook/meta', (req, res) => {
                 { content_type: "text", title: "🔊 ভয়েস শুনুন", payload: `PLAY_AUDIO_aud_${Date.now()}` }
               ];
               await sendFacebookMessage(senderId, text, qr);
-              continue;
+              return;
             }
 
             // ৩. [💰 ডেলিভারি চার্জ কত?] বাটন ক্লিক
@@ -2076,7 +2139,7 @@ app.post('/webhook/meta', (req, res) => {
                 { content_type: "text", title: "🔊 ভয়েস শুনুন", payload: `PLAY_AUDIO_aud_${Date.now()}` }
               ];
               await sendFacebookMessage(senderId, text, qr);
-              continue;
+              return;
             }
 
             // ৪. [📦 পার্সেল চেক?] বাটন ক্লিক
@@ -2087,7 +2150,7 @@ app.post('/webhook/meta', (req, res) => {
                 { content_type: "text", title: "🔊 ভয়েস শুনুন", payload: `PLAY_AUDIO_aud_${Date.now()}` }
               ];
               await sendFacebookMessage(senderId, text, qr);
-              continue;
+              return;
             }
 
             // ৫. [📜 সব প্রোডাক্ট দেখুন] বাটন ক্লিক বা ক্যাটালগ চাওয়া
@@ -2101,7 +2164,7 @@ app.post('/webhook/meta', (req, res) => {
               ];
               await sendFacebookMessage(senderId, text, qr);
               await sendFacebookCarousel(senderId, productsList);
-              continue;
+              return;
             }
 
             // ৬. ক্যারোসেল কার্ড থেকে [📦 এটি অর্ডার করব] ক্লিক
@@ -2147,33 +2210,33 @@ app.post('/webhook/meta', (req, res) => {
                 });
                 memorySessions.set(chatId, session);
               }
-              continue;
+              return;
             }
 
             // ৭. [📍 ঢাকার ভেতরে / বাইরে] বাটন ক্লিক
             if (incomingPayload === "ACTION_LOCATION_DHAKA") {
               const text = "ডেলিভারি এরিয়া: ঢাকার ভেতরে নোট করা হয়েছে (ডেলিভারি চার্জ ৭০৳)। আপনার নাম, মোবাইল নম্বর এবং সম্পূর্ণ এরিয়া/ঠিকানা লিখে দিন।";
               await sendFacebookMessage(senderId, text);
-              continue;
+              return;
             }
             if (incomingPayload === "ACTION_LOCATION_OUTSIDE") {
               const text = "ডেলিভারি এরিয়া: ঢাকার বাইরে নোট করা হয়েছে (ডেলিভারি চার্জ ১৩০৳)। আপনার নাম, মোবাইল নম্বর এবং জেলা ও থানা সহ সম্পূর্ণ ঠিকানা লিখে দিন।";
               await sendFacebookMessage(senderId, text);
-              continue;
+              return;
             }
 
             // ৮. [📞 হেল্পলাইনে কল] বাটন ক্লিক (শুধুমাত্র নির্দিষ্ট বাটন ক্লিকের ক্ষেত্রে)
             // সাধারণ টেক্সটের ক্ষেত্রে AI নিজে সিদ্ধান্ত নিবে (SHOW_HELPLINE: true), কোনো হার্ডকোডেড ইন্টারসেপশন নয়
             if (incomingPayload === "ACTION_CALL_SUPPORT") {
               await sendFacebookHelplineCard(senderId);
-              continue;
+              return;
             }
 
             // ৯. [🔄 ঠিকানা পরিবর্তন] বাটন ক্লিক
             if (incomingPayload === "ACTION_EDIT_ORDER") {
               const text = "আপনার নতুন ডেলিভারি ঠিকানা বা সঠিক ফোন নম্বরটি লিখে পাঠিয়ে দিন, আমরা এখনই অর্ডার আপডেট করে দিচ্ছি।";
               await sendFacebookMessage(senderId, text);
-              continue;
+              return;
             }
 
             // ১০. [❌ অর্ডার বাতিল] বাটন ক্লিক
@@ -2183,17 +2246,17 @@ app.post('/webhook/meta', (req, res) => {
               await sendTelegramOrderCancel(cancelledOrder, "Customer clicked cancel order button", "Facebook Messenger");
               const text = "আপনার অনুরোধ অনুযায়ী অর্ডারটি সফলভাবে বাতিল করা হয়েছে। পরবর্তীতে যেকোনো প্রয়োজনে আমাদের জানাতে পারেন।";
               await sendFacebookMessage(senderId, text);
-              continue;
+              return;
             }
 
             // ১১. [❌ পরে নেব] বাটন ক্লিক
             if (incomingPayload === "ACTION_ABANDONED_DECLINE") {
               const text = "ঠিক আছে, কোনো সমস্যা নেই! পরবর্তীতে যেকোনো গ্যাজেট বা কেনাকাটায় আমাদের জানাবেন। Ranonex-এর সাথে থাকার জন্য ধন্যবাদ!";
               await sendFacebookMessage(senderId, text);
-              continue;
+              return;
             }
 
-            if (!incomingText && !userSentAudio && !userSentImage && !userSentVideo) continue;
+            if (!incomingText && !userSentAudio && !userSentImage && !userSentVideo) return;
 
             // ==========================================
             // 🎙️ কাস্টমারের ভয়েস অডিও ডাউনলোড ও ট্রান্সক্রিপশন
@@ -2324,7 +2387,7 @@ app.post('/webhook/meta', (req, res) => {
               if (isProductInquiry && !isOrderIntent) {
                 // ছবি/ভিডিওর পরের মেসেজ যদি প্রোডাক্ট সম্পর্কে হয় তবে ইগনোর করা হবে, কারণ অলরেডি ছবি/ভিডিওর সাথেই বিস্তারিত রিপ্লাই পাঠানো হয়েছে
                 console.log(`⏩ [Ignoring redundant follow-up inquiry "${incomingText}" right after media from ${senderId}]`);
-                continue;
+                return;
               }
             }
 
@@ -2379,7 +2442,7 @@ app.post('/webhook/meta', (req, res) => {
             // 👨‍💻 Admin Takeover চেক: অ্যাডমিন ম্যানুয়াল মোডে থাকলে AI রিপ্লাই দিবে না
             if (session.admin_takeover) {
               console.log(`👨‍💻 [Admin Takeover Active for ${chatId}] — Customer message saved to inbox, AI auto-reply paused.`);
-              continue;
+              return;
             }
 
             const isVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|শুনতে চাই/i.test(incomingText || customerVoiceTranscription || "");
@@ -2609,65 +2672,75 @@ app.post('/webhook/meta', (req, res) => {
             }
 
             saveSession(chatId, session);
+              } catch (evErr) {
+                console.error("Error processing queued messenger event:", evErr.message);
+              }
+            }).catch(qErr => console.error("Messenger queue task error:", qErr.message));
           }
         }
 
         // খ. ফেসবুক কমেন্ট রিপ্লাই
         if (entry.changes && Array.isArray(entry.changes)) {
           for (const change of entry.changes) {
-            if (change.field === 'feed') {
-              const val = change.value;
-              if (val.item === 'comment' && val.verb === 'add') {
-                const commentId = val.comment_id;
-                const senderId = val.from?.id;
-                const senderName = val.from?.name || "Customer";
-                const commentText = val.message || "";
+            aiProcessQueue.add(async () => {
+              try {
+                if (change.field === 'feed') {
+                  const val = change.value;
+                  if (val.item === 'comment' && val.verb === 'add') {
+                    const commentId = val.comment_id;
+                    const senderId = val.from?.id;
+                    const senderName = val.from?.name || "Customer";
+                    const commentText = val.message || "";
 
-                if (senderId === CONFIG.metaPageId || !commentText.trim()) continue;
+                    if (senderId === CONFIG.metaPageId || !commentText.trim()) return;
 
-                totalMessagesHandled++;
-                console.log(`💬 [Comment by ${senderName} on ${commentId}]: ${commentText}`);
+                    totalMessagesHandled++;
+                    console.log(`💬 [Comment by ${senderName} on ${commentId}]: ${commentText}`);
 
-                const commentChatId = `fb_comment_${senderId || commentId}`;
-                let cSession = memorySessions.get(commentChatId);
-                if (!cSession) {
-                  cSession = {
-                    chat_id: commentChatId,
-                    sender_id: senderId || commentId,
-                    sender_name: senderName,
-                    platform: "facebook",
-                    channel_type: "comment",
-                    unread_count: 0,
-                    admin_takeover: false,
-                    messages: []
-                  };
+                    const commentChatId = `fb_comment_${senderId || commentId}`;
+                    let cSession = memorySessions.get(commentChatId);
+                    if (!cSession) {
+                      cSession = {
+                        chat_id: commentChatId,
+                        sender_id: senderId || commentId,
+                        sender_name: senderName,
+                        platform: "facebook",
+                        channel_type: "comment",
+                        unread_count: 0,
+                        admin_takeover: false,
+                        messages: []
+                      };
+                    }
+                    cSession.messages.push({
+                      id: commentId || `c_${Date.now()}`,
+                      sender_type: "customer",
+                      sender_name: senderName,
+                      message_text: commentText,
+                      timestamp: new Date().toISOString()
+                    });
+                    cSession.unread_count = Number(cSession.unread_count || 0) + 1;
+                    saveSession(commentChatId, cSession);
+
+                    if (cSession.admin_takeover) return;
+
+                    const aiDecision = await callGeminiSalesAI(commentText, cSession.messages, cSession);
+                    if (aiDecision && aiDecision.reply) {
+                      await replyToFacebookComment(commentId, aiDecision.reply);
+                      cSession.messages.push({
+                        id: `ai_c_${Date.now()}`,
+                        sender_type: "assistant",
+                        sender_name: "Ranonex AI Assistant",
+                        message_text: aiDecision.reply,
+                        timestamp: new Date().toISOString()
+                      });
+                      saveSession(commentChatId, cSession);
+                    }
+                  }
                 }
-                cSession.messages.push({
-                  id: commentId || `c_${Date.now()}`,
-                  sender_type: "customer",
-                  sender_name: senderName,
-                  message_text: commentText,
-                  timestamp: new Date().toISOString()
-                });
-                cSession.unread_count = Number(cSession.unread_count || 0) + 1;
-                saveSession(commentChatId, cSession);
-
-                if (cSession.admin_takeover) continue;
-
-                const aiDecision = await callGeminiSalesAI(commentText, cSession.messages, cSession);
-                if (aiDecision && aiDecision.reply) {
-                  await replyToFacebookComment(commentId, aiDecision.reply);
-                  cSession.messages.push({
-                    id: `ai_c_${Date.now()}`,
-                    sender_type: "assistant",
-                    sender_name: "Ranonex AI Assistant",
-                    message_text: aiDecision.reply,
-                    timestamp: new Date().toISOString()
-                  });
-                  saveSession(commentChatId, cSession);
-                }
+              } catch (cErr) {
+                console.error("Error processing queued comment event:", cErr.message);
               }
-            }
+            }).catch(qErr => console.error("Comment queue task error:", qErr.message));
           }
         }
       }
@@ -3022,7 +3095,9 @@ async function startWhatsAppClient(forceReset = false) {
             }
           }
 
-          const altJid = msg.key?.senderPn || msg.key?.remoteJidAlt || '';
+          aiProcessQueue.add(async () => {
+            try {
+              const altJid = msg.key?.senderPn || msg.key?.remoteJidAlt || '';
           const preferredJid = altJid.endsWith('@s.whatsapp.net') ? altJid : remoteJid;
           const cleanPhone = preferredJid.split('@')[0].split(':')[0].replace(/\D/g, '');
           const rawRemoteUser = remoteJid.split('@')[0].split(':')[0].replace(/\D/g, '');
@@ -3134,7 +3209,7 @@ async function startWhatsAppClient(forceReset = false) {
             session.last_message_at = new Date().toISOString();
             saveSession(chatId, session);
             console.log(`📤 [WhatsApp Mobile Outbound synced to Inbox (${chatId})]: ${displayMsgText}`);
-            continue;
+            return;
           }
 
           session.messages.push({
@@ -3159,7 +3234,7 @@ async function startWhatsAppClient(forceReset = false) {
           // 👨‍💻 যদি Admin Takeover চালু থাকে, তবে AI অটো-রিপ্লাই দিবে না
           if (session.admin_takeover) {
             console.log(`👨‍💻 [Admin Takeover Active for ${chatId}] — WhatsApp message saved to inbox, AI auto-reply paused.`);
-            continue;
+            return;
           }
 
           // প্রোডাক্ট ক্যাটালগ ম্যাচিং
@@ -3330,10 +3405,14 @@ async function startWhatsAppClient(forceReset = false) {
               await sendTelegramOrderCancel(session.last_order_data || { customer_name: pushName }, aiDecision.note, "WhatsApp Personal");
             }
           }
-        } catch (waMsgErr) {
-          console.error("WhatsApp message handler error:", waMsgErr.message);
+        } catch (waInnerErr) {
+          console.error("Error processing queued WhatsApp message:", waInnerErr.message);
         }
-      }
+      }).catch(qErr => console.error("WhatsApp queue task error:", qErr.message));
+    } catch (waMsgErr) {
+      console.error("WhatsApp message handler error:", waMsgErr.message);
+    }
+  }
     });
   } catch (err) {
     waState.status = 'disconnected';
