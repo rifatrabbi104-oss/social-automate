@@ -308,9 +308,24 @@ function storeMediaBuffer(buffer, mimeType = 'application/octet-stream', req = n
 }
 
 /**
- * 🎙️ FFmpeg এক্সিকিউটেবল পাথ ফাইন্ডার (@ffmpeg-installer/ffmpeg ও সিস্টেম PATH সাপোর্ট)
+ * 🎙️ FFmpeg এক্সিকিউটেবল পাথ ফাইন্ডার (লোকাল বাইনারি, @ffmpeg-installer/ffmpeg ও সিস্টেম PATH সাপোর্ট)
  */
 function getFfmpegPath() {
+  const localCandidates = [
+    path.join(__dirname, 'ffmpeg'),
+    path.join(process.cwd(), 'ffmpeg'),
+    '/home/ranonex/www/ffmpeg',
+    path.join(__dirname, 'ffmpeg.exe'),
+    path.join(process.cwd(), 'ffmpeg.exe'),
+    path.join(__dirname, 'node_modules', '@ffmpeg-installer', 'linux-x64', 'ffmpeg'),
+    path.join(__dirname, 'node_modules', '@ffmpeg-installer', 'win32-x64', 'ffmpeg.exe')
+  ];
+  for (const p of localCandidates) {
+    if (fs.existsSync(p)) {
+      try { fs.chmodSync(p, 0o755); } catch (e) {}
+      return p;
+    }
+  }
   try {
     const installer = require('@ffmpeg-installer/ffmpeg');
     if (installer && installer.path && fs.existsSync(installer.path)) {
@@ -339,12 +354,14 @@ function convertAudioToPcm16k(inputBuffer) {
         'pipe:1'
       ]);
       const chunks = [];
+      const stderrChunks = [];
       proc.stdout.on('data', chunk => chunks.push(chunk));
-      proc.stderr.on('data', () => {});
+      proc.stderr.on('data', chunk => stderrChunks.push(chunk));
       proc.on('close', code => {
         if (code === 0 && chunks.length > 0) {
           resolve(Buffer.concat(chunks));
         } else {
+          console.warn(`⚠️ [convertAudioToPcm16k error, code ${code}]:`, Buffer.concat(stderrChunks).toString('utf8').slice(0, 300));
           resolve(null);
         }
       });
@@ -379,16 +396,21 @@ function convertWavToOggOpus(wavBuffer) {
         'pipe:1'
       ]);
       const chunks = [];
+      const stderrChunks = [];
       proc.stdout.on('data', chunk => chunks.push(chunk));
-      proc.stderr.on('data', () => {});
+      proc.stderr.on('data', chunk => stderrChunks.push(chunk));
       proc.on('close', code => {
         if (code === 0 && chunks.length > 0) {
           resolve(Buffer.concat(chunks));
         } else {
+          console.warn(`⚠️ [convertWavToOggOpus error, code ${code}]:`, Buffer.concat(stderrChunks).toString('utf8').slice(0, 300));
           resolve(null);
         }
       });
-      proc.on('error', () => resolve(null));
+      proc.on('error', (err) => {
+        console.warn('⚠️ [convertWavToOggOpus ffmpeg error]:', err.message);
+        resolve(null);
+      });
       proc.stdin.write(wavBuffer);
       proc.stdin.end();
     } catch (e) {
@@ -892,22 +914,34 @@ async function getStoreCatalog() {
   return productCatalogCache;
 }
 
-// 🔍 কোনো হার্ডকোডেড কীওয়ার্ড নেই — কোন প্রোডাক্ট কাস্টমারের দরকার তা AI নিজেই ক্যাটালগ দেখে ঠিক করে।
-// এখানে শুধু নিশ্চিত (exact) মিল খোঁজা হয়: প্রোডাক্ট আইডি, SKU, প্রোডাক্ট URL বা হুবহু প্রোডাক্টের নাম।
+// 🔍 কোনো হার্ডকোডেড পক্ষপাতিত্ব নেই — কাস্টমার কোন প্রোডাক্ট চায় তা AI নিজেই ক্যাটালগ দেখে ঠিক করে।
+// এখানে শুধু নিশ্চিত (exact) মিল খোঁজা হয়: প্রোডাক্ট আইডি, SKU, প্রোডাক্ট URL বা সম্পূর্ণ নির্দিষ্ট প্রোডাক্ট নাম।
 function findMatchingProduct(text, productsList) {
   if (!text || !Array.isArray(productsList) || productsList.length === 0) return null;
   const lower = String(text).toLowerCase();
 
+  // যদি কাস্টমার কোনো প্রোডাক্ট বাদ দিয়ে অন্য কিছু চায় (নেতিবাচক সার্চ), প্রোডাক্ট লক করা যাবে না
+  if (/(?:ছাড়া|বিনা|বাদ|না|different|other\s*than|not)/i.test(text)) return null;
+
+  // ১. প্রোডাক্ট লিঙ্ক থেকে নির্দিষ্ট আইডি ম্যাচ
   const urlIds = [...lower.matchAll(/product\.html\?id=([\w\-]+)/g)].map(m => m[1]);
   for (const id of urlIds) {
     const p = productsList.find(x => String(x.id).toLowerCase() === id);
     if (p) return p;
   }
+  // ২. প্রোডাক্টের নিজস্ব ইউনিক আইডি দিয়ে ম্যাচ
   for (const p of productsList) {
     const id = String(p.id || '').toLowerCase();
     if (id && new RegExp(`(^|[^\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w-]|$)`).test(lower)) return p;
-    if (p.sku && p.sku.length > 3 && lower.includes(p.sku.toLowerCase())) return p;
-    if (p.name && p.name.length > 6 && lower.includes(p.name.toLowerCase())) return p;
+  }
+  // ৩. প্রোডাক্টের SKU দিয়ে ম্যাচ
+  for (const p of productsList) {
+    if (p.sku && p.sku.length >= 4 && lower.includes(p.sku.toLowerCase())) return p;
+  }
+  // ৪. সুনির্দিষ্ট পূর্ণ প্রোডাক্ট নাম দিয়ে ম্যাচ (জেনেরিক একক শব্দ যেমন 'panjabi' ম্যাচ হবে না, কারণ স্টোরে একাধিক পাঞ্জাবি আছে)
+  for (const p of productsList) {
+    const pName = String(p.name || '').trim().toLowerCase();
+    if (pName && pName !== 'panjabi' && pName.length > 7 && lower.includes(pName)) return p;
   }
   return null;
 }
@@ -1021,8 +1055,10 @@ ORDER_NOTE_JSON: {"order_note": true, "note": "Customer requested change/cancell
     }
   }
 
-  // সক্রিয় ও আলোচিত প্রোডাক্টের তালিকা (শুধুমাত্র কাস্টমার অর্ডার করতে চাইলে ব্যবহার করা হবে)
-  const hasOrderIntent = /(?:অর্ডার|order|confirm|কনফার্ম|নিতে\s*চাই|নিব|নেব|কিনব|buy|বুকিং)/i.test(incomingText || "") || /(?:01[3-9]\d{8})/.test(incomingText || "");
+  // সক্রিয় ও আলোচিত প্রোডাক্টের তালিকা (শুধুমাত্র কাস্টমার নিজে অর্ডার করতে চাইলে ব্যবহার করা হবে)
+  const isSyntheticAudioPrompt = Boolean(incomingAudioBuffer && /The customer sent (?:a WhatsApp|an audio) voice note/i.test(incomingText || ""));
+  const rawCustomerText = isSyntheticAudioPrompt ? "" : (incomingText || "");
+  const hasOrderIntent = /(?:অর্ডার\s*(?:করব|করতে\s*চাই|করুন|দিন|নিলাম|নিব|নেব|হবে|কনফার্ম|করছি)|অর্ডার\s*নিতে\s*চাই|নিতে\s*চাই|কিনতে\s*চাই|আমি\s*(?:এটা|এইটা|এই\s*প্রোডাক্টটি?)\s*(?:নিব|নেব|নিবো|কিনব)|(?:\b(?:order\s*(?:now|koro|korbo|korte\s*chai|confirm|please)|buy\s*now|confirm\s*koro|confirm\s*order)\b))/i.test(rawCustomerText) || /(?:01[3-9]\d{8})/.test(rawCustomerText);
   const activeProduct = session?.selected_order_product || (hasOrderIntent ? session?.last_discussed_product : null);
   const discussedProducts = Array.isArray(session?.discussed_products) ? session.discussed_products : [];
 
@@ -1061,6 +1097,23 @@ HOW TO FIND THE RIGHT PRODUCT (you decide, nobody else):
 - The full live catalog of the store is given below as STORE PRODUCTS CATALOG. It changes often and new products get added — always rely on it.
 - Understand what the customer actually NEEDS (their problem / purpose), not just the exact word. Banglish, typos, indirect requests are normal.
   e.g. "ghor shajabo / room decor" -> neon/LED lights; "phone gorom hoy" -> mobile cooler; "gaming" -> game console / gaming earphone; "shiter jama" -> hoodie; "ghori / watch" -> watches.
+
+- DIVERSE STORE CATALOG & ZERO PRODUCT BIAS MANDATE:
+  Ranonex is NOT just a clothing store! We sell diverse electronics, gaming gadgets, decor, lifestyle items, and clothing:
+  1. Mobile Cooler: Hoco GA6 Semiconductor Mobile Cooler (for mobile gamers, stops phone heating)
+  2. Game Consoles: Retro handheld consoles (P6 with 620 games, J36 Ultra, X9 Black Hawk)
+  3. LED Lights: 10M ARGB Neon Rope Light with App & Remote Control
+  4. Microphones: BOYA BY-MW6 Wireless Lavalier Microphone (dual transmitter)
+  5. Power Bank: VEN-DENS 10000mAh Magsafe Wireless Power Bank
+  6. Earphones: Hoco M105 wired gaming earphones
+  7. Watches: Hublot Chain Watch
+  8. Hoodies: Black Paisley Combo Hoodie, Premium Solid Pullover
+  9. Panjabis: Cotton, Bamboo, Popcorn Panjabis
+
+  CRITICAL ZERO-BIAS RULES:
+  - NEVER assume, force, or default to Panjabi or any single category!
+  - If the customer asks for coolers, gaming, lights, microphones, watches, power banks, or hoodies, ONLY answer about those specific items!
+  - If the customer complains or mentions they asked about other products (e.g. "অন্যান্য প্রোডাক্টের ব্যাপারে বলছি", "পাঞ্জাবি কেন বলছ?"), apologize warmly in 1 line and highlight the specific gadget or category they want from the catalog!
 
 - FULL CATALOG SEARCH & SCOURING MANDATE:
   CRITICAL: If the customer asks about any category or general product type (e.g. "ঘড়ি আছে?", "গেম কনসোল আছে?", "হুডি আছে?", "হেডফোন আছে?", "কুলার আছে?", "লাইট আছে?", "পাঞ্জাবি আছে?"):
@@ -2418,8 +2471,17 @@ app.post('/webhook/meta', (req, res) => {
               }
             }
 
+            // যদি কাস্টমার অন্য প্রোডাক্ট বা সাধারণ কালেকশন দেখতে চায়, পূর্বের প্রোডাক্ট লক ক্লিয়ার করা
+            const isCatalogExploration = /(?:আর\s*কিছু|অন্য\s*কিছু|অন্যান্য|অন্য\s*প্রোডাক্ট|অন্য|ছাড়া|বাদ|সাজেস্ট|কি\s*কি\s*আছে|ক্যাটালগ|সব\s*প্রোডাক্ট|লিস্ট|কালেকশন|catalog|collection|all\s*product|show\s*all|other|more|kichu\s*nai)/i.test(incomingText || "");
+            if (isCatalogExploration) {
+              session.selected_order_product = null;
+              session.last_discussed_product = null;
+              session.discussed_products = [];
+              saveSession(chatId, session);
+            }
+
             // 🎯 কাস্টমার যদি টেক্সটে প্রোডাক্ট চয়েস করে (১, ২, প্রথমটা, অথবা প্রোডাক্টের নাম)
-            if (session.discussed_products && session.discussed_products.length > 1 && !session.selected_order_product) {
+            if (!isCatalogExploration && !/(?:ছাড়া|বিনা|বাদ|না|different|other)/i.test(incomingText || "") && session.discussed_products && session.discussed_products.length > 1 && !session.selected_order_product) {
               const cleanMsg = (incomingText || "").trim().toLowerCase();
               let selectedIdx = -1;
               if (/^(?:১|1|১ম|প্রথম|first|1st|এক|১\s*নং|১\s*নম্বর)\b/i.test(cleanMsg)) selectedIdx = 0;
@@ -2430,8 +2492,8 @@ app.post('/webhook/meta', (req, res) => {
               else {
                 for (let i = 0; i < session.discussed_products.length; i++) {
                   const p = session.discussed_products[i];
-                  const pWords = (p.name || "").toLowerCase().split(/\s+/).filter(w => w.length > 3);
-                  if (pWords.some(w => cleanMsg.includes(w))) {
+                  const pWords = (p.name || "").toLowerCase().split(/\s+/).filter(w => w.length > 3 && w !== 'panjabi');
+                  if (pWords.length > 0 && pWords.every(w => cleanMsg.includes(w))) {
                     selectedIdx = i;
                     break;
                   }
@@ -2447,20 +2509,11 @@ app.post('/webhook/meta', (req, res) => {
               }
             }
 
-            // যদি কাস্টমার অন্য প্রোডাক্ট বা সাধারণ কালেকশন দেখতে চায়, পূর্বের প্রোডাক্ট লক ক্লিয়ার করা
-            const isCatalogExploration = /(?:আর\s*কিছু|অন্য\s*কিছু|অন্যান্য|সাজেস্ট|কি\s*কি\s*আছে|ক্যাটালগ|সব\s*প্রোডাক্ট|catalog|show\s*all)/i.test(incomingText || "");
-            if (isCatalogExploration) {
-              session.selected_order_product = null;
-              session.last_discussed_product = null;
-              session.discussed_products = [];
-              saveSession(chatId, session);
-            }
-
             let userPromptText = incomingText ? incomingText.trim() : "";
             if (userSentAudio) {
               userPromptText = userPromptText
-                ? `The customer sent an audio voice note on Messenger with caption: "${userPromptText}". Listen to their spoken words carefully and answer their specific inquiry or question directly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions without robotic introductions!`
-                : "The customer sent an audio voice note on Messenger. Listen to their spoken words carefully and reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products or their order!";
+                ? `The customer sent an audio voice note on Messenger with caption: "${userPromptText}". Listen to their spoken words carefully and answer their specific inquiry or question directly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, and link without robotic introductions!`
+                : "The customer sent an audio voice note on Messenger. Listen to their spoken words carefully and reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, and link. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products!";
             } else if (userSentVideo) {
               userPromptText = userPromptText
                 ? `The customer sent a product video with caption: "${userPromptText}". WATCH AND ANALYZE THIS VIDEO CAREFULLY. Match the product shown with our Ranonex store catalog. State its exact name, price, key features, and product link in pure Bengali script (বাংলা লিপি), answer their caption, and ask if they want to order it.`
@@ -3323,7 +3376,7 @@ async function startWhatsAppClient(forceReset = false) {
           const { productsList } = await getStoreCatalog();
 
           // যদি কাস্টমার অন্য প্রোডাক্ট বা সাধারণ কালেকশন দেখতে চায়, পূর্বের প্রোডাক্ট লক ক্লিয়ার করা
-          const isCatalogExploration = /(?:আর\s*কিছু|অন্য\s*কিছু|অন্যান্য|সাজেস্ট|কি\s*কি\s*আছে|ক্যাটালগ|সব\s*প্রোডাক্ট|catalog|show\s*all)/i.test(incomingText || "");
+          const isCatalogExploration = /(?:আর\s*কিছু|অন্য\s*কিছু|অন্যান্য|অন্য\s*প্রোডাক্ট|অন্য|ছাড়া|বাদ|সাজেস্ট|কি\s*কি\s*আছে|ক্যাটালগ|সব\s*প্রোডাক্ট|লিস্ট|কালেকশন|catalog|collection|all\s*product|show\s*all|other|more|kichu\s*nai)/i.test(incomingText || "");
           if (isCatalogExploration) {
             session.selected_order_product = null;
             session.last_discussed_product = null;
@@ -3331,7 +3384,9 @@ async function startWhatsAppClient(forceReset = false) {
             saveSession(chatId, session);
           }
 
-          const earlyMatchedProduct = findMatchingProduct(incomingText, productsList);
+          const earlyMatchedProduct = (!isCatalogExploration && !/(?:ছাড়া|বিনা|বাদ|না|different|other)/i.test(incomingText || ""))
+            ? findMatchingProduct(incomingText, productsList)
+            : null;
           if (earlyMatchedProduct) {
             if (!session.discussed_products.some(p => p.id === earlyMatchedProduct.id)) {
               session.discussed_products.push(earlyMatchedProduct);
@@ -3345,14 +3400,14 @@ async function startWhatsAppClient(forceReset = false) {
           let userPromptText = incomingText ? incomingText.trim() : "";
           if (userSentAudio) {
             userPromptText = userPromptText
-              ? `The customer sent a WhatsApp voice note with caption: "${userPromptText}". Listen to their spoken words carefully and answer their specific inquiry or question directly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions without robotic introductions!`
-              : "The customer sent a WhatsApp voice note. Listen to their spoken words carefully and reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products or their order!";
+              ? `The customer sent a WhatsApp voice note with caption: "${userPromptText}". Listen to their spoken words carefully and answer their specific inquiry or question directly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, and link without robotic introductions!`
+              : "The customer sent a WhatsApp voice note. Listen to their spoken words carefully and reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, and link. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products!";
           } else if (userSentImage) {
             userPromptText = userPromptText
               ? `The customer sent a product photo on WhatsApp with caption: "${userPromptText}". Match it with our Ranonex store catalog, state its exact name and price in pure Bengali script (বাংলা লিপি), and ask if they want to order.`
               : "The customer sent a product photo on WhatsApp. Match it with our Ranonex store catalog, state its exact name, price, and link in pure Bengali script (বাংলা লিপি), and ask if they want to order.";
           } else if (userSentVideo) {
-            userPromptText = "The customer sent a product video on WhatsApp. Match it with our Ranonex store catalog and reply in pure Bengali script (বাংলা লিপি) with exact name, price, and order instructions.";
+            userPromptText = "The customer sent a product video on WhatsApp. Match it with our Ranonex store catalog and reply in pure Bengali script (বাংলা লিপি) with exact name, price, and link.";
           }
 
           const aiDecision = await callGeminiSalesAI(
