@@ -441,14 +441,16 @@ export default {
             let variants = [];
             try { variants = typeof p.variants === 'string' ? JSON.parse(p.variants) : (p.variants || []); } catch(e) {}
 
-            let r2Img = "";
-            if (gallery.length > 0 && typeof gallery[0] === 'string' && gallery[0].startsWith('http')) {
-              r2Img = gallery[0];
-            } else if (variants.length > 0 && variants[0]?.imageUrl && variants[0].imageUrl.startsWith('http')) {
-              r2Img = variants[0].imageUrl;
-            } else {
-              for (const img of gallery) { if (typeof img === 'string' && img.startsWith('http')) { r2Img = img; break; } }
+            const allImgs = [];
+            for (const img of gallery) {
+              if (typeof img === 'string' && img.startsWith('http') && !allImgs.includes(img)) allImgs.push(img);
             }
+            for (const v of variants) {
+              if (v?.imageUrl && typeof v.imageUrl === 'string' && v.imageUrl.startsWith('http') && !allImgs.includes(v.imageUrl)) {
+                allImgs.push(v.imageUrl);
+              }
+            }
+            const r2Img = allImgs[0] || "";
 
             const basePrice = parseFloat(p.base_price || 0);
             const flashPrice = parseFloat(p.flash_sale_price || 0);
@@ -467,7 +469,7 @@ export default {
             const sku = (p.sku && p.sku.trim()) ? p.sku.trim() : prodId.toUpperCase();
             const productUrl = `https://ranonex.shop/product.html?id=${encodeURIComponent(p.id)}`;
 
-            const galleryJson = JSON.stringify(gallery);
+            const galleryJson = JSON.stringify(allImgs);
 
             await env.DB.prepare(`
               INSERT INTO products (

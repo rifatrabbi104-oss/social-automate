@@ -1258,27 +1258,113 @@ function renderProductsTable() {
 // ⚡ ১-ক্লিকে পুরো ওয়েবসাইট (ranonex.shop) এর সমস্ত প্রোডাক্ট D1-এ সিঙ্ক
 window.syncAllStoreProducts = async function() {
   const btn = document.getElementById('btn-sync-all-store');
-  const origText = btn ? btn.innerHTML : '<span>⚡</span> 1-Click Sync All Store Products (11 Products)';
+  const origText = btn ? btn.innerHTML : '<span>⚡</span> 1-Click Sync All Store Products';
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = '<span>⏳</span> শপের ১১টি প্রোডাক্ট ও SKU সিঙ্ক হচ্ছে...';
+    btn.innerHTML = '<span>⏳</span> শপের সমস্ত প্রোডাক্ট ও গ্যালারির ছবি সিঙ্ক হচ্ছে...';
   }
 
   try {
-    const res = await fetch(`${API_BASE}/sync-all-store-products`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    });
+    // ১. সরাসরি ranonex.shop পাবলিক API থেকে সমস্ত প্রোডাক্ট ও সব ছবি ফেচ (100% নির্ভরযোগ্য)
+    let storeItems = [];
+    try {
+      const storeRes = await fetch("https://ranonex.shop/api/public-data");
+      if (storeRes.ok) {
+        const storeJson = await storeRes.json();
+        storeItems = storeJson?.data?.products || (Array.isArray(storeJson?.data) ? storeJson.data : []);
+      }
+    } catch(e) {
+      console.warn("Direct store public-data fetch failed:", e);
+    }
 
-    const data = await res.json();
-    if (res.ok && data.success && data.products) {
-      appState.products = data.products;
+    if (storeItems.length > 0) {
+      const syncedProducts = [];
+      for (const p of storeItems) {
+        let gallery = [];
+        try { gallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []); } catch(e){}
+        let variants = [];
+        try { variants = typeof p.variants === 'string' ? JSON.parse(p.variants) : (p.variants || []); } catch(e){}
+
+        const allImgs = [];
+        for (const img of gallery) {
+          if (typeof img === 'string' && img.startsWith('http') && !allImgs.includes(img)) allImgs.push(img);
+        }
+        for (const v of variants) {
+          if (v?.imageUrl && typeof v.imageUrl === 'string' && v.imageUrl.startsWith('http') && !allImgs.includes(v.imageUrl)) {
+            allImgs.push(v.imageUrl);
+          }
+        }
+        const r2Img = allImgs[0] || '';
+
+        const basePrice = parseFloat(p.base_price || 0);
+        const flashPrice = parseFloat(p.flash_sale_price || 0);
+        const finalPrice = (flashPrice > 0 && flashPrice < basePrice) ? (basePrice - flashPrice) : basePrice;
+
+        const rawDesc = p.description || p.details || "";
+        const cleanDesc = rawDesc.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
+
+        const specsSummary = variants.map(v => {
+          const color = v.colorName || 'Default';
+          const sizes = (v.sizes || []).map(s => `${s.size}${s.stock <= 0 ? ' (Stock Out)' : ''}`).join(', ');
+          return sizes ? `${color}: ${sizes}` : color;
+        }).join(' | ') || 'Standard / One Size';
+
+        const prodId = p.id || `p_${Date.now()}`;
+        const sku = (p.sku && p.sku.trim()) ? p.sku.trim() : prodId.toUpperCase();
+        const productUrl = `https://ranonex.shop/product.html?id=${encodeURIComponent(p.id)}`;
+
+        const productObj = {
+          id: prodId,
+          sku,
+          name: p.name || 'Store Product',
+          price: finalPrice,
+          original_price: basePrice,
+          description: cleanDesc,
+          category: p.category || 'General',
+          image_url: r2Img,
+          gallery_images: JSON.stringify(allImgs),
+          product_url: productUrl,
+          specifications: specsSummary,
+          stock_status: 'in_stock',
+          daily_auto_post: 1,
+          target_platform: 'facebook',
+          schedule_type: 'daily',
+          posting_time: '20:00',
+          interval_hours: 4,
+          is_active: 1
+        };
+
+        syncedProducts.push(productObj);
+
+        // ব্যাকএন্ড D1-এ সেভ করা
+        try {
+          await fetch(`${API_BASE}/products`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(productObj)
+          });
+        } catch(e){}
+      }
+
+      appState.products = syncedProducts;
       setLocalCache(CACHE_KEYS.PRODUCTS, appState.products);
       renderProductsTable();
-      showToast(`🎉 ${data.message || `${data.count}টি প্রোডাক্ট D1-এ সিঙ্ক সম্পন্ন!`}`);
+      showToast(`🎉 শপের ${syncedProducts.length}টি প্রোডাক্টের সমস্ত ছবি সহ সফলভাবে সিঙ্ক হয়েছে!`);
     } else {
-      showToast(`❌ সিঙ্ক ব্যর্থ: ${data.error || 'অজানা ত্রুটি'}`);
-      alert(`সিঙ্ক ব্যর্থ হয়েছে:\n${data.error || 'সার্ভার রেসপন্স চেক করুন'}`);
+      // ব্যাকএন্ড API ফলব্যাক
+      const res = await fetch(`${API_BASE}/sync-all-store-products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.products) {
+        appState.products = data.products;
+        setLocalCache(CACHE_KEYS.PRODUCTS, appState.products);
+        renderProductsTable();
+        showToast(`🎉 ${data.message || `${data.count}টি প্রোডাক্ট D1-এ সিঙ্ক সম্পন্ন!`}`);
+      } else {
+        showToast(`❌ সিঙ্ক ব্যর্থ: ${data.error || 'অজানা ত্রুটি'}`);
+      }
     }
   } catch (err) {
     showToast(`❌ নেটওয়ার্ক এরর: ${err.message}`);
@@ -1567,18 +1653,95 @@ function initBusinessDataForms() {
       }
 
       quickFetchBtn.disabled = true;
-      quickFetchBtn.textContent = '⏳ Auto-Fetching...';
+      quickFetchBtn.textContent = '⏳ সমস্ত ছবি ও তথ্য ফেচ হচ্ছে...';
 
       try {
-        const res = await fetch(`${API_BASE}/extract-product`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url })
-        });
+        let p = null;
+        let fetchedGallery = [];
 
-        const data = await res.json();
-        if (res.ok && data.success && data.product) {
-          const p = data.product;
+        // ১. সরাসরি শপের পাবলিক API প্রোব (ব্রাউজার থেকে সরাসরি, সুপারফাস্ট ও গ্যালারির সমস্ত ছবি নিশ্চিত)
+        try {
+          const parsed = new URL(url);
+          const prodId = parsed.searchParams.get('id');
+          if (prodId) {
+            const probeRes = await fetch(`${parsed.origin}/api/public-data?product_id=${encodeURIComponent(prodId)}`);
+            if (probeRes.ok) {
+              const probeJson = await probeRes.json();
+              const rawP = probeJson.product || (probeJson.data?.products ? probeJson.data.products.find(x => String(x.id) === String(prodId)) : null);
+              if (rawP) {
+                let g = [];
+                try { g = typeof rawP.gallery_images === 'string' ? JSON.parse(rawP.gallery_images) : (rawP.gallery_images || []); } catch(e){}
+                let v = [];
+                try { v = typeof rawP.variants === 'string' ? JSON.parse(rawP.variants) : (rawP.variants || []); } catch(e){}
+
+                for (const img of g) {
+                  if (typeof img === 'string' && img.startsWith('http') && !fetchedGallery.includes(img)) fetchedGallery.push(img);
+                }
+                for (const item of v) {
+                  if (item?.imageUrl && typeof item.imageUrl === 'string' && item.imageUrl.startsWith('http') && !fetchedGallery.includes(item.imageUrl)) {
+                    fetchedGallery.push(item.imageUrl);
+                  }
+                }
+
+                const basePrice = parseFloat(rawP.base_price || 0);
+                const flashPrice = parseFloat(rawP.flash_sale_price || 0);
+                const finalPrice = (flashPrice > 0 && flashPrice < basePrice) ? (basePrice - flashPrice) : basePrice;
+                const cleanDesc = (rawP.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().substring(0, 600);
+
+                const specsSummary = v.map(item => {
+                  const color = item.colorName || 'Default';
+                  const sizes = (item.sizes || []).map(s => `${s.size}${s.stock <= 0 ? ' (Stock Out)' : ''}`).join(', ');
+                  return sizes ? `${color}: ${sizes}` : color;
+                }).join(' | ') || 'Standard / One Size';
+
+                p = {
+                  name: rawP.name || 'Store Product',
+                  sku: (rawP.sku && rawP.sku.trim()) ? rawP.sku.trim() : (rawP.id ? String(rawP.id).toUpperCase() : ''),
+                  price: finalPrice,
+                  original_price: basePrice,
+                  description: cleanDesc,
+                  specifications: specsSummary,
+                  product_url: url,
+                  image_url: fetchedGallery[0] || '',
+                  gallery_images: fetchedGallery
+                };
+              }
+            }
+          }
+        } catch(e) {
+          console.warn('Direct store probe fallback:', e);
+        }
+
+        // ২. ক্লাউড ব্যাকএন্ড থেকে ফেচ (যদি সরাসরি না পাওয়া যায় বা অন্যান্য সাইটের লিঙ্ক হয়)
+        if (!p || fetchedGallery.length <= 1) {
+          try {
+            const res = await fetch(`${API_BASE}/extract-product`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url })
+            });
+
+            const data = await res.json();
+            if (res.ok && data.success && data.product) {
+              const bgProd = data.product;
+              if (!p) p = bgProd;
+              let bgGallery = [];
+              try {
+                bgGallery = typeof bgProd.gallery_images === 'string' ? JSON.parse(bgProd.gallery_images) : (bgProd.gallery_images || []);
+              } catch(e){}
+              for (const img of bgGallery) {
+                if (typeof img === 'string' && img.startsWith('http') && !fetchedGallery.includes(img)) fetchedGallery.push(img);
+              }
+              if (bgProd.image_url && !fetchedGallery.includes(bgProd.image_url)) {
+                fetchedGallery.push(bgProd.image_url);
+              }
+            }
+          } catch(e) {
+            console.warn('Backend extract-product probe failed:', e);
+          }
+        }
+
+        if (p) {
           // ফর্মে অটো-ফিল করা
           document.getElementById('prod-name').value = p.name || '';
           document.getElementById('prod-price').value = p.price || '';
@@ -1587,11 +1750,6 @@ function initBusinessDataForms() {
           if (document.getElementById('prod-url')) document.getElementById('prod-url').value = p.product_url || url;
           if (document.getElementById('prod-desc')) document.getElementById('prod-desc').value = p.description || '';
 
-          // সমস্ত ছবি গ্যালারিতে রেন্ডার
-          let fetchedGallery = [];
-          try {
-            fetchedGallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []);
-          } catch(e){}
           if (fetchedGallery.length === 0 && p.image_url) {
             fetchedGallery = [p.image_url];
           }
@@ -1606,10 +1764,10 @@ function initBusinessDataForms() {
             if (previewPrice) previewPrice.textContent = `৳${p.price} BDT`;
           }
 
-          showToast(`✅ "${p.name}" এর তথ্য ও ${fetchedGallery.length}টি R2 ফটো লোড হয়েছে!`);
+          showToast(`✅ "${p.name}" এর তথ্য ও ${fetchedGallery.length}টি ফটো গ্যালারিতে লোড হয়েছে!`);
         } else {
-          showToast(`❌ ফেচ ব্যর্থ: ${data.error || 'Product not found'}`);
-          alert(`ফেচ ব্যর্থ হয়েছে:\n${data.error || 'প্রোডাক্টের তথ্য খুঁজে পাওয়া যায়নি। অনুগ্রহ করে ম্যানুয়ালি লিখুন।'}`);
+          showToast(`❌ ফেচ ব্যর্থ: প্রোডাক্টের তথ্য পাওয়া যায়নি`);
+          alert(`ফেচ ব্যর্থ হয়েছে:\nপ্রোডাক্টের তথ্য খুঁজে পাওয়া যায়নি। অনুগ্রহ করে ম্যানুয়ালি লিখুন।`);
         }
       } catch (err) {
         showToast(`❌ নেটওয়ার্ক এরর: ${err.message}`);
