@@ -341,21 +341,22 @@
                 <img id="prod-img-preview" src="" style="display: none;">
               </div>
               <div class="form-row">
-                <div class="form-group" style="flex: 1.2;">
-                  <label>⏰ Auto-Post Schedule (নির্দিষ্ট সময় বা ঘণ্টা পর পর)</label>
-                  <select id="prod-post-time" style="background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-color); padding: 12px 14px; border-radius: var(--radius-md); color: var(--text-main); font-family: inherit; width: 100%;">
-                    <option value="interval_2">⏱️ প্রতি ২ ঘণ্টা পর পর (Every 2 Hours)</option>
-                    <option value="interval_4" selected>⏱️ প্রতি ৪ ঘণ্টা পর পর (Every 4 Hours - প্রস্তাবিত)</option>
-                    <option value="interval_6">⏱️ প্রতি ৬ ঘণ্টা পর পর (Every 6 Hours)</option>
-                    <option value="interval_8">⏱️ প্রতি ৮ ঘণ্টা পর পর (Every 8 Hours)</option>
-                    <option value="interval_12">⏱️ প্রতি ১২ ঘণ্টা পর পর (Every 12 Hours)</option>
-                    <option value="interval_24">⏱️ প্রতি ২৪ ঘণ্টা পর পর (Once a Day)</option>
-                    <option value="10:00">⏰ প্রতিদিন সকাল ১০:০০ টা (10:00 AM)</option>
-                    <option value="15:00">⏰ প্রতিদিন বিকাল ০৩:০০ টা (03:00 PM)</option>
-                    <option value="20:00">⏰ প্রতিদিন রাত ০৮:০০ টা (08:00 PM - পিক টাইম)</option>
-                    <option value="22:00">⏰ প্রতিদিন রাত ১০:০০ টা (10:00 PM)</option>
-                    <option value="10:00, 20:00">⏰ দিনে ২ বার: সকাল ১০:০০ টা ও রাত ০৮:০০ টা</option>
-                  </select>
+                <div class="form-group" style="flex: 1.4;">
+                  <label style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span>⏰ Daily Post Time (দৈনিক ১ বার পোস্টের সময়)</span>
+                    <span style="font-size: 11px; padding: 2px 8px; border-radius: 10px; background: rgba(16, 185, 129, 0.2); color: #34d399; font-weight: 700;">প্রতিদিন ১ বার</span>
+                  </label>
+                  <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <input type="time" id="prod-post-time" value="20:00" style="padding: 10px 14px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); border-radius: var(--radius-md); color: var(--text-main); font-size: 15px; font-weight: 700; width: 140px; cursor: pointer;">
+                    
+                    <!-- ⚡ ৩ সেকেন্ডে ১-ক্লিক কুইক টাইম পিলস -->
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                      <button type="button" class="btn-time-pill" onclick="setPostTime('10:00')" style="padding: 7px 10px; font-size: 11px; font-weight: 600; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; color: #cbd5e1; cursor: pointer;">🌅 সকাল ১০:০০</button>
+                      <button type="button" class="btn-time-pill" onclick="setPostTime('15:00')" style="padding: 7px 10px; font-size: 11px; font-weight: 600; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; color: #cbd5e1; cursor: pointer;">🌇 বিকাল ৩:০০</button>
+                      <button type="button" class="btn-time-pill" onclick="setPostTime('20:00')" style="padding: 7px 10px; font-size: 11px; font-weight: 700; background: rgba(16, 185, 129, 0.2); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 6px; color: #34d399; cursor: pointer;">🌙 রাত ৮:০০ (পিক)</button>
+                      <button type="button" class="btn-time-pill" onclick="setPostTime('22:00')" style="padding: 7px 10px; font-size: 11px; font-weight: 600; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; color: #cbd5e1; cursor: pointer;">🌃 রাত ১০:০০</button>
+                    </div>
+                  </div>
                 </div>
                 <div class="form-group" style="flex: 1;">
                   <label>🎯 Target Social Platform</label>

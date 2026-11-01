@@ -2439,21 +2439,24 @@ function formatExtractedProduct(p, url) {
     variants = typeof p.variants === 'string' ? JSON.parse(p.variants) : (p.variants || []);
   } catch(e) {}
 
-  // পাবলিক R2 ফটো নির্ধারণ
-  let r2Image = "";
-  if (gallery.length > 0 && typeof gallery[0] === 'string' && gallery[0].startsWith('http')) {
-    r2Image = gallery[0];
-  } else if (variants.length > 0 && variants[0]?.imageUrl && variants[0].imageUrl.startsWith('http')) {
-    r2Image = variants[0].imageUrl;
-  } else {
-    for (const img of gallery) {
-      if (typeof img === 'string' && img.startsWith('http')) { r2Image = img; break; }
+  // সমস্ত ইউনিক ফটো সংগ্রহ (গ্যালারি ও ভ্যারিয়েন্ট ইমেজ সহ সব ফটো)
+  const allImages = [];
+  for (const img of gallery) {
+    if (typeof img === 'string' && img.startsWith('http') && !allImages.includes(img)) {
+      allImages.push(img);
     }
-    if (!r2Image) {
-      for (const v of variants) {
-        if (v && v.imageUrl && v.imageUrl.startsWith('http')) { r2Image = v.imageUrl; break; }
-      }
+  }
+  for (const v of variants) {
+    if (v && typeof v.imageUrl === 'string' && v.imageUrl.startsWith('http') && !allImages.includes(v.imageUrl)) {
+      allImages.push(v.imageUrl);
     }
+  }
+
+  // প্রাইমারি ইমেজ নির্বাচন
+  let r2Image = allImages[0] || "";
+  if (!r2Image && p.image_url && p.image_url.startsWith('http')) {
+    r2Image = p.image_url;
+    allImages.push(r2Image);
   }
 
   const basePrice = parseFloat(p.base_price || p.price || 0);
@@ -2482,6 +2485,7 @@ function formatExtractedProduct(p, url) {
       discount: flashSale,
       description: cleanDesc,
       image_url: r2Image,
+      gallery_images: allImages,
       product_url: url,
       category: p.category || "General",
       specifications: specsSummary,
@@ -2812,6 +2816,11 @@ async function generateAIPostCaption(product, angleObj, env) {
     } catch (imgErr) {}
   }
 
+  // নিশ্চিত প্রোডাক্ট অর্ডার লিঙ্ক (শুধু ranonex.shop নয়, সরাসরি প্রোডাক্টের URL)
+  const productOrderLink = (product.product_url && product.product_url.includes('product.html'))
+    ? product.product_url
+    : (product.id ? `https://ranonex.shop/product.html?id=${encodeURIComponent(product.id)}` : 'https://ranonex.shop');
+
   const prompt = `
 You are an elite Bangladeshi e-commerce copywriter with mastery in high-converting, viral social media posts.
 Write an authentic, irresistible Facebook post for this product in natural Bengali.
@@ -2821,7 +2830,7 @@ Name: ${product.name}
 Price: ৳${product.price} ${product.original_price && product.original_price > product.price ? `(Regular Price: ৳${product.original_price})` : ''}
 Details / Features: ${product.description || 'Premium quality durable product'}
 Category: ${product.category || 'General'}
-Website Order Link: ${product.product_url || 'https://ranonex.shop'}
+Website Order Link: ${productOrderLink}
 
 === STORE POLICIES (LOADED DIRECTLY FROM D1 DATABASE) ===
 Store Name: ${policies.store_name}
@@ -2852,7 +2861,7 @@ Opening Inspiration: "${randomHook}"
    - ঢাকার বাইরে: ${policies.del_outside}
    Do NOT invent or alter delivery prices.
 7. Return Guarantee: State that customers can check the parcel upon delivery (${policies.return_policy}).
-8. Give a clear Call-to-Action with the website order link: ${product.product_url || 'ইনবক্স করুন বা ওয়েবসাইটে গিয়ে অর্ডার করুন'}.
+8. Give a clear Call-to-Action with the exact product website link: ${productOrderLink}.
 9. Include 3-4 natural hashtags at the very end.
 10. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
 `;
@@ -3164,90 +3173,69 @@ async function handleScheduledAutoPosting(env) {
   const bdtDate = new Date(now + 6 * 3600 * 1000);
   const currentHour = bdtDate.getUTCHours();
   const currentMinute = bdtDate.getUTCMinutes();
+  const currentBdtDateStr = bdtDate.toISOString().slice(0, 10); // YYYY-MM-DD
   const executionLog = [];
 
-  const intervalProducts = prods.filter(p => p.schedule_type === 'interval' || (p.posting_time && p.posting_time.startsWith('interval_')));
-  const dailyProducts = prods.filter(p => !intervalProducts.includes(p));
-
-  // --- ক. স্মার্ট ইন্টারভ্যাল কিউ রোটেশন (প্রতি ৪ ঘণ্টা পর পর ১টি প্রোডাক্ট ফেসবুকে পোস্ট) ---
-  if (intervalProducts.length > 0) {
-    let lastGlobalPostTime = 0;
-    try {
-      const lastHist = await env.DB.prepare("SELECT published_at FROM post_history WHERE platform = 'facebook' ORDER BY published_at DESC LIMIT 1").first();
-      if (lastHist && lastHist.published_at) {
-        const cleanStr = String(lastHist.published_at).replace(" ", "T");
-        lastGlobalPostTime = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z").getTime();
-        if (isNaN(lastGlobalPostTime)) lastGlobalPostTime = 0;
-      }
-    } catch (e) {}
-
-    const intervalHours = intervalProducts[0].interval_hours || 4;
-    const elapsedSinceLastPost = lastGlobalPostTime > 0 ? (now - lastGlobalPostTime) / (3600 * 1000) : 999;
-
-    // পরবর্তী প্রোডাক্ট নির্ধারণ (যেটি সবচেয়ে আগে বা কখনো পোস্ট হয়নি)
-    const sortedQueue = [...intervalProducts].sort((a, b) => {
-      const aTime = a.last_posted_at ? new Date(String(a.last_posted_at).replace(" ", "T") + "Z").getTime() : 0;
-      const bTime = b.last_posted_at ? new Date(String(b.last_posted_at).replace(" ", "T") + "Z").getTime() : 0;
-      return aTime - bTime;
-    });
-    const nextProduct = sortedQueue[0];
-
-    if (lastGlobalPostTime === 0 || elapsedSinceLastPost >= intervalHours) {
-      if (nextProduct) {
-        const reason = lastGlobalPostTime === 0 
-          ? "First scheduled auto-post cycle initiated" 
-          : `Interval of ${intervalHours}h passed (${elapsedSinceLastPost.toFixed(1)}h elapsed). Selected next product in queue.`;
-        console.log(`🚀 [Auto-Post Due] Publishing: ${nextProduct.name} (SKU: ${nextProduct.sku || nextProduct.id}) - Reason: ${reason}`);
-        try {
-          const pubRes = await handlePublishProductNow({ product_id: nextProduct.id, platform: nextProduct.target_platform || 'facebook' }, env);
-          executionLog.push({ product_id: nextProduct.id, name: nextProduct.name, sku: nextProduct.sku, status: "published", post_id: pubRes.post_id || null, reason });
-        } catch (err) {
-          executionLog.push({ product_id: nextProduct.id, name: nextProduct.name, sku: nextProduct.sku, status: "error", error: err.message, reason });
-        }
-      }
-    } else {
-      const hoursLeft = (intervalHours - elapsedSinceLastPost).toFixed(1);
-      executionLog.push({
-        status: "waiting",
-        reason: `Next interval post due in ${hoursLeft} hours (${intervalHours}h interval, ${elapsedSinceLastPost.toFixed(1)}h elapsed)`,
-        next_up: nextProduct ? `${nextProduct.name} (${nextProduct.sku || nextProduct.id})` : 'None'
-      });
-    }
-  }
-
-  // --- খ. নির্দিষ্ট দৈনিক সময় বেসিস (যেমন "10:00", "20:00") ---
-  for (const p of dailyProducts) {
-    let lastPosted = 0;
+  // ⏰ দৈনিক ১ বার প্রকাশের শিডিউল প্রসেসিং (প্রতি প্রোডাক্ট দিনে সর্বোচ্চ ১ বার নির্দিষ্ট সময়ে পোস্ট হবে)
+  for (const p of prods) {
+    let lastPostedBdtDateStr = "";
     if (p.last_posted_at) {
-      const cleanStr = String(p.last_posted_at).replace(" ", "T");
-      lastPosted = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z").getTime();
-      if (isNaN(lastPosted)) lastPosted = 0;
-    }
-    const times = (p.posting_time || '10:00').split(',').map(t => t.trim());
-    const hoursSinceLast = (now - lastPosted) / (3600 * 1000);
-    let isDue = false;
-    let reason = "";
-
-    if (lastPosted === 0 || hoursSinceLast >= 3.5) {
-      for (const t of times) {
-        const [tHour] = t.split(':').map(Number);
-        if (tHour === currentHour) {
-          isDue = true;
-          reason = `Scheduled daily hour match: ${tHour}:00 BDT`;
-          break;
+      try {
+        const cleanStr = String(p.last_posted_at).replace(" ", "T");
+        const lastDt = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z");
+        if (!isNaN(lastDt.getTime())) {
+          const lastBdt = new Date(lastDt.getTime() + 6 * 3600 * 1000);
+          lastPostedBdtDateStr = lastBdt.toISOString().slice(0, 10);
         }
-      }
+      } catch (e) {}
     }
-    if (isDue) {
+
+    // ১. চেক করা এই প্রোডাক্ট আজ অলরেডি পোস্ট হয়েছে কিনা (দিনে ১ বার গ্যারান্টি)
+    if (lastPostedBdtDateStr && lastPostedBdtDateStr === currentBdtDateStr) {
+      executionLog.push({
+        product_id: p.id,
+        name: p.name,
+        sku: p.sku,
+        status: "skipped",
+        reason: `আজকের (${currentBdtDateStr}) পোস্ট ইতোমধ্যে সফলভাবে সম্পন্ন হয়েছে। দিনে সর্বোচ্চ ১ বার পোস্ট হবে।`
+      });
+      continue;
+    }
+
+    // ২. সময় মিলানো (যেমন "20:00" -> রাত ৮টা)
+    const targetTime = (p.posting_time && !p.posting_time.startsWith('interval_')) ? p.posting_time : '20:00';
+    const [tHour] = targetTime.split(':').map(Number);
+
+    if (tHour === currentHour) {
+      console.log(`🚀 [Daily Auto-Post Due (${targetTime} BDT)] Publishing: ${p.name} (SKU: ${p.sku || p.id})`);
       try {
         const pubRes = await handlePublishProductNow({ product_id: p.id, platform: p.target_platform || 'facebook' }, env);
-        executionLog.push({ product_id: p.id, name: p.name, status: "published", post_id: pubRes.post_id || null, reason });
+        executionLog.push({
+          product_id: p.id,
+          name: p.name,
+          sku: p.sku,
+          status: "published",
+          post_id: pubRes.post_id || null,
+          reason: `দৈনিক শিডিউল টাইম ম্যাচ (${targetTime} BDT)`
+        });
       } catch (err) {
-        executionLog.push({ product_id: p.id, name: p.name, status: "error", error: err.message, reason });
+        executionLog.push({
+          product_id: p.id,
+          name: p.name,
+          sku: p.sku,
+          status: "error",
+          error: err.message,
+          reason: `দৈনিক শিডিউল টাইম (${targetTime} BDT) - পাবলিশিং ব্যর্থ`
+        });
       }
     } else {
-      reason = `Daily scheduled for ${times.join(', ')} BDT (Current BDT: ${currentHour}:${String(currentMinute).padStart(2, '0')})`;
-      executionLog.push({ product_id: p.id, name: p.name, status: "skipped", reason });
+      executionLog.push({
+        product_id: p.id,
+        name: p.name,
+        sku: p.sku,
+        status: "waiting",
+        reason: `আজকের পোস্ট নির্ধারিত সময়: ${targetTime} BDT (বর্তমান সময়: ${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')} BDT)`
+      });
     }
   }
 

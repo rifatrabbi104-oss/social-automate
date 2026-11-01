@@ -1174,15 +1174,19 @@ function renderProductsTable() {
       ? `<a href="${escapeHtml(p.product_url)}" target="_blank" style="color: var(--primary-light); text-decoration: underline; font-weight: 600;">${escapeHtml(p.name)} 🔗</a>`
       : `<strong>${escapeHtml(p.name)}</strong>`;
 
-    // শিডিউল টেক্সট
-    let schedText = '⏱️ প্রতি ৪ ঘণ্টা পর পর';
-    if (p.posting_time && p.posting_time.startsWith('interval_')) {
-      const h = p.posting_time.replace('interval_', '');
-      schedText = `⏱️ প্রতি ${h} ঘণ্টা পর পর`;
+    // শিডিউল টেক্সট (দৈনিক ১ বার)
+    let schedText = '⏰ প্রতিদিন ২০:০০ BDT';
+    if (p.posting_time) {
+      if (p.posting_time.includes(':')) {
+        schedText = `⏰ প্রতিদিন ${p.posting_time} BDT`;
+      } else if (p.posting_time.startsWith('interval_')) {
+        const h = p.posting_time.replace('interval_', '');
+        schedText = `⏱️ প্রতি ${h} ঘণ্টা পর পর`;
+      } else {
+        schedText = `⏰ ${p.posting_time}`;
+      }
     } else if (p.schedule_type === 'interval') {
       schedText = `⏱️ প্রতি ${p.interval_hours || 4} ঘণ্টা পর পর`;
-    } else if (p.posting_time && p.posting_time !== '10:00') {
-      schedText = `⏰ ${p.posting_time}`;
     }
 
     const autoBadge = (p.daily_auto_post === undefined || p.daily_auto_post != 0)
@@ -1466,6 +1470,15 @@ window.removeGalleryPhoto = function(index) {
   }
 };
 
+// ⏰ ৩ সেকেন্ডে এক-ক্লিকে সময় সিলেক্ট করার হেল্পার
+window.setPostTime = function(timeStr) {
+  const el = document.getElementById('prod-post-time');
+  if (el) {
+    el.value = timeStr;
+    showToast(`⏱️ পোস্টের সময় সেট করা হয়েছে: ${timeStr} BDT`);
+  }
+};
+
 // ✏️ প্রোডাক্ট এডিটর
 window.editProduct = function(id) {
   const p = appState.products.find(x => x.id === id);
@@ -1476,7 +1489,11 @@ window.editProduct = function(id) {
   if (document.getElementById('prod-specs')) document.getElementById('prod-specs').value = p.specifications || '';
   if (document.getElementById('prod-url')) document.getElementById('prod-url').value = p.product_url || '';
   if (document.getElementById('prod-desc')) document.getElementById('prod-desc').value = p.description || '';
-  if (document.getElementById('prod-post-time')) document.getElementById('prod-post-time').value = p.posting_time || 'interval_4';
+  if (document.getElementById('prod-post-time')) {
+    let t = p.posting_time || '20:00';
+    if (t.startsWith('interval_')) t = '20:00';
+    document.getElementById('prod-post-time').value = t;
+  }
   if (document.getElementById('prod-target-platform')) document.getElementById('prod-target-platform').value = p.target_platform || 'facebook';
   if (document.getElementById('prod-stock')) document.getElementById('prod-stock').value = p.stock_status || 'in_stock';
   if (document.getElementById('prod-auto-post')) document.getElementById('prod-auto-post').value = (p.daily_auto_post === undefined || p.daily_auto_post != 0) ? '1' : '0';
@@ -1613,7 +1630,7 @@ function initBusinessDataForms() {
       const sku = document.getElementById('prod-sku') ? document.getElementById('prod-sku').value.trim() : '';
       const specs = document.getElementById('prod-specs') ? document.getElementById('prod-specs').value.trim() : '';
       const url = document.getElementById('prod-url') ? document.getElementById('prod-url').value.trim() : '';
-      const postTime = document.getElementById('prod-post-time') ? document.getElementById('prod-post-time').value : 'interval_4';
+      const postTime = document.getElementById('prod-post-time') ? document.getElementById('prod-post-time').value : '20:00';
       const targetPlatform = document.getElementById('prod-target-platform') ? document.getElementById('prod-target-platform').value : 'facebook';
       const autoPost = document.getElementById('prod-auto-post') ? Number(document.getElementById('prod-auto-post').value) : 1;
       const stock = document.getElementById('prod-stock').value;

@@ -209,19 +209,7 @@ async function getAutoPostTasks() {
   }
 
   return {
-    tasks: [
-      {
-        id: "demo_watch_1",
-        name: "প্রিমিয়াম কোয়ালিটি মেনস ফ্যাশন ওয়াচ",
-        price: 1450,
-        description: "ওয়াটারপ্রুফ, স্টেইনলেস স্টিল চেইন, ১ বছরের ওয়ারেন্টি সহ আকর্ষণীয় লুক।",
-        category: "ফ্যাশন",
-        image_url: "https://images.unsplash.com/photo-1524805444758-089113d48a6d?auto=format&fit=crop&w=1000&q=80",
-        product_url: "",
-        target_platform: "all",
-        previous_posts: []
-      }
-    ],
+    tasks: [],
     credentials
   };
 }

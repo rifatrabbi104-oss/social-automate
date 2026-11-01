@@ -1,10 +1,6 @@
 name: AI Social Post Publisher
 
 on:
-  schedule:
-    # প্রতিদিন সকাল ১০টা এবং রাত ৮টায় স্বয়ংক্রিয়ভাবে পোস্ট হবে (বাংলাদেশ সময়: UTC 04:00 & 14:00)
-    - cron: '0 4,14 * * *'
-
   workflow_dispatch:
     inputs:
       product_url:
@@ -23,13 +19,13 @@ on:
           - telegram
         default: facebook
       post_type:
-        description: 'পোস্ট ফরম্যাট (caption_only = শুধুমাত্র টেক্সট ক্যাপশন, standard = ছবি সহ পোস্ট)'
+        description: 'পোস্ট ফরম্যাট (standard = ছবি সহ পোস্ট, caption_only = শুধুমাত্র টেক্সট ক্যাপশন)'
         required: false
         type: choice
         options:
-          - caption_only
           - standard
-        default: caption_only
+          - caption_only
+        default: standard
 
 jobs:
   publish-ai-post:
