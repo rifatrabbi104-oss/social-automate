@@ -305,51 +305,93 @@ function storeMediaBuffer(buffer, mimeType = 'application/octet-stream', req = n
 }
 
 /**
- * 🎙️ গ্রাহকের ভয়েস অডিও ট্রান্সক্রিপশন হেল্পার (Gemini 3.8 Live Multimodal Engine)
- * Facebook Messenger (.mp4/.aac) ও WhatsApp (.ogg) ভয়েস ক্লিপ ১০০% বাংলায় ট্রান্সক্রাইব করে
+ * 🎙️ FFmpeg এক্সিকিউটেবল পাথ ফাইন্ডার (@ffmpeg-installer/ffmpeg ও সিস্টেম PATH সাপোর্ট)
  */
-async function transcribeAudioBuffer(audioBuffer, mimeType = 'audio/mp4') {
-  if (!audioBuffer || !Buffer.isBuffer(audioBuffer) || audioBuffer.length === 0 || !CONFIG.geminiApiKey) {
-    return "";
-  }
-  const cleanMime = String(mimeType || 'audio/mp4').split(';')[0].trim();
-  const configuredModel = String(CONFIG.geminiModel || "models/gemini-3.8-live").replace(/^models\//, '');
-  
-  // ট্রাই লিস্ট: কনফিগার করা মডেল যদি REST অডিও ট্রান্সক্রিপশনে 404 দেয়, তবে সক্রিয় অডিও মডেল দিয়ে ডিকোড করা
-  const candidateModels = [configuredModel, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-  const uniqueCandidates = [...new Set(candidateModels)];
-
-  for (const model of uniqueCandidates) {
-    try {
-      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${CONFIG.geminiApiKey}`;
-      const resp = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { inlineData: { mimeType: cleanMime, data: audioBuffer.toString('base64') } },
-              { text: 'Listen to this customer audio voice note carefully. Transcribe exactly what the customer spoke in natural Bengali script (বাংলা লিপি). If they ask about products or anything, transcribe it accurately. Output ONLY the plain transcription text in Bengali script, nothing else.' }
-            ]
-          }]
-        })
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        if (text && text.trim()) {
-          console.log(`🎙️ [Customer Voice Decoded via ${model}]: "${text.trim()}"`);
-          return text.trim();
-        }
-      } else {
-        const errTxt = await resp.text().catch(() => "");
-        console.warn(`⚠️ [Audio Transcribe with ${model} returned ${resp.status}]:`, errTxt.slice(0, 120));
-      }
-    } catch (err) {
-      console.warn(`⚠️ [Audio Transcribe ${model} fetch error]:`, err.message);
+function getFfmpegPath() {
+  try {
+    const installer = require('@ffmpeg-installer/ffmpeg');
+    if (installer && installer.path && fs.existsSync(installer.path)) {
+      return installer.path;
     }
-  }
-  return "";
+  } catch (e) {}
+  return 'ffmpeg';
+}
+
+/**
+ * 🎙️ গ্রাহকের ভয়েস অডিওকে Gemini 3.8 Live এর ইনপুট উপযোগী 16kHz 16-bit Mono Linear PCM-এ কনভার্ট করে
+ * WhatsApp (.ogg Opus), Messenger (.mp4/.m4a/.aac), WebM বা যেকোনো ফরম্যাট সাপোর্ট করে
+ */
+function convertAudioToPcm16k(inputBuffer) {
+  if (!inputBuffer || !Buffer.isBuffer(inputBuffer) || inputBuffer.length === 0) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const ffmpegPath = getFfmpegPath();
+      const { spawn } = require('child_process');
+      const proc = spawn(ffmpegPath, [
+        '-i', 'pipe:0',
+        '-f', 's16le',
+        '-acodec', 'pcm_s16le',
+        '-ac', '1',
+        '-ar', '16000',
+        'pipe:1'
+      ]);
+      const chunks = [];
+      proc.stdout.on('data', chunk => chunks.push(chunk));
+      proc.stderr.on('data', () => {});
+      proc.on('close', code => {
+        if (code === 0 && chunks.length > 0) {
+          resolve(Buffer.concat(chunks));
+        } else {
+          resolve(null);
+        }
+      });
+      proc.on('error', (err) => {
+        console.warn('⚠️ [convertAudioToPcm16k ffmpeg error]:', err.message);
+        resolve(null);
+      });
+      proc.stdin.write(inputBuffer);
+      proc.stdin.end();
+    } catch (e) {
+      console.warn('⚠️ [convertAudioToPcm16k exception]:', e.message);
+      resolve(null);
+    }
+  });
+}
+
+/**
+ * 🔊 Gemini 3.8 Live এর তৈরি 24kHz WAV অডিওকে WhatsApp Native PTT (Voice Note) ফরম্যাটে কনভার্ট করে
+ * WhatsApp-এ পাঠালে সরাসরি গ্রিন মাইক্রোফোন ও প্লেয়ার ওয়েভফর্ম দেখা যাবে
+ */
+function convertWavToOggOpus(wavBuffer) {
+  if (!wavBuffer || !Buffer.isBuffer(wavBuffer) || wavBuffer.length === 0) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const ffmpegPath = getFfmpegPath();
+      const { spawn } = require('child_process');
+      const proc = spawn(ffmpegPath, [
+        '-i', 'pipe:0',
+        '-c:a', 'libopus',
+        '-b:a', '32k',
+        '-f', 'ogg',
+        'pipe:1'
+      ]);
+      const chunks = [];
+      proc.stdout.on('data', chunk => chunks.push(chunk));
+      proc.stderr.on('data', () => {});
+      proc.on('close', code => {
+        if (code === 0 && chunks.length > 0) {
+          resolve(Buffer.concat(chunks));
+        } else {
+          resolve(null);
+        }
+      });
+      proc.on('error', () => resolve(null));
+      proc.stdin.write(wavBuffer);
+      proc.stdin.end();
+    } catch (e) {
+      resolve(null);
+    }
+  });
 }
 
 // প্রতি ১০ মিনিট পর পর পুরাতন ইফেমেরাল মিডিয়া ও অডিও ক্যাশ ক্লিনআপ
@@ -406,7 +448,7 @@ function pcmToWav(pcmBuffer, sampleRate = 24000, numChannels = 1, bitDepth = 16)
   return buffer;
 }
 
-// অডিও ফাইল সার্ভিং রুট (Facebook Messenger-এ পাঠানোর জন্য)
+// অডিও ফাইল সার্ভিং রুট (Facebook Messenger ও WhatsApp-এ পাঠানোর জন্য)
 app.get('/audio/:id.wav', (req, res) => {
   const item = audioCache.get(req.params.id);
   if (!item || !item.buffer) {
@@ -419,6 +461,21 @@ app.get('/audio/:id.wav', (req, res) => {
     'Accept-Ranges': 'bytes'
   });
   res.end(item.buffer);
+});
+
+app.get('/audio/:id.ogg', (req, res) => {
+  const item = audioCache.get(req.params.id);
+  const buf = item?.opusBuffer || item?.buffer;
+  if (!buf) {
+    return res.status(404).send("Audio not found or expired");
+  }
+  res.set({
+    'Content-Type': item.opusBuffer ? 'audio/ogg; codecs=opus' : 'audio/wav',
+    'Content-Length': buf.length,
+    'Cache-Control': 'public, max-age=86400',
+    'Accept-Ranges': 'bytes'
+  });
+  res.end(buf);
 });
 
 // মিডিয়া ফাইল সার্ভিং রুট (Photo, Video, Audio — Facebook ও WhatsApp ভিউ/সেন্ডের জন্য)
@@ -1129,18 +1186,26 @@ ${catalog}`;
     });
   }
   if (incomingAudioBuffer) {
-    let cleanAudioMime = (audioMimeType || "audio/mp4").split(';')[0].trim();
-    if (!cleanAudioMime.startsWith("audio/")) cleanAudioMime = "audio/mp4";
-    currentParts.push({
-      inlineData: {
-        mimeType: cleanAudioMime,
-        data: incomingAudioBuffer.toString('base64')
-      }
-    });
+    console.log(`🎙️ [Converting Incoming Audio for Gemini 3.8 Live]: ${incomingAudioBuffer.length} bytes, format: ${audioMimeType}`);
+    const pcmBuffer = await convertAudioToPcm16k(incomingAudioBuffer);
+    if (pcmBuffer && pcmBuffer.length > 0) {
+      currentParts.push({
+        inlineData: {
+          mimeType: "audio/pcm;rate=16000",
+          data: pcmBuffer.toString('base64')
+        }
+      });
+      console.log(`✅ [Audio Fed to Gemini 3.8 Live WebSocket]: ${pcmBuffer.length} bytes 16kHz PCM`);
+    } else {
+      console.warn("⚠️ [Audio to PCM conversion failed] Could not convert audio buffer to 16kHz PCM.");
+    }
   }
 
   // অ্যাক্টিভ অর্ডার কনটেক্সট যুক্ত করা যাতে সকেট রিউজে কোনো লুপ তৈরি না হয়
   let turnPrompt = incomingText ? incomingText.trim() : "";
+  if (incomingAudioBuffer && !turnPrompt) {
+    turnPrompt = "The customer sent an audio voice note. Listen to their spoken words carefully and answer their specific inquiry or question directly, accurately and warmly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions without robotic introductions.";
+  }
   const hasOrderIntent = /(?:অর্ডার|order|confirm|কনফার্ম|নিতে\s*চাই|নিব|নেব|কিনব|buy|বুকিং)/i.test(incomingText || "") || /(?:01[3-9]\d{8})/.test(incomingText || "");
   if (hasOrderIntent) {
     if (session?.selected_order_product) {
@@ -1183,30 +1248,41 @@ ${catalog}`;
             note: actions.note,
             show_helpline: /SHOW_HELPLINE\s*:\s*true/i.test(cached.accumulatedText),
             audio_id: null,
-            audio_url: null
+            audio_url: null,
+            wav_buffer: null,
+            opus_buffer: null
           });
         }
       }, 30000);
 
-      cached.currentTurnResolve = (accText, chunks) => {
+      cached.currentTurnResolve = async (accText, chunks) => {
         if (!isFinished) {
           isFinished = true;
           clearTimeout(timeout);
 
           let audioId = null;
           let audioUrl = null;
+          let wavBuffer = null;
+          let opusBuffer = null;
           if (chunks && chunks.length > 0) {
             try {
               const rawPcm = Buffer.concat(chunks);
-              const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+              wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+              opusBuffer = await convertWavToOggOpus(wavBuffer);
               audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-              audioCache.set(audioId, { buffer: wavBuffer, createdAt: Date.now() });
+              audioCache.set(audioId, {
+                buffer: wavBuffer,
+                opusBuffer: opusBuffer || null,
+                createdAt: Date.now()
+              });
               if (audioCache.size > 100) {
                 const oldest = audioCache.keys().next().value;
                 audioCache.delete(oldest);
               }
               audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
-            } catch (audioErr) {}
+            } catch (audioErr) {
+              console.error("Mode 1 audio processing error:", audioErr.message);
+            }
           }
 
           const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
@@ -1223,7 +1299,9 @@ ${catalog}`;
             note: actions.note,
             show_helpline: /SHOW_HELPLINE\s*:\s*true/i.test(accText),
             audio_id: audioId,
-            audio_url: audioUrl
+            audio_url: audioUrl,
+            wav_buffer: wavBuffer,
+            opus_buffer: opusBuffer
           });
         }
       };
@@ -1300,30 +1378,41 @@ ${catalog}`;
           note: actions.note,
           show_helpline: /SHOW_HELPLINE\s*:\s*true/i.test(socketEntry.accumulatedText),
           audio_id: null,
-          audio_url: null
+          audio_url: null,
+          wav_buffer: null,
+          opus_buffer: null
         });
       }
     }, 30000);
 
-    socketEntry.currentTurnResolve = (accText, chunks) => {
+    socketEntry.currentTurnResolve = async (accText, chunks) => {
       if (!isFinished) {
         isFinished = true;
         clearTimeout(timeout);
 
         let audioId = null;
         let audioUrl = null;
+        let wavBuffer = null;
+        let opusBuffer = null;
         if (chunks && chunks.length > 0) {
           try {
             const rawPcm = Buffer.concat(chunks);
-            const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+            wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+            opusBuffer = await convertWavToOggOpus(wavBuffer);
             audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-            audioCache.set(audioId, { buffer: wavBuffer, createdAt: Date.now() });
+            audioCache.set(audioId, {
+              buffer: wavBuffer,
+              opusBuffer: opusBuffer || null,
+              createdAt: Date.now()
+            });
             if (audioCache.size > 100) {
               const oldest = audioCache.keys().next().value;
               audioCache.delete(oldest);
             }
             audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
-          } catch (audioErr) {}
+          } catch (audioErr) {
+            console.error("Mode 2 audio processing error:", audioErr.message);
+          }
         }
 
         const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
@@ -1340,7 +1429,9 @@ ${catalog}`;
           note: actions.note,
           show_helpline: /SHOW_HELPLINE\s*:\s*true/i.test(accText),
           audio_id: audioId,
-          audio_url: audioUrl
+          audio_url: audioUrl,
+          wav_buffer: wavBuffer,
+          opus_buffer: opusBuffer
         });
       }
     };
@@ -2346,7 +2437,6 @@ app.post('/webhook/meta', (req, res) => {
             // ==========================================
             let incomingAudioBuffer = null;
             let audioMimeType = "audio/mp4";
-            let customerVoiceTranscription = "";
             if (userSentAudio) {
               const audioAttachment = message.attachments.find(a => a.type === 'audio');
               if (audioAttachment?.payload?.url) {
@@ -2358,13 +2448,6 @@ app.post('/webhook/meta', (req, res) => {
                     audioMimeType = (aRes.headers.get("content-type") || "audio/mp4").split(';')[0].trim();
                     if (!audioMimeType.startsWith("audio/")) audioMimeType = "audio/mp4";
                     console.log(`✅ Audio downloaded successfully (${incomingAudioBuffer.length} bytes, ${audioMimeType})`);
-
-                    // 🧠 Gemini 3.8 Live দিয়ে সাথে সাথে বাংলা ভয়েস ট্রান্সক্রাইব করা
-                    customerVoiceTranscription = await transcribeAudioBuffer(incomingAudioBuffer, audioMimeType);
-                    if (customerVoiceTranscription) {
-                      incomingText = customerVoiceTranscription;
-                      console.log(`🗣️ [Customer Spoken Words Transcribed]: "${customerVoiceTranscription}"`);
-                    }
                   }
                 } catch (dlErr) {
                   console.error("Error downloading customer audio:", dlErr.message);
@@ -2448,10 +2531,10 @@ app.post('/webhook/meta', (req, res) => {
             }
 
             let userPromptText = incomingText ? incomingText.trim() : "";
-            if (customerVoiceTranscription) {
-              userPromptText = `The customer sent an audio voice note on Messenger. They said in natural Bengali: "${customerVoiceTranscription}". Reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products, state the price, stock and order instructions!`;
-            } else if (userSentAudio) {
-              userPromptText = "The customer sent an audio voice note on Messenger, but the audio was silent or inaudible. Politely reply in natural Bengali script (বাংলা লিপি) that their voice note was not clearly audible, and ask them to kindly send the audio note again or write what product they need.";
+            if (userSentAudio) {
+              userPromptText = userPromptText
+                ? `The customer sent an audio voice note on Messenger with caption: "${userPromptText}". Listen to their spoken words carefully and answer their specific inquiry or question directly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions without robotic introductions!`
+                : "The customer sent an audio voice note on Messenger. Listen to their spoken words carefully and reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products or their order!";
             } else if (userSentVideo) {
               userPromptText = userPromptText
                 ? `The customer sent a product video with caption: "${userPromptText}". WATCH AND ANALYZE THIS VIDEO CAREFULLY. Match the product shown with our Ranonex store catalog. State its exact name, price, key features, and product link in pure Bengali script (বাংলা লিপি), answer their caption, and ask if they want to order it.`
@@ -2476,11 +2559,11 @@ app.post('/webhook/meta', (req, res) => {
             }
 
             totalMessagesHandled++;
-            console.log(`📩 [Messenger from ${senderId}]: ${customerVoiceTranscription || incomingText || (userSentAudio ? "[Voice Note]" : (userSentVideo ? "[Product Video]" : "[Product Screenshot]"))}`);
+            console.log(`📩 [Messenger from ${senderId}]: ${incomingText || (userSentAudio ? "[Voice Note]" : (userSentVideo ? "[Product Video]" : "[Product Screenshot]"))}`);
 
-            const customerMsgText = customerVoiceTranscription
-              ? `🎙️ "${customerVoiceTranscription}"`
-              : (incomingText || (userSentAudio ? "🎙️ [Voice Message]" : (userSentVideo ? "🎥 [Product Video]" : "📷 [Photo]")));
+            const customerMsgText = incomingText
+              ? `🎙️ ${incomingText}`
+              : (userSentAudio ? "🎙️ [ভয়েস মেসেজ]" : (userSentVideo ? "🎥 [Product Video]" : "📷 [Photo]"));
             const msgAttachments = [];
             if (Array.isArray(message?.attachments)) {
               for (const a of message.attachments) {
@@ -2529,15 +2612,15 @@ app.post('/webhook/meta', (req, res) => {
               return;
             }
 
-            const isVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|শুনতে চাই/i.test(incomingText || customerVoiceTranscription || "");
+            const isVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|শুনতে চাই/i.test(incomingText || "");
 
-            // Gemini 3.8 Live কল (ভয়েস ট্রান্সক্রিপশন ইতিমধ্যে টেক্সটে কনভার্ট হওয়ায় audio/mp4 পাঠিয়ে সকেট ক্র্যাশ হবে না)
+            // Gemini 3.8 Live কল (অডিও বাফার সরাসরি 16kHz PCM হিসেবে সকেটে লাইভ ইনপুট যাবে)
             const aiDecision = await callGeminiSalesAI(
               userPromptText,
               session.messages,
               session,
-              null,
-              null,
+              incomingAudioBuffer,
+              audioMimeType,
               incomingImageBuffer,
               imageMimeType,
               incomingVideoBuffer,
@@ -2659,7 +2742,7 @@ app.post('/webhook/meta', (req, res) => {
               // ৪. ইউজার ভয়েস চাইলে সরাসরি অডিও পাঠানো (Direct Binary Upload or URL)
               if (isVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) {
                 const aItem = aiDecision.audio_id ? audioCache.get(aiDecision.audio_id) : null;
-                const audioToSend = aItem?.buffer || aiDecision.audio_url;
+                const audioToSend = aItem?.buffer || aiDecision.wav_buffer || aiDecision.audio_url;
                 if (audioToSend) {
                   console.log(`🎙️ [Sending Facebook Voice Response to ${senderId}] (${aItem?.buffer ? aItem.buffer.length + ' bytes WAV Buffer' : 'URL'})`);
                   await sendFacebookAudio(senderId, audioToSend);
@@ -3225,7 +3308,6 @@ async function startWhatsAppClient(forceReset = false) {
           // মাল্টিমোডাল মিডিয়া ডাউনলোড (ভয়েস / ছবি / ভিডিও) — Admin Takeover থাকলেও ইনবক্সে দেখানোর জন্য প্রথমেই ডাউনলোড করা হচ্ছে
           let incomingAudioBuffer = null;
           let audioMimeType = "audio/ogg; codecs=opus";
-          let customerVoiceTranscription = "";
           let incomingImageBuffer = null;
           let imageMimeType = "image/jpeg";
           let incomingVideoBuffer = null;
@@ -3246,16 +3328,7 @@ async function startWhatsAppClient(forceReset = false) {
                   audioMimeType = (innerMsg.audioMessage?.mimetype || "audio/ogg").split(';')[0].trim();
                   const stored = storeMediaBuffer(incomingAudioBuffer, audioMimeType);
                   if (stored) hostedWaMedia = { type: 'audio', url: stored.url, mime_type: audioMimeType };
-                  try {
-                    console.log(`🎙️ [WhatsApp Voice Note Detected]: Transcribing ${incomingAudioBuffer.length} bytes...`);
-                    customerVoiceTranscription = await transcribeAudioBuffer(incomingAudioBuffer, audioMimeType);
-                    if (customerVoiceTranscription) {
-                      incomingText = customerVoiceTranscription;
-                      console.log(`🎙️ [WhatsApp Transcribed Bengali]: "${customerVoiceTranscription}"`);
-                    }
-                  } catch (tErr) {
-                    console.error("WhatsApp audio transcription error:", tErr.message);
-                  }
+                  console.log(`🎙️ [WhatsApp Voice Note Detected]: Downloaded ${incomingAudioBuffer.length} bytes (${audioMimeType})`);
                 } else if (userSentImage) {
                   incomingImageBuffer = Buffer.from(mediaBuf);
                   imageMimeType = (innerMsg.imageMessage?.mimetype || "image/jpeg").split(';')[0].trim();
@@ -3274,7 +3347,7 @@ async function startWhatsAppClient(forceReset = false) {
           }
 
           const displayMsgText = incomingText
-            ? (customerVoiceTranscription ? `🎙️ [ভয়েস মেসেজ]: "${customerVoiceTranscription}"` : incomingText)
+            ? `🎙️ ${incomingText}`
             : (userSentAudio ? "🎙️ [ভয়েস মেসেজ]" : (userSentVideo ? "🎥 [Video]" : "📷 [Photo]"));
 
           // 📱 যদি অ্যাডমিন নিজের ফোনের WhatsApp অ্যাপ থেকে অন্য কারো পার্সোনাল চ্যাটে মেসেজ পাঠান, তবে সেটি ড্যাশবোর্ডে দেখানোর জন্য সেভ করা
@@ -3335,11 +3408,11 @@ async function startWhatsAppClient(forceReset = false) {
             saveSession(chatId, session);
           }
 
-          let userPromptText = incomingText;
-          if (customerVoiceTranscription) {
-            userPromptText = `The customer sent a WhatsApp voice note. They said in natural Bengali: "${customerVoiceTranscription}". Reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products, state the price, stock and order instructions!`;
-          } else if (userSentAudio) {
-            userPromptText = "The customer sent a WhatsApp voice note, but the audio was silent or inaudible. Politely reply in natural Bengali script (বাংলা লিপি) that their voice note was not clearly audible, and ask them to kindly send the audio note again or write what product they need.";
+          let userPromptText = incomingText ? incomingText.trim() : "";
+          if (userSentAudio) {
+            userPromptText = userPromptText
+              ? `The customer sent a WhatsApp voice note with caption: "${userPromptText}". Listen to their spoken words carefully and answer their specific inquiry or question directly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions without robotic introductions!`
+              : "The customer sent a WhatsApp voice note. Listen to their spoken words carefully and reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products or their order!";
           } else if (userSentImage) {
             userPromptText = userPromptText
               ? `The customer sent a product photo on WhatsApp with caption: "${userPromptText}". Match it with our Ranonex store catalog, state its exact name and price in pure Bengali script (বাংলা লিপি), and ask if they want to order.`
@@ -3352,8 +3425,8 @@ async function startWhatsAppClient(forceReset = false) {
             userPromptText,
             session.messages,
             session,
-            null, // incomingAudioBuffer null pass করা হচ্ছে যেন Live WebSocket 1008 এরর না দেয়
-            null,
+            incomingAudioBuffer,
+            audioMimeType,
             incomingImageBuffer,
             imageMimeType,
             incomingVideoBuffer,
@@ -3435,16 +3508,18 @@ async function startWhatsAppClient(forceReset = false) {
             trackBotSentWaMsg(sentAiMsg);
 
             // 🎙️ যদি কাস্টমার ভয়েস নোট পাঠিয়ে থাকেন বা ভয়েস চান, তবে লাইভ ভয়েস রিপ্লাই পাঠানো
-            const isWaVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|কথা বল/i.test(incomingText || customerVoiceTranscription || "");
+            const isWaVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|কথা বল/i.test(incomingText || "");
             let sentWaVoiceMsg = null;
             if (isWaVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) {
               const aItem = aiDecision.audio_id ? audioCache.get(aiDecision.audio_id) : null;
-              if (aItem?.buffer) {
+              const waAudioBuf = aItem?.opusBuffer || aItem?.buffer || aiDecision.opus_buffer || aiDecision.wav_buffer;
+              const waAudioMime = aItem?.opusBuffer ? 'audio/ogg; codecs=opus' : 'audio/wav';
+              if (waAudioBuf) {
                 try {
-                  console.log(`🎙️ [Sending WhatsApp Voice Reply to ${cleanPhone || remoteJid}] (${aItem.buffer.length} bytes WAV/PTT)`);
+                  console.log(`🎙️ [Sending WhatsApp Native PTT Voice Reply to ${cleanPhone || remoteJid}] (${waAudioBuf.length} bytes, ${waAudioMime})`);
                   sentWaVoiceMsg = await sock.sendMessage(remoteJid, {
-                    audio: aItem.buffer,
-                    mimetype: 'audio/wav',
+                    audio: waAudioBuf,
+                    mimetype: waAudioMime,
                     ptt: true
                   }, { quoted: msg });
                   trackBotSentWaMsg(sentWaVoiceMsg);
