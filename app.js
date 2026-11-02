@@ -216,15 +216,105 @@ async function syncWithBackend(isSilent = false) {
       }
     }
 
-    // ২. প্রোডাক্ট ফেচ
-    const prodRes = await fetch(`${API_BASE}/products`);
-    if (prodRes.ok) {
-      const prods = await prodRes.json();
-      if (Array.isArray(prods)) {
+    // ২. প্রোডাক্ট ফেচ (D1 + সরাসরি লাইভ শপ API থেকে সমস্ত গ্যালারি ও ভ্যারিয়েন্ট ছবি সিঙ্ক)
+    try {
+      let prods = [];
+      const prodRes = await fetch(`${API_BASE}/products`);
+      if (prodRes.ok) {
+        const d1Prods = await prodRes.json();
+        if (Array.isArray(d1Prods)) prods = d1Prods;
+      }
+
+      // ব্রাউজার থেকে সরাসরি ranonex.shop পাবলিক API প্রোব (সমস্ত গ্যালারি ও ভ্যারিয়েন্ট ছবি নিশ্চিত করা)
+      try {
+        const shopRes = await fetch("https://ranonex.shop/api/public-data");
+        if (shopRes.ok) {
+          const shopJson = await shopRes.json();
+          const storeItems = shopJson?.data?.products || (Array.isArray(shopJson?.data) ? shopJson.data : []);
+          
+          if (Array.isArray(storeItems) && storeItems.length > 0) {
+            const storeMap = new Map();
+            for (const sp of storeItems) {
+              let g = [];
+              try { g = typeof sp.gallery_images === 'string' ? JSON.parse(sp.gallery_images) : (sp.gallery_images || []); } catch(e){}
+              let v = [];
+              try { v = typeof sp.variants === 'string' ? JSON.parse(sp.variants) : (sp.variants || []); } catch(e){}
+              const allImgs = [];
+              for (const img of g) {
+                if (typeof img === 'string' && img.startsWith('http') && !allImgs.includes(img)) allImgs.push(img);
+              }
+              for (const item of v) {
+                if (item?.imageUrl && typeof item.imageUrl === 'string' && item.imageUrl.startsWith('http') && !allImgs.includes(item.imageUrl)) {
+                  allImgs.push(item.imageUrl);
+                }
+              }
+              if (sp.image_url && typeof sp.image_url === 'string' && sp.image_url.startsWith('http') && !allImgs.includes(sp.image_url)) {
+                allImgs.push(sp.image_url);
+              }
+              if (sp.id) storeMap.set(String(sp.id).toLowerCase(), { sp, allImgs });
+              if (sp.sku) storeMap.set(String(sp.sku).toLowerCase(), { sp, allImgs });
+            }
+
+            // D1 প্রোডাক্টগুলোর ছবি ও ডেটা সমৃদ্ধ করা
+            for (const p of prods) {
+              const matched = storeMap.get(String(p.id).toLowerCase()) || (p.sku ? storeMap.get(String(p.sku).toLowerCase()) : null);
+              if (matched && matched.allImgs.length > 0) {
+                let currentGallery = [];
+                try { currentGallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []); } catch(e){}
+                if (!Array.isArray(currentGallery)) currentGallery = [];
+                
+                // যদি লাইভ শপে আরও ছবি থাকে, তবে তা যুক্ত করে ফেলা
+                if (matched.allImgs.length > currentGallery.length) {
+                  p.gallery_images = JSON.stringify(matched.allImgs);
+                  if (!p.image_url) p.image_url = matched.allImgs[0];
+                  // ব্যাকগ্রাউন্ডে D1-এ আপডেট পাঠিয়ে দেওয়া
+                  fetch(`${API_BASE}/products`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(p)
+                  }).catch(() => {});
+                }
+              }
+            }
+
+            // যদি D1 খালি থাকে, তবে সরাসরি শপের প্রোডাক্টগুলো সেট করা
+            if (prods.length === 0) {
+              for (const [idKey, item] of storeMap.entries()) {
+                const sp = item.sp;
+                const basePrice = parseFloat(sp.base_price || 0);
+                const flashPrice = parseFloat(sp.flash_sale_price || 0);
+                const finalPrice = (flashPrice > 0 && flashPrice < basePrice) ? (basePrice - flashPrice) : basePrice;
+                const cleanDesc = (sp.description || sp.details || "").replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
+                prods.push({
+                  id: sp.id || idKey,
+                  sku: sp.sku || idKey.toUpperCase(),
+                  name: sp.name || 'Store Product',
+                  price: finalPrice,
+                  original_price: basePrice,
+                  description: cleanDesc,
+                  image_url: item.allImgs[0] || '',
+                  gallery_images: JSON.stringify(item.allImgs),
+                  product_url: `https://ranonex.shop/product.html?id=${encodeURIComponent(sp.id || idKey)}`,
+                  stock_status: 'in_stock',
+                  daily_auto_post: 1,
+                  target_platform: 'facebook',
+                  posting_time: '20:00'
+                });
+              }
+            }
+          }
+        }
+      } catch (shopErr) {
+        console.warn("Direct live shop sync note:", shopErr);
+      }
+
+      if (prods.length > 0) {
         appState.products = prods;
         setLocalCache(CACHE_KEYS.PRODUCTS, prods);
         renderProductsTable();
       }
+    } catch (prodErr) {
+      console.warn("Product sync error:", prodErr);
     }
 
     // ৩. প্রোফাইল ফেচ
@@ -1190,8 +1280,8 @@ function renderProductsTable() {
     }
 
     const autoBadge = (p.daily_auto_post === undefined || p.daily_auto_post != 0)
-      ? `<span style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;">${schedText} (🟢 চালু)</span>`
-      : `<span style="background: rgba(255, 255, 255, 0.05); color: var(--text-dim); padding: 4px 8px; border-radius: 4px; font-size: 11px;">⚪ বন্ধ</span>`;
+      ? `<span style="background: rgba(16, 185, 129, 0.15); color: var(--emerald); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer;" onclick="quickToggleAutoPost('${p.id}')" title="ক্লিক করে অটো-পোস্ট বন্ধ/চালু করুন">${schedText} (🟢 চালু)</span>`
+      : `<span style="background: rgba(255, 255, 255, 0.05); color: var(--text-dim); padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;" onclick="quickToggleAutoPost('${p.id}')" title="ক্লিক করে অটো-পোস্ট বন্ধ/চালু করুন">⚪ বন্ধ</span>`;
 
     const platform = p.target_platform || 'facebook';
     const platformBadge = platform === 'facebook'
@@ -1557,12 +1647,40 @@ window.removeGalleryPhoto = function(index) {
 };
 
 // ⏰ ৩ সেকেন্ডে এক-ক্লিকে সময় সিলেক্ট করার হেল্পার
-window.setPostTime = function(timeStr) {
+window.setPostTime = function(timeStr, btnEl) {
   const el = document.getElementById('prod-post-time');
   if (el) {
     el.value = timeStr;
-    showToast(`⏱️ পোস্টের সময় সেট করা হয়েছে: ${timeStr} BDT`);
   }
+  document.querySelectorAll('.btn-time-pill').forEach(b => {
+    b.style.background = 'rgba(255, 255, 255, 0.06)';
+    b.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+    b.style.color = '#cbd5e1';
+  });
+  if (btnEl) {
+    btnEl.style.background = 'rgba(16, 185, 129, 0.25)';
+    btnEl.style.borderColor = 'rgba(16, 185, 129, 0.5)';
+    btnEl.style.color = '#34d399';
+  }
+  showToast(`⏱️ পোস্টের সময় সেট করা হয়েছে: ${timeStr} BDT (প্রতিদিন ১ বার)`);
+};
+
+// 🔄 এক ক্লিকে প্রোডাক্টের অটো পোস্ট চালু বা বন্ধ
+window.quickToggleAutoPost = async function(id) {
+  const p = appState.products.find(x => x.id === id);
+  if (!p) return;
+  const current = (p.daily_auto_post === undefined || p.daily_auto_post != 0) ? 1 : 0;
+  p.daily_auto_post = current === 1 ? 0 : 1;
+  setLocalCache(CACHE_KEYS.PRODUCTS, appState.products);
+  renderProductsTable();
+  showToast(`🔄 "${p.name}" এর অটো-পোস্ট ${p.daily_auto_post === 1 ? '🟢 চালু' : '⚪ বন্ধ'} করা হয়েছে!`);
+  try {
+    await fetch(`${API_BASE}/products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(p)
+    });
+  } catch(e){}
 };
 
 // ✏️ প্রোডাক্ট এডিটর

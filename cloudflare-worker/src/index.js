@@ -2832,7 +2832,7 @@ Name: ${product.name}
 Price: ৳${product.price} ${product.original_price && product.original_price > product.price ? `(Regular Price: ৳${product.original_price})` : ''}
 Details / Features: ${product.description || 'Premium quality durable product'}
 Category: ${product.category || 'General'}
-Website Order Link: ${productOrderLink}
+Order Method: Customers will find the direct website order link in the FIRST COMMENT of this post or can message the page directly.
 
 === STORE POLICIES (LOADED DIRECTLY FROM D1 DATABASE) ===
 Store Name: ${policies.store_name}
@@ -2863,7 +2863,8 @@ Opening Inspiration: "${randomHook}"
    - ঢাকার বাইরে: ${policies.del_outside}
    Do NOT invent or alter delivery prices.
 7. Return Guarantee: State that customers can check the parcel upon delivery (${policies.return_policy}).
-8. Give a clear Call-to-Action with the exact product website link: ${productOrderLink}.
+8. STRICT NO-LINK IN CAPTION RULE: NEVER include any website link (no http/https, no ranonex.shop) in the post caption body! Facebook penalizes posts with external links and severely reduces organic reach.
+   Instead, your Call-to-Action MUST instruct: "👉 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা পেজে ইনবক্স করুন!"
 9. Include 3-4 natural hashtags at the very end.
 10. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
 `;
@@ -2873,8 +2874,13 @@ Opening Inspiration: "${randomHook}"
     try {
       const liveCaption = await callGeminiLiveInWorker(prompt, apiKey, postModel, imageParts);
       if (liveCaption && liveCaption.trim().length > 40) {
+        let cleanText = liveCaption.trim()
+          .replace(/https?:\/\/[^\s]+/gi, '')
+          .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
         console.log(`⚡ [Worker Gemini 3.8 Live WebSocket] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (Vision: ${imageParts.length > 0 ? 'Active' : 'No'})`);
-        return liveCaption.trim();
+        return cleanText;
       }
     } catch (wsErr) {
       console.warn("Worker live WebSocket note:", wsErr.message);
@@ -2912,8 +2918,13 @@ Opening Inspiration: "${randomHook}"
         const data = await res.json();
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text && text.trim().length > 40) {
+          let cleanText = text.trim()
+            .replace(/https?:\/\/[^\s]+/gi, '')
+            .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
           console.log(`⚡ [Worker Gemini REST API] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
-          return text.trim();
+          return cleanText;
         }
       }
     } catch (e) {
@@ -2936,7 +2947,7 @@ function generateFallbackCaption(p, angle, hook, policies) {
   };
 
   const origPriceText = (p.original_price && p.original_price > p.price) ? ` (রেগুলার প্রাইস: ৳${p.original_price})` : '';
-  const orderLink = p.product_url ? `\n🛒 ওয়েবসাইটে গিয়ে সহজে অর্ডার করুন:\n👉 ${p.product_url}\n` : `\n📩 সরাসরি অর্ডার করতে আমাদের পেজে ইনবক্স করুন!\n`;
+  const orderLink = `\n🛒 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন!\n`;
 
   const delText = (pol.del_inside || pol.del_outside)
     ? `\n🚚 ডেলিভারি চার্জ: ঢাকা সিটির ভেতরে ${pol.del_inside}, ঢাকার বাইরে ${pol.del_outside}।`
@@ -2958,6 +2969,45 @@ ${p.description ? `\n${p.description}\n` : ''}
 ${orderLink}${delText}${hotlineText}
 
 #${p.category ? p.category.replace(/\s+/g, '_') : 'OnlineShopping'} #TrendingProducts #SmartShopping #${pol.store_name.replace(/\s+/g, '')}`;
+}
+
+// ========================================================
+// 💬 ফেসবুক পোস্টে প্রোডাক্ট লিংক সহ প্রথম কমেন্ট সেন্ডার (Max Organic Reach)
+// ========================================================
+async function postFirstComment(postId, product, token) {
+  if (!postId || !token) return null;
+  try {
+    const rawUrl = product?.product_url || product?.url || '';
+    let productUrl = rawUrl;
+    if (!productUrl && product?.id) {
+      productUrl = `https://ranonex.shop/product.html?id=${encodeURIComponent(product.id)}`;
+    }
+    if (!productUrl || !productUrl.startsWith('http')) {
+      productUrl = 'https://ranonex.shop';
+    }
+
+    const commentMsg = `🛍️ প্রোডাক্টের বিস্তারিত ছবি দেখতে ও সরাসরি ওয়েবসাইট থেকে অর্ডার করতে নিচের লিংকে ক্লিক করুন:\n👉 ${productUrl}\n\n🚚 সারা বাংলাদেশে ক্যাশ অন হোম ডেলিভারি (হাতে পেয়ে চেক করে নেওয়ার সুবিধা)! অথবা সরাসরি অর্ডার করতে পেজে মেসেজ পাঠান।`;
+
+    const res = await fetch(`https://graph.facebook.com/v19.0/${postId}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: commentMsg,
+        access_token: token
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.id) {
+      console.log(`💬 [Facebook First Comment Success] Comment ID: ${data.id} on Post: ${postId}`);
+      return data.id;
+    } else {
+      console.warn(`⚠️ [Facebook First Comment Warning]:`, data);
+      return null;
+    }
+  } catch (err) {
+    console.warn(`⚠️ [Facebook First Comment Exception]:`, err.message);
+    return null;
+  }
 }
 
 // ========================================================
@@ -2990,9 +3040,49 @@ async function publishToFacebookPage(product, caption, env) {
   }
   images = (images || []).filter(u => typeof u === 'string' && u.startsWith('http'));
 
+  // 🔍 যদি মাত্র ১টি ছবি থাকে বা গ্যালারি খালি থাকে -> লাইভ শপ API থেকে সমস্ত গ্যালারি ও ভ্যারিয়েন্ট ফটো স্বয়ংক্রিয়ভাবে সংগ্রহ
+  if (images.length <= 1 && (product.id || product.product_url)) {
+    try {
+      let prodId = product.id;
+      if (!prodId && product.product_url) {
+        try { prodId = new URL(product.product_url).searchParams.get('id'); } catch(e){}
+      }
+      if (prodId) {
+        const probeRes = await fetch(`https://ranonex.shop/api/public-data?product_id=${encodeURIComponent(prodId)}`);
+        if (probeRes.ok) {
+          const probeJson = await probeRes.json();
+          const rawP = probeJson.product || (probeJson.data?.products ? probeJson.data.products.find(x => String(x.id) === String(prodId)) : null);
+          if (rawP) {
+            let g = [];
+            try { g = typeof rawP.gallery_images === 'string' ? JSON.parse(rawP.gallery_images) : (rawP.gallery_images || []); } catch(e){}
+            let v = [];
+            try { v = typeof rawP.variants === 'string' ? JSON.parse(rawP.variants) : (rawP.variants || []); } catch(e){}
+            for (const img of g) {
+              if (typeof img === 'string' && img.startsWith('http') && !images.includes(img)) images.push(img);
+            }
+            for (const item of v) {
+              if (item?.imageUrl && typeof item.imageUrl === 'string' && item.imageUrl.startsWith('http') && !images.includes(item.imageUrl)) {
+                images.push(item.imageUrl);
+              }
+            }
+            if (rawP.image_url && typeof rawP.image_url === 'string' && rawP.image_url.startsWith('http') && !images.includes(rawP.image_url)) {
+              images.push(rawP.image_url);
+            }
+            // D1-এ আপডেট রাখা যাতে পরবর্তীতে অবিলম্বে সমস্ত ছবি পাওয়া যায়
+            if (env.DB && images.length > 1) {
+              env.DB.prepare("UPDATE products SET gallery_images = ? WHERE id = ?").bind(JSON.stringify(images), prodId).run().catch(() => {});
+            }
+          }
+        }
+      }
+    } catch (enrichErr) {
+      console.warn("Live photo enrichment probe note:", enrichErr.message);
+    }
+  }
+
   // ২. একাধিক ছবি থাকলে -> ফেসবুক মাল্টি-ফটো অ্যালবাম ফিড পোস্ট (Multi-Photo Attached Media)
   if (images.length > 1) {
-    console.log(`📸 Posting ${images.length} Photos in Serial Order to Facebook Page (${pageId})`);
+    console.log(`📸 Posting ALL ${images.length} Photos in Serial Order to Facebook Page (${pageId})`);
     const attachedMedia = [];
     for (let i = 0; i < images.length; i++) {
       const photoUrl = images[i];
@@ -3008,8 +3098,10 @@ async function publishToFacebookPage(product, caption, env) {
         });
         const upData = await upRes.json();
         if (upData.id) {
-          attachedMedia.push({ media_fbid: upData.id });
-          console.log(`  ✅ Photo #${i + 1} uploaded: FBID ${upData.id}`);
+          attachedMedia.push({ media_fbid: String(upData.id) });
+          console.log(`  ✅ Photo #${i + 1}/${images.length} uploaded: FBID ${upData.id}`);
+        } else {
+          console.warn(`  ⚠️ Photo #${i + 1} upload failed:`, upData);
         }
       } catch (upErr) {
         console.warn(`  ⚠️ Photo #${i + 1} upload failed:`, upErr.message);
@@ -3029,6 +3121,7 @@ async function publishToFacebookPage(product, caption, env) {
       });
       const feedData = await feedRes.json();
       if (feedRes.ok && feedData.id) {
+        await postFirstComment(feedData.id, product, token);
         return {
           success: true,
           mode: "multi_photo",
@@ -3042,9 +3135,9 @@ async function publishToFacebookPage(product, caption, env) {
     }
   }
 
-  // ৩. সিঙ্গেল ছবি থাকলে -> /photos এন্ডপয়েন্টে পোস্ট
-  if (images.length === 1) {
-    console.log(`📸 Posting Single Photo to Facebook Page (${pageId}): ${images[0]}`);
+  // ৩. সিঙ্গেল ছবি অথবা ফলব্যাক ফটো পোস্ট -> /photos এন্ডপয়েন্টে পোস্ট
+  if (images.length >= 1) {
+    console.log(`📸 Posting Single/Fallback Photo to Facebook Page (${pageId}): ${images[0]}`);
     try {
       const photoRes = await fetch(`https://graph.facebook.com/v19.0/${pageId}/photos`, {
         method: "POST",
@@ -3060,6 +3153,7 @@ async function publishToFacebookPage(product, caption, env) {
       const photoData = await photoRes.json();
       if (photoRes.ok && (photoData.id || photoData.post_id)) {
         const postId = photoData.post_id || photoData.id;
+        await postFirstComment(postId, product, token);
         return {
           success: true,
           mode: "photo",
@@ -3088,6 +3182,7 @@ async function publishToFacebookPage(product, caption, env) {
 
   const feedData = await feedRes.json();
   if (feedRes.ok && feedData.id) {
+    await postFirstComment(feedData.id, product, token);
     return {
       success: true,
       mode: "feed",

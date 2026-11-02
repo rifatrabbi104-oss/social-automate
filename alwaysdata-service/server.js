@@ -4601,7 +4601,8 @@ CRITICAL REQUIREMENTS:
 6. Clearly state the exact price: ${product.price} ৳ / টাকা. Never misquote prices.
 7. Mention Cash on Delivery (ক্যাশ অন ডেলিভারি) available across all 64 districts in Bangladesh with open-box parcel checking allowed before payment.
 8. State accurate delivery charges: ঢাকা সিটির ভেতরে মাত্র ৭০ টাকা, এবং ঢাকার বাইরে ১৩০ টাকা।
-9. Clear Call to Action: ইনবক্সে মেসেজ দিন অথবা ভিজিট করুন: ${product.url || 'https://ranonex.shop'}.
+9. STRICT NO-LINK IN CAPTION RULE: NEVER include any website link (no http/https, no ranonex.shop) in the post caption body! Facebook algorithm penalizes posts with external links and destroys organic reach.
+   Your Call to Action MUST instruct customers: "👉 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা পেজে ইনবক্স করুন!"
 10. Include 4-6 relevant Bengali & English hashtags at the end (#Ranonex #GadgetBD etc.).
 ${visualInstruction}
 
@@ -4609,16 +4610,21 @@ Product Details:
 - Name: ${product.name || product.title}
 - Price: ৳${product.price}
 - Details: ${product.description || ''}
-- URL: ${product.url || ''}
+- Order Method: Direct product link is automatically placed in the FIRST COMMENT of the post.
 
 Output ONLY the final Facebook post caption, ready to publish. No conversational preamble.`;
 
     // ১. Gemini 3.8 Live WebSocket ট্রাই (ws.send() সেশন রিউজ ও ফটো ভিশন সহ)
     const wsCaption = await generateTextViaLiveWebSocket(prompt, imageParts);
     if (wsCaption && wsCaption.length > 50) {
+      let cleanCaption = wsCaption
+        .replace(/https?:\/\/[^\s]+/gi, '')
+        .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
       return res.json({ 
         success: true, 
-        caption: wsCaption, 
+        caption: cleanCaption, 
         method: "gemini-3.8-live-ws", 
         photos_analyzed: imageParts.length,
         session_reused: true 
@@ -4629,7 +4635,7 @@ Output ONLY the final Facebook post caption, ready to publish. No conversational
     // ৩. ফলব্যাক কপি
     return res.json({
       success: true,
-      caption: `🔥 ${product.name || product.title} 🔥\n\nদৈনন্দিন ব্যবহারের জন্য দারুণ একটি গ্যাজেট!\n\n💰 অফার মূল্য: মাত্র ৳${product.price}\n🚚 সারা বাংলাদেশে ক্যাশ অন ডেলিভারি (পার্সেল খুলে দেখে মূল্য পরিশোধের সুবিধা)\n📦 ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা।\n\n👉 অর্ডার করতে এখনই আমাদের ইনবক্সে মেসেজ দিন অথবা ভিজিট করুন: ${product.url || 'https://ranonex.shop'}\n\n#Ranonex #GadgetBD #OnlineShopping`,
+      caption: `🔥 ${product.name || product.title} 🔥\n\nদৈনন্দিন ব্যবহারের জন্য দারুণ একটি গ্যাজেট!\n\n💰 অফার মূল্য: মাত্র ৳${product.price}\n🚚 সারা বাংলাদেশে ক্যাশ অন ডেলিভারি (পার্সেল খুলে দেখে মূল্য পরিশোধের সুবিধা)\n📦 ডেলিভারি চার্জ: ঢাকা সিটিতে মাত্র ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা।\n\n👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা পেজে ইনবক্স করুন!\n\n#Ranonex #GadgetBD #OnlineShopping`,
       method: "fallback"
     });
   } catch (err) {

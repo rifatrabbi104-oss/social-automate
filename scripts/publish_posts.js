@@ -340,10 +340,7 @@ async function generateUniquePostContent(product, chosenAngle) {
     if (product.price) text += `💰 অফার মূল্য: মাত্র ৳${product.price}/-\n`;
     text += `🚚 সারা দেশে ক্যাশ অন হোম ডেলিভারি সুবিধা (পার্সেল খুলে দেখে পেমেন্ট করার নিশ্চয়তা)!\n` +
       `📦 ডেলিভারি চার্জ: ঢাকার ভেতরে ৭০ টাকা, ঢাকার বাইরে ১৩০ টাকা।\n\n`;
-    if (product.product_url) {
-      text += `🌐 সরাসরি ওয়েবসাইট থেকে অর্ডার করতে ক্লিক করুন:\n👉 ${product.product_url}\n\n`;
-    }
-    text += `📩 অথবা বিস্তারিত জানতে এখনই পেজে ইনবক্স করুন!\n\n#Ranonex #OnlineShopping #HomeDelivery #GadgetBD`;
+    text += `🛒 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্সে মেসেজ দিন!\n\n#Ranonex #OnlineShopping #HomeDelivery #GadgetBD`;
     return text;
   }
 
@@ -364,12 +361,13 @@ CRITICAL REQUIREMENTS:
 6. Clearly state the exact price: ${product.price ? "৳" + product.price : "বিশেষ অফার মূল্য"}. Never misquote prices.
 7. Mention Cash on Delivery (ক্যাশ অন ডেলিভারি) available across all 64 districts in Bangladesh with open-box parcel checking allowed before payment.
 8. State accurate delivery charges: ঢাকা সিটির ভেতরে মাত্র ৭০ টাকা, এবং ঢাকার বাইরে ১৩০ টাকা।
-9. Clear Call to Action: ইনবক্সে মেসেজ দিন অথবা ভিজিট করুন: ${product.product_url || 'https://ranonex.shop'}.
+9. STRICT NO-LINK IN CAPTION RULE: NEVER include any website link (no http/https, no ranonex.shop) in the post caption body! Facebook algorithm penalizes posts with external links and destroys organic reach.
+   Your Call to Action MUST instruct customers: "👉 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা পেজে ইনবক্স করুন!"
 10. Include 4-6 relevant Bengali & English hashtags at the end (#Ranonex #GadgetBD etc.).
 
 Product Details:
 - Name: ${product.name}
-- Product URL: ${product.product_url || "N/A"}
+- Order Method: Direct product link is automatically placed in the FIRST COMMENT of the post.
 - Price / Offer: ${product.price ? "৳" + product.price : "N/A"}
 - Description & Specs: ${product.description || ""}
 
@@ -397,13 +395,18 @@ Output ONLY the final Facebook post caption, ready to publish. No markdown code 
 
     const liveText = await callGeminiLiveWebSocket(prompt, GEMINI_API_KEY, "models/gemini-3.8-live", imageParts);
     if (liveText && liveText.length > 50) {
+      let cleanText = liveText
+        .replace(/https?:\/\/[^\s]+/gi, '')
+        .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
       console.log(`⚡ [Gemini 3.8 Live WebSocket] ${chosenAngle.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (Vision: ${imageParts.length > 0 ? 'Active' : 'No'})`);
-      return liveText;
+      return cleanText;
     }
   } catch (e) {}
 
 
-  return `✨ ${product.name} ✨\nঅর্ডার করতে ভিজিট করুন: ${product.product_url || "ইনবক্স করুন"}`;
+  return `✨ ${product.name} ✨\n\n${product.description || ''}\n\n👉 বিস্তারিত দেখতে ও অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন!`;
 }
 
 // 🎵 ৪. TikTok Content Posting API v2-এ পোস্ট পাবলিশ (Direct Post + Unaudited Self/Draft Fallback)
@@ -505,8 +508,45 @@ async function publishToTikTok(caption, mediaUrl, token = null) {
   }
 }
 
+// 💬 ফেসবুক পোস্টে প্রোডাক্ট লিংক সহ প্রথম কমেন্ট সেন্ডার (Max Organic Reach)
+async function postFirstComment(postId, product, token) {
+  if (!postId || !token) return null;
+  try {
+    const rawUrl = product?.product_url || product?.url || '';
+    let productUrl = rawUrl;
+    if (!productUrl && product?.id) {
+      productUrl = `https://ranonex.shop/product.html?id=${encodeURIComponent(product.id)}`;
+    }
+    if (!productUrl || !productUrl.startsWith('http')) {
+      productUrl = 'https://ranonex.shop';
+    }
+
+    const commentMsg = `🛍️ প্রোডাক্টের বিস্তারিত ছবি দেখতে ও সরাসরি ওয়েবসাইট থেকে অর্ডার করতে নিচের লিংকে ক্লিক করুন:\n👉 ${productUrl}\n\n🚚 সারা বাংলাদেশে ক্যাশ অন হোম ডেলিভারি (হাতে পেয়ে চেক করে নেওয়ার সুবিধা)! অথবা সরাসরি অর্ডার করতে পেজে মেসেজ পাঠান।`;
+
+    const res = await fetch(`https://graph.facebook.com/v19.0/${postId}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: commentMsg,
+        access_token: token
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.id) {
+      console.log(`💬 [Facebook First Comment Success] Comment ID: ${data.id} on Post: ${postId}`);
+      return data.id;
+    } else {
+      console.warn(`⚠️ [Facebook First Comment Warning]:`, data);
+      return null;
+    }
+  } catch (err) {
+    console.warn(`⚠️ [Facebook First Comment Exception]:`, err.message);
+    return null;
+  }
+}
+
 // 📤 ৫. Facebook Page-এ ফটো সহ পোস্ট পাবলিশ (Meta Graph API)
-async function publishToFacebook(caption, imageUrl, token = null, pageId = null, galleryImages = []) {
+async function publishToFacebook(caption, imageUrl, token = null, pageId = null, galleryImages = [], product = null) {
   const activeToken = token || META_PAGE_ACCESS_TOKEN;
   const activePageId = pageId || META_PAGE_ID;
   if (!activeToken || !activePageId) {
@@ -541,7 +581,7 @@ async function publishToFacebook(caption, imageUrl, token = null, pageId = null,
         });
         const upData = await upRes.json();
         if (upData.id) {
-          attachedMedia.push({ media_fbid: upData.id });
+          attachedMedia.push({ media_fbid: String(upData.id) });
           console.log(`  ✅ Photo #${i + 1} uploaded: FBID ${upData.id}`);
         }
       } catch (upErr) {
@@ -563,6 +603,7 @@ async function publishToFacebook(caption, imageUrl, token = null, pageId = null,
       const feedData = await feedRes.json();
       if (feedData.id) {
         console.log(`🎉 [Facebook Multi-Photo Album Post Success] Post ID: ${feedData.id}`);
+        await postFirstComment(feedData.id, product, activeToken);
         return { success: true, id: feedData.id, type: "multi_photo", photos_count: attachedMedia.length };
       } else {
         console.warn("⚠️ Facebook multi-photo post failed, falling back to single photo:", feedData);
@@ -586,8 +627,10 @@ async function publishToFacebook(caption, imageUrl, token = null, pageId = null,
 
     const data = await res.json();
     if (data.id || data.post_id) {
-      console.log(`🎉 [Facebook Photo Post Success] Post ID: ${data.id || data.post_id}`);
-      return { success: true, id: data.id || data.post_id, type: "photo" };
+      const postId = data.post_id || data.id;
+      console.log(`🎉 [Facebook Photo Post Success] Post ID: ${postId}`);
+      await postFirstComment(postId, product, activeToken);
+      return { success: true, id: postId, type: "photo" };
     } else {
       console.error("⚠️ [Facebook Photo Upload Failed, falling back to Feed post]:", data.error?.message || data.error);
     }
@@ -607,6 +650,7 @@ async function publishToFacebook(caption, imageUrl, token = null, pageId = null,
   const data = await res.json();
   if (data.id) {
     console.log(`🎉 [Facebook Feed Post Success] Post ID: ${data.id}`);
+    await postFirstComment(data.id, product, activeToken);
     return { success: true, id: data.id, type: "feed" };
   } else {
     console.error("❌ [Facebook Feed Post Failed]:", data.error);
@@ -749,7 +793,7 @@ async function main() {
       if (isCaptionOnly) {
         console.log("📝 [Caption-Only Mode] শুধুমাত্র টেক্সট ক্যাপশন নিয়ে পোস্ট করা হচ্ছে (ছবি ছাড়া)।");
       }
-      fbResult = await publishToFacebook(postCaption, fbImageUrl, activeFbToken, activeFbPageId, galleryList);
+      fbResult = await publishToFacebook(postCaption, fbImageUrl, activeFbToken, activeFbPageId, galleryList, selectedProduct);
       if (fbResult.success && selectedProduct.id) {
         await recordPostHistory(selectedProduct.id, postCaption, chosenAngle.name, fbResult.id, "facebook");
       }
