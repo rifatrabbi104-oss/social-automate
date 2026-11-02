@@ -58,7 +58,7 @@ const CONFIG = {
   metaPageId: process.env.META_PAGE_ID || "1287050647827199",
   metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN || "EAAP26tyiJpMBSwbPigSP59zUgrW3nVwverL5dGtxzJxS7wgGZCwa5FZBTwnp5yLYqBWzvGQco6SuJEXgC7csi3mHZApVZCvRpB7zDCu6KnucWzOZC3jNN8uZCI4VWVlOLyj13uzzYo6lNWlzAr4DSi1QBuYqwHZBiSAxSlbwkJaOZAEZBNBTLwoZA5zOZAIegyGZBGcmC4DeXCKs",
   geminiApiKey: process.env.GEMINI_API_KEY || "",
-  geminiModel: process.env.GEMINI_MODEL || "models/gemini-3.8-live",
+  geminiModel: process.env.GEMINI_MODEL || "models/gemini-2.5-flash-native-audio-preview-12-2025",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "8973914033:AAHA99QmtyefiGYFCePdNuD4ZPyp8xw1uVQ",
   telegramChatId: process.env.TELEGRAM_CHAT_ID || "5513474694",
   workerUrl: process.env.WORKER_URL || "https://social-automate.rifatrabbi104.workers.dev",
@@ -534,7 +534,7 @@ async function generateAudioFromText(text) {
     ws.onopen = () => {
       ws.send(JSON.stringify({
         setup: {
-          model: "models/gemini-3.8-live",
+          model: CONFIG.geminiModel || "models/gemini-2.5-flash-native-audio-preview-12-2025",
           generationConfig: { responseModalities: ["AUDIO"] },
           outputAudioTranscription: {}
         }
@@ -1370,7 +1370,7 @@ STORE PRODUCTS CATALOG:
 ${catalog}`;
 
   const chatId = session?.sender_id ? `fb_${session.sender_id}` : "default";
-  const modelId = CONFIG.geminiModel || "models/gemini-3.8-live";
+  const modelId = CONFIG.geminiModel || "models/gemini-2.5-flash-native-audio-preview-12-2025";
 
   // টার্নস প্রস্তুতি (হিস্ট্রি + বর্তমান মেসেজ + ছবি + ভিডিও + অডিও)
   const currentParts = [];
@@ -1395,7 +1395,7 @@ ${catalog}`;
     });
   }
   if (incomingAudioBuffer) {
-    console.log(`🎙️ [Converting Incoming Audio for Gemini 3.8 Live]: ${incomingAudioBuffer.length} bytes, format: ${audioMimeType}`);
+    console.log(`🎙️ [Converting Incoming Audio for Gemini 2.5 Native Audio Dialog]: ${incomingAudioBuffer.length} bytes, format: ${audioMimeType}`);
     const pcmBuffer = await convertAudioToPcm16k(incomingAudioBuffer);
     if (pcmBuffer && pcmBuffer.length > 0) {
       currentParts.push({
@@ -1404,7 +1404,7 @@ ${catalog}`;
           data: pcmBuffer.toString('base64')
         }
       });
-      console.log(`✅ [Audio Fed to Gemini 3.8 Live WebSocket]: ${pcmBuffer.length} bytes 16kHz PCM`);
+      console.log(`✅ [Audio Fed to Gemini 2.5 Native Audio Dialog WebSocket]: ${pcmBuffer.length} bytes 16kHz PCM`);
     } else {
       console.warn("⚠️ [Audio to PCM conversion failed] Could not convert audio buffer to 16kHz PCM.");
     }
@@ -2185,7 +2185,7 @@ app.get(['/status', '/api/status'], (req, res) => {
       whatsapp_phone: typeof waState !== 'undefined' ? waState.phone : null,
       whatsapp_personal_only: true,
       gemini_ai: Boolean(CONFIG.geminiApiKey),
-      gemini_model: "models/gemini-3.8-live (Multimodal Live WebSocket Engine)",
+      gemini_model: "models/gemini-2.5-flash-native-audio-preview-12-2025 (Gemini 2.5 Flash Native Audio Dialog Live Engine)",
       telegram_alerts: Boolean(CONFIG.telegramBotToken),
       audio_cache_count: audioCache.size,
       products_count: productCatalogCache.productsList?.length || 0,
@@ -4399,7 +4399,7 @@ function getOrCreatePersistentPostGenSocket() {
     ws.onopen = () => {
       ws.send(JSON.stringify({
         setup: {
-          model: "models/gemini-3.8-live",
+          model: CONFIG.geminiModel || "models/gemini-2.5-flash-native-audio-preview-12-2025",
           generationConfig: {
             responseModalities: ["AUDIO"]
           },
@@ -4417,7 +4417,7 @@ function getOrCreatePersistentPostGenSocket() {
           clearTimeout(handshakeTimeout);
           persistentPostGenSocket.isReady = true;
           persistentPostGenSocket.lastActive = Date.now();
-          console.log("⚡ [Gemini 3.8 Live Post Generator] Handshake Complete! Persistent ws.send() ready.");
+          console.log("⚡ [Gemini 2.5 Flash Native Audio Dialog] Handshake Complete! Persistent ws.send() ready.");
           resolve(persistentPostGenSocket);
           return;
         }
@@ -4473,52 +4473,115 @@ function getOrCreatePersistentPostGenSocket() {
 async function generateTextViaLiveWebSocket(prompt, imageParts = []) {
   if (!CONFIG.geminiApiKey) return null;
 
-  try {
-    const socketEntry = await getOrCreatePersistentPostGenSocket();
-    if (!socketEntry || !socketEntry.ws || socketEntry.ws.readyState !== WebSocket.OPEN) {
-      return null;
+  return new Promise((resolve) => {
+    let ws;
+    let timeout;
+    let accumulatedText = "";
+    let isFinished = false;
+
+    const cleanup = () => {
+      if (timeout) clearTimeout(timeout);
+      if (ws) {
+        try { ws.close(); } catch (e) {}
+      }
+    };
+
+    try {
+      const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${CONFIG.geminiApiKey}`;
+      ws = new WebSocket(wsUrl);
+    } catch (e) {
+      console.warn("WebSocket init error in generateTextViaLiveWebSocket:", e.message);
+      return resolve(null);
     }
 
-    return new Promise((resolve) => {
-      socketEntry.accumulatedText = "";
-      socketEntry.currentResolve = resolve;
-      socketEntry.lastActive = Date.now();
-
-      socketEntry.activeTimeout = setTimeout(() => {
-        if (socketEntry.currentResolve) {
-          const resText = socketEntry.accumulatedText.trim();
-          socketEntry.currentResolve = null;
-          socketEntry.accumulatedText = "";
-          resolve(resText || null);
-        }
-      }, 25000);
-
-      // ⚡ একই ওপেন লাইভ সকেটে ws.send() দিয়ে টার্ন পাঠানো (টোকেন ও কানেকশন সেভ)
-      const userParts = [];
-      if (Array.isArray(imageParts) && imageParts.length > 0) {
-        for (const img of imageParts) {
-          userParts.push({
-            inlineData: {
-              mimeType: img.mimeType || "image/jpeg",
-              data: img.data || img.base64
-            }
-          });
-        }
+    timeout = setTimeout(() => {
+      if (!isFinished) {
+        isFinished = true;
+        cleanup();
+        resolve(accumulatedText.trim() || null);
       }
-      userParts.push({ text: prompt });
+    }, 18000);
 
-      socketEntry.ws.send(JSON.stringify({
-        clientContent: {
-          turns: [{ role: "user", parts: userParts }],
-          turnComplete: true
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        setup: {
+          model: CONFIG.geminiModel || "models/gemini-2.5-flash-native-audio-preview-12-2025",
+          generationConfig: {
+            responseModalities: ["AUDIO"]
+          },
+          outputAudioTranscription: {}
         }
       }));
-      console.log(`⚡ [Gemini 3.8 Live WebSocket] Post Prompt + ${imageParts.length} photo(s) sent via ws.send()!`);
-    });
-  } catch (err) {
-    console.error("Error in generateTextViaLiveWebSocket:", err.message);
-    return null;
-  }
+    };
+
+    ws.onmessage = async (evt) => {
+      try {
+        const raw = evt.data instanceof Blob ? await evt.data.text() : evt.data;
+        const msg = JSON.parse(raw);
+
+        if (msg.setupComplete !== undefined) {
+          const userParts = [];
+          if (Array.isArray(imageParts) && imageParts.length > 0) {
+            for (const img of imageParts) {
+              userParts.push({
+                inlineData: {
+                  mimeType: img.mimeType || "image/jpeg",
+                  data: img.data || img.base64
+                }
+              });
+            }
+          }
+          userParts.push({ text: prompt });
+
+          ws.send(JSON.stringify({
+            clientContent: {
+              turns: [{ role: "user", parts: userParts }],
+              turnComplete: true
+            }
+          }));
+          return;
+        }
+
+        if (msg.serverContent) {
+          if (msg.serverContent.outputTranscription?.text) {
+            accumulatedText += msg.serverContent.outputTranscription.text;
+          }
+          const parts = msg.serverContent.modelTurn?.parts || [];
+          for (const p of parts) {
+            if (p.thought) continue;
+            if (p.text) accumulatedText += p.text;
+          }
+
+          if (msg.serverContent.turnComplete) {
+            if (!isFinished) {
+              isFinished = true;
+              cleanup();
+              resolve(accumulatedText.trim() || null);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("generateTextViaLiveWebSocket parse error:", err.message);
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.warn("generateTextViaLiveWebSocket error:", err?.message || err);
+      if (!isFinished) {
+        isFinished = true;
+        cleanup();
+        resolve(accumulatedText.trim() || null);
+      }
+    };
+
+    ws.onclose = () => {
+      if (!isFinished) {
+        isFinished = true;
+        cleanup();
+        resolve(accumulatedText.trim() || null);
+      }
+    };
+  });
 }
 
 // 🌐 লাইভ টেস্টার এইচটিএমএল সার্ভিং রুট
@@ -4614,10 +4677,11 @@ Product Details:
 
 Output ONLY the final Facebook post caption, ready to publish. No conversational preamble.`;
 
-    // ১. Gemini 3.8 Live WebSocket ট্রাই (ws.send() সেশন রিউজ ও ফটো ভিশন সহ)
+    // ১. Gemini 2.5 Flash Native Audio Dialog Live WebSocket ট্রাই (ws.send() সেশন রিউজ ও ফটো ভিশন সহ)
     const wsCaption = await generateTextViaLiveWebSocket(prompt, imageParts);
     if (wsCaption && wsCaption.length > 50) {
       let cleanCaption = wsCaption
+        .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, '👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন')
         .replace(/https?:\/\/[^\s]+/gi, '')
         .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
         .replace(/\n{3,}/g, '\n\n')
@@ -4625,7 +4689,7 @@ Output ONLY the final Facebook post caption, ready to publish. No conversational
       return res.json({ 
         success: true, 
         caption: cleanCaption, 
-        method: "gemini-3.8-live-ws", 
+        method: "gemini-2.5-flash-native-audio-dialog-ws", 
         photos_analyzed: imageParts.length,
         session_reused: true 
       });

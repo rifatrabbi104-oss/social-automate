@@ -11,7 +11,7 @@
  */
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "models/gemini-3.8-live";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "models/gemini-2.5-flash-native-audio-preview-12-2025";
 const ALWAYSDATA_URL = (process.env.ALWAYSDATA_URL || "https://ranonex.alwaysdata.net").replace(/\/$/, "");
 
 const META_PAGE_ACCESS_TOKEN = process.env.META_PAGE_ACCESS_TOKEN;
@@ -214,8 +214,8 @@ async function getAutoPostTasks() {
   };
 }
 
-// ⚡ ৩.১ Gemini Multimodal Live WebSocket Engine
-async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemini-3.8-live", imageParts = []) {
+// ⚡ ৩.১ Gemini 2.5 Flash Native Audio Dialog Live WebSocket Engine
+async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemini-2.5-flash-native-audio-preview-12-2025", imageParts = []) {
   if (typeof WebSocket === "undefined") return null;
 
   return new Promise((resolve) => {
@@ -248,7 +248,7 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemin
     ws.onopen = () => {
       ws.send(JSON.stringify({
         setup: {
-          model: "models/gemini-3.8-live",
+          model: modelName || "models/gemini-2.5-flash-native-audio-preview-12-2025",
           generationConfig: { responseModalities: ["AUDIO"] },
           outputAudioTranscription: {}
         }
@@ -375,7 +375,7 @@ ${previousCaptions ? `PREVIOUS POSTS (DO NOT REPEAT THESE STYLES OR PHRASES):\n$
 
 Output ONLY the final Facebook post caption, ready to publish. No markdown code fences or conversational preamble.`;
 
-  // ২. Gemini Live WebSocket ট্রাই (models/gemini-3.8-live + Photo Vision)
+  // ২. Gemini Live WebSocket ট্রাই (Gemini 2.5 Flash Native Audio Dialog + Photo Vision)
   try {
     const imageParts = [];
     if (product.image_url && product.image_url.startsWith('http')) {
@@ -393,14 +393,15 @@ Output ONLY the final Facebook post caption, ready to publish. No markdown code 
       } catch (e) {}
     }
 
-    const liveText = await callGeminiLiveWebSocket(prompt, GEMINI_API_KEY, "models/gemini-3.8-live", imageParts);
+    const liveText = await callGeminiLiveWebSocket(prompt, GEMINI_API_KEY, "models/gemini-2.5-flash-native-audio-preview-12-2025", imageParts);
     if (liveText && liveText.length > 50) {
       let cleanText = liveText
+        .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, '👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন')
         .replace(/https?:\/\/[^\s]+/gi, '')
         .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
-      console.log(`⚡ [Gemini 3.8 Live WebSocket] ${chosenAngle.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (Vision: ${imageParts.length > 0 ? 'Active' : 'No'})`);
+      console.log(`⚡ [Gemini 2.5 Flash Native Audio Dialog] ${chosenAngle.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (Vision: ${imageParts.length > 0 ? 'Active' : 'No'})`);
       return cleanText;
     }
   } catch (e) {}

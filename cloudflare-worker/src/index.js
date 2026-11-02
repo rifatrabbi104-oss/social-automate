@@ -1164,7 +1164,7 @@ async function handleGetSettings(env, url = null) {
     whatsapp: { connected: false, phone: '', mode: 'gateway', gateway_url: '', gateway_token: '', phone_number_id: '', access_token: '' },
     telegram: { connected: false, bot_token: '', admin_chat_id: '' },
     github: { connected: false, repo: 'rifatrabbi104-oss/social-automate', token: '' },
-    ai: { connected: false, key_preview: '', model: env.GEMINI_MODEL || 'gemini-2.0-flash' }
+    ai: { connected: false, key_preview: '', model: env.GEMINI_MODEL || 'models/gemini-2.5-flash-native-audio-preview-12-2025' }
   };
 
   if (env.GEMINI_API_KEY && env.GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY") {
@@ -1465,7 +1465,7 @@ async function handleFacebookComment(val, token, env) {
   if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
     apiKey = await getConfigValue(env.DB, "gemini_api_key", null);
   }
-  const model = env.GEMINI_MODEL || "gemini-2.0-flash";
+  const model = env.GEMINI_MODEL || "models/gemini-2.5-flash-native-audio-preview-12-2025";
 
   let aiDecision = {
     action: "both",
@@ -1669,19 +1669,11 @@ async function handleSetupAI(body, env) {
     return jsonResponse({ success: false, error: "Gemini API Key খালি রাখা যাবে না!" }, 400);
   }
   const cleanKey = gemini_api_key.trim();
-  const cleanModel = gemini_model ? gemini_model.trim() : "gemini-2.0-flash";
+  const cleanModel = gemini_model ? gemini_model.trim() : "models/gemini-2.5-flash-native-audio-preview-12-2025";
 
-  // টেস্ট রিকোয়েস্ট পাঠিয়ে ভ্যালিডেশন
+  // টেস্ট রিকোয়েস্ট পাঠিয়ে ভ্যালিডেশন (Google AI Studio Models Endpoint)
   try {
-    const testModel = cleanModel.replace(/^models\//, '');
-    const modelToTest = testModel.includes("live") ? "gemini-2.0-flash" : testModel;
-    const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelToTest}:generateContent?key=${cleanKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: "Hello" }] }]
-      })
-    });
+    const testRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
     if (!testRes.ok) {
       const errData = await testRes.json().catch(() => ({}));
       const errMsg = errData?.error?.message || '';
@@ -1867,7 +1859,7 @@ async function callGeminiStructured(userMessage, recentHistory, businessContext,
   if (!model && env.DB) {
     model = await getConfigValue(env.DB, "gemini_model", null);
   }
-  if (!model) model = "gemini-2.0-flash";
+  if (!model) model = "models/gemini-2.5-flash-native-audio-preview-12-2025";
 
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
     return {
@@ -2675,9 +2667,9 @@ async function getStorePolicies(db) {
 }
 
 // ========================================================
-// ⚡ Gemini 3.8 Live WebSocket Engine (Worker-Native Post Generator)
+// ⚡ Gemini 2.5 Flash Native Audio Dialog Live WebSocket Engine (Worker-Native Post Generator)
 // ========================================================
-async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini-3.8-live", imageParts = []) {
+async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini-2.5-flash-native-audio-preview-12-2025", imageParts = []) {
   if (!apiKey || typeof WebSocket === "undefined") return null;
 
   try {
@@ -2699,10 +2691,11 @@ async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini
       ws.addEventListener("open", () => {
         const setupPayload = {
           setup: {
-            model: modelName,
+            model: modelName || "models/gemini-2.5-flash-native-audio-preview-12-2025",
             generationConfig: {
-              responseModalities: ["TEXT"]
-            }
+              responseModalities: ["AUDIO"]
+            },
+            outputAudioTranscription: {}
           }
         };
         ws.send(JSON.stringify(setupPayload));
@@ -2776,7 +2769,7 @@ async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini
   }
 }
 
-// 🧠 AI সেলস কপিরাইটার (Permanent Gemini 2.5 Flash / 2.0 Flash REST Engine)
+// 🧠 AI সেলস কপিরাইটার (Permanent Gemini 2.5 Flash Native Audio Dialog Engine)
 async function generateAIPostCaption(product, angleObj, env) {
   let apiKey = env.GEMINI_API_KEY;
   if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
@@ -2784,6 +2777,33 @@ async function generateAIPostCaption(product, angleObj, env) {
   }
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
     apiKey = "";
+  }
+
+  // ০. Alwaysdata Gemini 2.5 Flash Native Audio Dialog Live Engine কল (সবার আগে অগ্রাধিকার)
+  try {
+    const adRes = await fetch("https://ranonex.alwaysdata.net/api/generate-post", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        product: {
+          name: product.name || product.title,
+          price: product.price,
+          description: product.description || '',
+          category: product.category || 'General',
+          gallery_images: product.gallery_images || (product.image_url ? [product.image_url] : [])
+        },
+        angle: angleObj
+      })
+    });
+    if (adRes.ok) {
+      const adData = await adRes.json();
+      if (adData?.success && adData?.caption && adData.caption.trim().length > 40) {
+        console.log(`⚡ [Alwaysdata Live WebSocket Engine] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (মডেল: Gemini 2.5 Native Audio Dialog)`);
+        return adData.caption.trim();
+      }
+    }
+  } catch (adErr) {
+    console.warn("Alwaysdata live post generate call failed:", adErr.message);
   }
 
   // র‍্যান্ডম হুক সিলেক্টর

@@ -43,7 +43,7 @@ jobs:
         run: node scripts/publish_posts.js
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'models/gemini-3.8-live' }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'models/gemini-2.5-flash-native-audio-preview-12-2025' }}
           TIKTOK_ACCESS_TOKEN: ${{ secrets.TIKTOK_ACCESS_TOKEN }}
           TIKTOK_CREATOR_ID: ${{ secrets.TIKTOK_CREATOR_ID }}
           META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
