@@ -1712,8 +1712,8 @@ function initBusinessDataForms() {
           console.warn('Direct store probe fallback:', e);
         }
 
-        // ২. ক্লাউড ব্যাকএন্ড থেকে ফেচ (যদি সরাসরি না পাওয়া যায় বা অন্যান্য সাইটের লিঙ্ক হয়)
-        if (!p || fetchedGallery.length <= 1) {
+        // ২. ক্লাউড ব্যাকএন্ড থেকে ফেচ (শুধুমাত্র যদি ব্রাউজার থেকে সরাসরি না পাওয়া যায় বা অন্য সাইটের লিংক হয়)
+        if (!p) {
           try {
             const res = await fetch(`${API_BASE}/extract-product`, {
               method: 'POST',
@@ -1724,7 +1724,7 @@ function initBusinessDataForms() {
             const data = await res.json();
             if (res.ok && data.success && data.product) {
               const bgProd = data.product;
-              if (!p) p = bgProd;
+              p = bgProd;
               let bgGallery = [];
               try {
                 bgGallery = typeof bgProd.gallery_images === 'string' ? JSON.parse(bgProd.gallery_images) : (bgProd.gallery_images || []);

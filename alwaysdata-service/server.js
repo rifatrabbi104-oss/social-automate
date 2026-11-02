@@ -585,11 +585,158 @@ function cleanCustomerReply(raw) {
     .replace(/(?:ORDER_JSON|ORDER_UPDATE_JSON|ORDER_CANCEL_JSON|ORDER_NOTE_JSON)[\s\S]*/i, "")
     .replace(/PRODUCT_IDS\s*:\s*[^\r\n]*/gi, "")
     .replace(/SHOW_HELPLINE\s*:\s*[^\r\n]*/gi, "")
+    .replace(/SPOKEN_VOICE\s*:\s*[^\r\n]*/gi, "")
     .replace(/\[(?:ACTIVE ORDER SELECTION|SINGLE PRODUCT UNDER DISCUSSION|NOTE FOR AI|PERSONALIZED ABANDONED INQUIRY FOLLOW-UP|AUTOMATED 15-MINUTE FOLLOW-UP)[\s\S]*?\]/gi, "")
     .replace(/```(?:json)?[\s\S]*?```/gi, "")
     .replace(/\{[\s\r\n]*"(?:order_confirmed|customer_name|order_updated|order_cancelled|order_note|delivery_address)"[\s\S]*?\}/gi, "")
     .replace(/\{[\s\S]*?\}[\s]*$/gi, "")
     .trim();
+}
+
+// ==========================================
+// 🎙️ স্পোকেন ভয়েস স্ক্রিপ্ট এক্সট্র্যাক্টর (ন্যাচারাল হিউম্যান ভয়েস কনভারসেশনের জন্য)
+// ==========================================
+function extractSpokenVoiceScript(raw, cleanReply) {
+  if (!raw) return "";
+  const match = raw.match(/SPOKEN_VOICE\s*:\s*([^\r\n]+)/i);
+  if (match && match[1] && match[1].trim()) {
+    return match[1].trim();
+  }
+  // ফলব্যাক: cleanReply থেকে URL, ইমোজি ও ব্র্যাকেট বাদ দিয়ে ১-২ লাইনের সহজ কনভারসেশনাল বাংলা কথা নেওয়া
+  const clean = (cleanReply || "")
+    .replace(/https?:\/\/[^\s]+/gi, "")
+    .replace(/[🔗🌐💰•]/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const sentences = clean.split(/(?<=[।!?])/g).map(s => s.trim()).filter(Boolean);
+  if (sentences.length > 0) return sentences.slice(0, 2).join(" ");
+  return clean.substring(0, 160);
+}
+
+// ==========================================
+// 🎙️ Gemini Live ন্যাচারাল ভয়েস জেনারেটর (Gemini 2.5 Flash Native Audio Dialog / Gemini 3.8 Live)
+// ==========================================
+async function generateLiveVoiceAudio(text, preferredModel = "models/gemini-2.5-flash-native-audio-preview-12-2025") {
+  if (!CONFIG.geminiApiKey || !text || !text.trim()) return null;
+  const cleanVoiceText = text
+    .replace(/https?:\/\/[^\s]+/gi, "")
+    .replace(/[🔗🌐💰•]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleanVoiceText) return null;
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    const targetModel = preferredModel || CONFIG.geminiModel || "models/gemini-2.5-flash-native-audio-preview-12-2025";
+    const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(CONFIG.geminiApiKey)}`;
+
+    let ws;
+    try {
+      ws = new WebSocket(endpoint);
+    } catch (e) {
+      console.warn("generateLiveVoiceAudio WebSocket init error:", e.message);
+      return resolve(null);
+    }
+
+    const pcmChunks = [];
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { ws.close(); } catch (e) {}
+        resolve(null);
+      }
+    }, 12000);
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify({
+        setup: {
+          model: targetModel,
+          generationConfig: {
+            responseModalities: ["AUDIO"]
+          },
+          systemInstruction: {
+            parts: [{ text: "You are a warm, polite human sales assistant at Ranonex store in Bangladesh. Read the given Bengali sentence aloud in natural, conversational, fluent human Bengali tone. Speak warmly and clearly like a real person on a phone voice note." }]
+          },
+          outputAudioTranscription: {}
+        }
+      }));
+    });
+
+    ws.on('message', async (data) => {
+      try {
+        const rawText = data instanceof Buffer ? data.toString('utf8') : (typeof data === 'string' ? data : (data?.toString ? data.toString() : ''));
+        const msg = JSON.parse(rawText);
+
+        if (msg.setupComplete !== undefined) {
+          ws.send(JSON.stringify({
+            clientContent: {
+              turns: [{
+                role: "user",
+                parts: [{ text: cleanVoiceText }]
+              }],
+              turnComplete: true
+            }
+          }));
+          return;
+        }
+
+        if (msg.serverContent) {
+          const parts = msg.serverContent.modelTurn?.parts || [];
+          for (const p of parts) {
+            if (p.inlineData && p.inlineData.data) {
+              pcmChunks.push(Buffer.from(p.inlineData.data, 'base64'));
+            }
+          }
+
+          if (msg.serverContent.turnComplete) {
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(timeout);
+              try { ws.close(); } catch (e) {}
+              if (pcmChunks.length > 0) {
+                const rawPcm = Buffer.concat(pcmChunks);
+                const wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+                const opusBuffer = await convertWavToOggOpus(wavBuffer);
+                const audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                audioCache.set(audioId, {
+                  buffer: wavBuffer,
+                  opusBuffer: opusBuffer || null,
+                  createdAt: Date.now()
+                });
+                const audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
+                return resolve({
+                  audioId,
+                  audioUrl,
+                  wavBuffer,
+                  opusBuffer
+                });
+              }
+              resolve(null);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("generateLiveVoiceAudio parse error:", err.message);
+      }
+    });
+
+    ws.on('error', (err) => {
+      console.warn("generateLiveVoiceAudio error:", err.message);
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        resolve(null);
+      }
+    });
+
+    ws.on('close', () => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        resolve(null);
+      }
+    });
+  });
 }
 
 // ==========================================
@@ -1056,8 +1203,7 @@ ORDER_NOTE_JSON: {"order_note": true, "note": "Customer requested change/cancell
   }
 
   // সক্রিয় ও আলোচিত প্রোডাক্টের তালিকা (শুধুমাত্র কাস্টমার নিজে অর্ডার করতে চাইলে ব্যবহার করা হবে)
-  const isSyntheticAudioPrompt = Boolean(incomingAudioBuffer && /The customer sent (?:a WhatsApp|an audio) voice note/i.test(incomingText || ""));
-  const rawCustomerText = isSyntheticAudioPrompt ? "" : (incomingText || "");
+  const rawCustomerText = (incomingText && !incomingText.startsWith("[")) ? incomingText : "";
   const hasOrderIntent = /(?:অর্ডার\s*(?:করব|করতে\s*চাই|করুন|দিন|নিলাম|নিব|নেব|হবে|কনফার্ম|করছি)|অর্ডার\s*নিতে\s*চাই|নিতে\s*চাই|কিনতে\s*চাই|আমি\s*(?:এটা|এইটা|এই\s*প্রোডাক্টটি?)\s*(?:নিব|নেব|নিবো|কিনব)|(?:\b(?:order\s*(?:now|koro|korbo|korte\s*chai|confirm|please)|buy\s*now|confirm\s*koro|confirm\s*order)\b))/i.test(rawCustomerText) || /(?:01[3-9]\d{8})/.test(rawCustomerText);
   const activeProduct = session?.selected_order_product || (hasOrderIntent ? session?.last_discussed_product : null);
   const discussedProducts = Array.isArray(session?.discussed_products) ? session.discussed_products : [];
@@ -1086,12 +1232,17 @@ Confirm the order for '${activeProduct.name}' if they provide valid name, 11-dig
 
   const isFirstMessage = !Array.isArray(chatHistory) || chatHistory.length <= 1;
 
-  const systemInstruction = `You are a real, friendly sales person chatting on the official page/WhatsApp of 'Ranonex' (online store in Bangladesh, https://ranonex.shop). You talk like a helpful human shop assistant, NOT like a robot.
+  const systemInstruction = `You are a real, friendly sales person chatting and speaking on the official page/WhatsApp of 'Ranonex' (online store in Bangladesh, https://ranonex.shop). You talk like a helpful human shop assistant, NOT like a robot.
 
-LANGUAGE:
-- Always reply in natural, simple Bengali script (বাংলা লিপি), even if the customer writes in Banglish or English.
+LANGUAGE & VOICE HARMONY (IDENTICAL RULES FOR TEXT AND VOICE):
+- Always reply in natural, simple Bengali script (বাংলা লিপি), even if the customer speaks or writes in Banglish or English.
 - Write the brand name only in English: "Ranonex".
 - ${isFirstMessage ? `If the customer just greets (hi/hello/salam), greet back warmly in one short line and ask what they are looking for.` : `Do NOT introduce yourself again. Continue the conversation naturally.`}
+- SPOKEN VOICE FORMAT:
+  Always begin your response with a 1-2 sentence spoken conversational voice script labeled as:
+  SPOKEN_VOICE: <1-2 friendly, conversational Bengali sentences spoken like a human salesperson on a voice note>
+  CRITICAL: In SPOKEN_VOICE, NEVER read out English URLs, order JSON, or technical symbols! Talk naturally as if leaving a quick, polite voice note to the customer (e.g. "জী ভাইয়া, আমাদের এই ওয়াচটি ওয়াটারপ্রুফ এবং প্রিমিয়াম কোয়ালিটির। বিস্তারিত ও ছবি দেখার লিংকটি মেসেজে দিয়ে দিয়েছি, দেখে জানাতে পারেন।").
+- After SPOKEN_VOICE, provide the full written chat reply with product details, exact price, and clickable order link!
 
 HOW TO FIND THE RIGHT PRODUCT (you decide, nobody else):
 - The full live catalog of the store is given below as STORE PRODUCTS CATALOG. It changes often and new products get added — always rely on it.
@@ -1262,7 +1413,7 @@ ${catalog}`;
   // অ্যাক্টিভ অর্ডার কনটেক্সট যুক্ত করা যাতে সকেট রিউজে কোনো লুপ তৈরি না হয়
   let turnPrompt = incomingText ? incomingText.trim() : "";
   if (incomingAudioBuffer && !turnPrompt) {
-    turnPrompt = "The customer sent an audio voice note. Listen to their spoken words carefully and answer their specific inquiry or question directly, accurately and warmly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, link and order instructions without robotic introductions.";
+    turnPrompt = "[Customer Spoken Audio Voice Message]";
   }
   if (hasOrderIntent && session?.selected_order_product) {
     turnPrompt = `[ACTIVE ORDER SELECTION: The customer has chosen '${session.selected_order_product.name}' (Price: ৳${session.selected_order_product.price}). If they provide name, 11-digit phone (01XXXXXXXXX) and address, confirm the order for '${session.selected_order_product.name}'!] ${turnPrompt}`;
@@ -1362,32 +1513,42 @@ ${catalog}`;
         let audioUrl = null;
         let wavBuffer = null;
         let opusBuffer = null;
-        if (chunks && chunks.length > 0) {
+
+        const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
+        const spokenVoiceText = extractSpokenVoiceScript(accText, cleanReply);
+
+        // 🎙️ যদি কাস্টমার ভয়েস পাঠিয়ে থাকে, তবে হিউম্যান ভয়েস জেনারেটর কল করা (জেমিনি লাইভ স্পিচ)
+        if (incomingAudioBuffer || (chunks && chunks.length > 0)) {
           try {
-            const rawPcm = Buffer.concat(chunks);
-            wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
-            opusBuffer = await convertWavToOggOpus(wavBuffer);
-            audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-            audioCache.set(audioId, {
-              buffer: wavBuffer,
-              opusBuffer: opusBuffer || null,
-              createdAt: Date.now()
-            });
-            if (audioCache.size > 100) {
-              const oldest = audioCache.keys().next().value;
-              audioCache.delete(oldest);
+            console.log(`🎙️ [Generating Native Conversational Voice Reply]: "${spokenVoiceText.substring(0, 60)}..."`);
+            const voiceAudio = await generateLiveVoiceAudio(spokenVoiceText, "models/gemini-2.5-flash-native-audio-preview-12-2025");
+            if (voiceAudio) {
+              audioId = voiceAudio.audioId;
+              audioUrl = voiceAudio.audioUrl;
+              wavBuffer = voiceAudio.wavBuffer;
+              opusBuffer = voiceAudio.opusBuffer;
+            } else if (chunks && chunks.length > 0) {
+              const rawPcm = Buffer.concat(chunks);
+              wavBuffer = pcmToWav(rawPcm, 24000, 1, 16);
+              opusBuffer = await convertWavToOggOpus(wavBuffer);
+              audioId = `aud_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+              audioCache.set(audioId, {
+                buffer: wavBuffer,
+                opusBuffer: opusBuffer || null,
+                createdAt: Date.now()
+              });
+              audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
             }
-            audioUrl = `https://ranonex.alwaysdata.net/audio/${audioId}.wav`;
           } catch (audioErr) {
-            console.error("Mode 2 audio processing error:", audioErr.message);
+            console.error("Native voice reply generation error:", audioErr.message);
           }
         }
 
-        const cleanReply = cleanCustomerReply(accText) || "ধন্যবাদ! কীভাবে সাহায্য করতে পারি বলুন?";
         const actions = extractOrderActions(accText, cleanReply, chatHistory, activeProduct, productsList, incomingText);
 
         resolve({
           reply: cleanReply,
+          spoken_voice: spokenVoiceText,
           rawReply: accText,
           order_confirmed: actions.order_confirmed,
           order_updated: actions.order_updated,
@@ -2717,7 +2878,7 @@ app.post('/webhook/meta', (req, res) => {
               const quickReplies = buildContextualQuickReplies(session, aiDecision, aiDecision.audio_id);
 
               // ৪. ইউজার ভয়েস চাইলে সরাসরি অডিও পাঠানো (Direct Binary Upload or URL)
-              if (isVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) {
+              if (isVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url || aiDecision.wav_buffer || aiDecision.opus_buffer)) {
                 const aItem = aiDecision.audio_id ? audioCache.get(aiDecision.audio_id) : null;
                 const audioToSend = aItem?.buffer || aiDecision.wav_buffer || aiDecision.audio_url;
                 if (audioToSend) {
@@ -3399,9 +3560,7 @@ async function startWhatsAppClient(forceReset = false) {
 
           let userPromptText = incomingText ? incomingText.trim() : "";
           if (userSentAudio) {
-            userPromptText = userPromptText
-              ? `The customer sent a WhatsApp voice note with caption: "${userPromptText}". Listen to their spoken words carefully and answer their specific inquiry or question directly in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, and link without robotic introductions!`
-              : "The customer sent a WhatsApp voice note. Listen to their spoken words carefully and reply directly and specifically to what they asked in natural Bengali script (বাংলা লিপি) based on our Ranonex store catalog. State product details, exact price, and link. Do NOT introduce yourself or say robotic greetings; directly answer their question about the products!";
+            userPromptText = userPromptText ? userPromptText.trim() : "[Customer Spoken Audio Voice Note]";
           } else if (userSentImage) {
             userPromptText = userPromptText
               ? `The customer sent a product photo on WhatsApp with caption: "${userPromptText}". Match it with our Ranonex store catalog, state its exact name and price in pure Bengali script (বাংলা লিপি), and ask if they want to order.`
@@ -3497,9 +3656,9 @@ async function startWhatsAppClient(forceReset = false) {
             trackBotSentWaMsg(sentAiMsg);
 
             // 🎙️ যদি কাস্টমার ভয়েস নোট পাঠিয়ে থাকেন বা ভয়েস চান, তবে লাইভ ভয়েস রিপ্লাই পাঠানো
-            const isWaVoiceRequested = userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|কথা বল/i.test(incomingText || "");
+            const isWaVoiceRequested = Boolean(userSentAudio || /ভয়েস|ভয়েস|audio|voice|কথা বলো|কথা বল/i.test(incomingText || ""));
             let sentWaVoiceMsg = null;
-            if (isWaVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url)) {
+            if (isWaVoiceRequested && (aiDecision.audio_id || aiDecision.audio_url || aiDecision.opus_buffer || aiDecision.wav_buffer)) {
               const aItem = aiDecision.audio_id ? audioCache.get(aiDecision.audio_id) : null;
               const waAudioBuf = aItem?.opusBuffer || aItem?.buffer || aiDecision.opus_buffer || aiDecision.wav_buffer;
               const waAudioMime = aItem?.opusBuffer ? 'audio/ogg; codecs=opus' : 'audio/wav';
