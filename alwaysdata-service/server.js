@@ -58,7 +58,7 @@ const CONFIG = {
   metaPageId: process.env.META_PAGE_ID || "1287050647827199",
   metaPageAccessToken: process.env.META_PAGE_ACCESS_TOKEN || "EAAP26tyiJpMBSwbPigSP59zUgrW3nVwverL5dGtxzJxS7wgGZCwa5FZBTwnp5yLYqBWzvGQco6SuJEXgC7csi3mHZApVZCvRpB7zDCu6KnucWzOZC3jNN8uZCI4VWVlOLyj13uzzYo6lNWlzAr4DSi1QBuYqwHZBiSAxSlbwkJaOZAEZBNBTLwoZA5zOZAIegyGZBGcmC4DeXCKs",
   geminiApiKey: process.env.GEMINI_API_KEY || "",
-  geminiModel: process.env.GEMINI_MODEL || "models/gemini-2.5-flash-native-audio-preview-12-2025",
+  geminiModel: process.env.GEMINI_MODEL || "models/gemini-3.8-live",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || "8973914033:AAHA99QmtyefiGYFCePdNuD4ZPyp8xw1uVQ",
   telegramChatId: process.env.TELEGRAM_CHAT_ID || "5513474694",
   workerUrl: process.env.WORKER_URL || "https://social-automate.rifatrabbi104.workers.dev",
@@ -534,7 +534,7 @@ async function generateAudioFromText(text) {
     ws.onopen = () => {
       ws.send(JSON.stringify({
         setup: {
-          model: CONFIG.geminiModel || "models/gemini-2.5-flash-native-audio-preview-12-2025",
+          model: CONFIG.geminiModel || "models/gemini-3.8-live",
           generationConfig: { responseModalities: ["AUDIO"] },
           outputAudioTranscription: {}
         }
@@ -614,9 +614,9 @@ function extractSpokenVoiceScript(raw, cleanReply) {
 }
 
 // ==========================================
-// 🎙️ Gemini Live ন্যাচারাল ভয়েস জেনারেটর (Gemini 2.5 Flash Native Audio Dialog / Gemini 3.8 Live)
+// 🎙️ Gemini Live ন্যাচারাল ভয়েস জেনারেটর (Gemini 3.8 Live Engine)
 // ==========================================
-async function generateLiveVoiceAudio(text, preferredModel = "models/gemini-2.5-flash-native-audio-preview-12-2025") {
+async function generateLiveVoiceAudio(text, preferredModel = "models/gemini-3.8-live") {
   if (!CONFIG.geminiApiKey || !text || !text.trim()) return null;
   const cleanVoiceText = text
     .replace(/https?:\/\/[^\s]+/gi, "")
@@ -627,7 +627,7 @@ async function generateLiveVoiceAudio(text, preferredModel = "models/gemini-2.5-
 
   return new Promise((resolve) => {
     let resolved = false;
-    const targetModel = preferredModel || CONFIG.geminiModel || "models/gemini-2.5-flash-native-audio-preview-12-2025";
+    const targetModel = preferredModel || CONFIG.geminiModel || "models/gemini-3.8-live";
     const endpoint = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(CONFIG.geminiApiKey)}`;
 
     let ws;
@@ -1370,7 +1370,7 @@ STORE PRODUCTS CATALOG:
 ${catalog}`;
 
   const chatId = session?.sender_id ? `fb_${session.sender_id}` : "default";
-  const modelId = CONFIG.geminiModel || "models/gemini-2.5-flash-native-audio-preview-12-2025";
+  const modelId = CONFIG.geminiModel || "models/gemini-3.8-live";
 
   // টার্নস প্রস্তুতি (হিস্ট্রি + বর্তমান মেসেজ + ছবি + ভিডিও + অডিও)
   const currentParts = [];
@@ -1395,7 +1395,7 @@ ${catalog}`;
     });
   }
   if (incomingAudioBuffer) {
-    console.log(`🎙️ [Converting Incoming Audio for Gemini 2.5 Native Audio Dialog]: ${incomingAudioBuffer.length} bytes, format: ${audioMimeType}`);
+    console.log(`🎙️ [Converting Incoming Audio for Gemini 3.8 Live]: ${incomingAudioBuffer.length} bytes, format: ${audioMimeType}`);
     const pcmBuffer = await convertAudioToPcm16k(incomingAudioBuffer);
     if (pcmBuffer && pcmBuffer.length > 0) {
       currentParts.push({
@@ -1404,7 +1404,7 @@ ${catalog}`;
           data: pcmBuffer.toString('base64')
         }
       });
-      console.log(`✅ [Audio Fed to Gemini 2.5 Native Audio Dialog WebSocket]: ${pcmBuffer.length} bytes 16kHz PCM`);
+      console.log(`✅ [Audio Fed to Gemini 3.8 Live WebSocket]: ${pcmBuffer.length} bytes 16kHz PCM`);
     } else {
       console.warn("⚠️ [Audio to PCM conversion failed] Could not convert audio buffer to 16kHz PCM.");
     }
@@ -1521,7 +1521,7 @@ ${catalog}`;
         if (incomingAudioBuffer || (chunks && chunks.length > 0)) {
           try {
             console.log(`🎙️ [Generating Native Conversational Voice Reply]: "${spokenVoiceText.substring(0, 60)}..."`);
-            const voiceAudio = await generateLiveVoiceAudio(spokenVoiceText, "models/gemini-2.5-flash-native-audio-preview-12-2025");
+            const voiceAudio = await generateLiveVoiceAudio(spokenVoiceText, "models/gemini-3.8-live");
             if (voiceAudio) {
               audioId = voiceAudio.audioId;
               audioUrl = voiceAudio.audioUrl;
@@ -2185,7 +2185,7 @@ app.get(['/status', '/api/status'], (req, res) => {
       whatsapp_phone: typeof waState !== 'undefined' ? waState.phone : null,
       whatsapp_personal_only: true,
       gemini_ai: Boolean(CONFIG.geminiApiKey),
-      gemini_model: "models/gemini-2.5-flash-native-audio-preview-12-2025 (Gemini 2.5 Flash Native Audio Dialog Live Engine)",
+      gemini_model: "models/gemini-3.8-live (Multimodal Live WebSocket Engine)",
       telegram_alerts: Boolean(CONFIG.telegramBotToken),
       audio_cache_count: audioCache.size,
       products_count: productCatalogCache.productsList?.length || 0,

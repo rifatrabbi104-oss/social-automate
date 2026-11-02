@@ -2628,7 +2628,7 @@ function initSettingsForm() {
           aiResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
           aiResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
           aiResultBox.style.color = '#a7f3d0';
-          aiResultBox.innerHTML = `<strong>🎉 ${escapeHtml(data.message)}</strong><br>স্থায়ী মডেল: <code>Gemini 2.5 Flash Native Audio Dialog (Live API)</code> সক্রিয় রয়েছে। এখন প্রতিটি পোস্ট এবং কাস্টমার চ্যাট সরাসরি AI দিয়ে তৈরি হবে।`;
+          aiResultBox.innerHTML = `<strong>🎉 ${escapeHtml(data.message)}</strong><br>স্থায়ী মডেল: Alwaysdata মেসেজিং-এ <code>Gemini 3.8 Live</code> এবং Worker পোস্টিং-এ <code>Gemini 2.5 Flash Native Audio Dialog</code> সফলভাবে সক্রিয় রয়েছে।`;
         }
         if (aiBadgeStatus) {
           aiBadgeStatus.textContent = '🟢 Connected';

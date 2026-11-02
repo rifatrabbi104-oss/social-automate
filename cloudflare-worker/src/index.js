@@ -2769,7 +2769,7 @@ async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini
   }
 }
 
-// 🧠 AI সেলস কপিরাইটার (Permanent Gemini 2.5 Flash Native Audio Dialog Engine)
+// 🧠 AI সেলস কপিরাইটার (Worker Direct Posting: Gemini 2.5 Flash Native Audio Dialog Engine)
 async function generateAIPostCaption(product, angleObj, env) {
   let apiKey = env.GEMINI_API_KEY;
   if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
@@ -2777,33 +2777,6 @@ async function generateAIPostCaption(product, angleObj, env) {
   }
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
     apiKey = "";
-  }
-
-  // ০. Alwaysdata Gemini 2.5 Flash Native Audio Dialog Live Engine কল (সবার আগে অগ্রাধিকার)
-  try {
-    const adRes = await fetch("https://ranonex.alwaysdata.net/api/generate-post", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        product: {
-          name: product.name || product.title,
-          price: product.price,
-          description: product.description || '',
-          category: product.category || 'General',
-          gallery_images: product.gallery_images || (product.image_url ? [product.image_url] : [])
-        },
-        angle: angleObj
-      })
-    });
-    if (adRes.ok) {
-      const adData = await adRes.json();
-      if (adData?.success && adData?.caption && adData.caption.trim().length > 40) {
-        console.log(`⚡ [Alwaysdata Live WebSocket Engine] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (মডেল: Gemini 2.5 Native Audio Dialog)`);
-        return adData.caption.trim();
-      }
-    }
-  } catch (adErr) {
-    console.warn("Alwaysdata live post generate call failed:", adErr.message);
   }
 
   // র‍্যান্ডম হুক সিলেক্টর
@@ -2883,13 +2856,29 @@ Opening Inspiration: "${randomHook}"
 10. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
 `;
 
-  // ১. সরাসরি পার্মানেন্ট Google Gemini AI REST ইঞ্জিন কল (স্থায়ী মডেল: Gemini 2.5 Flash / 2.0 Flash)
+  // ১. সরাসরি Worker-Native Gemini 2.5 Flash Native Audio Dialog WebSocket ইঞ্জিন ট্রাই
   if (apiKey) {
+    try {
+      const liveCaption = await callGeminiLiveInWorker(prompt, apiKey, "models/gemini-2.5-flash-native-audio-preview-12-2025", imageParts);
+      if (liveCaption && liveCaption.trim().length > 40) {
+        let cleanText = liveCaption.trim()
+          .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, '👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন')
+          .replace(/https?:\/\/[^\s]+/gi, '')
+          .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+        console.log(`⚡ [Worker Gemini 2.5 Live WS] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
+        return cleanText;
+      }
+    } catch (wsErr) {
+      console.warn("callGeminiLiveInWorker failed, falling back to REST:", wsErr.message);
+    }
+
+    // ২. ফলব্যাক: Google Gemini AI REST ইঞ্জিন কল
     const candidateModels = [
       "gemini-2.5-flash",
       "gemini-2.0-flash",
-      "gemini-1.5-flash",
-      "gemini-2.5-flash-native-audio-preview-12-2025"
+      "gemini-1.5-flash"
     ];
 
     const restParts = [];
