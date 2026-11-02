@@ -2776,7 +2776,7 @@ async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini
   }
 }
 
-// ✍️ AI সেলস কপিরাইটার (Worker-Native: Gemini 3.8 Live + Vision + Dynamic Policy)
+// 🧠 AI সেলস কপিরাইটার (Permanent Gemini 2.5 Flash / 2.0 Flash REST Engine)
 async function generateAIPostCaption(product, angleObj, env) {
   let apiKey = env.GEMINI_API_KEY;
   if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
@@ -2785,9 +2785,6 @@ async function generateAIPostCaption(product, angleObj, env) {
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
     apiKey = "";
   }
-
-  // পোস্টের জন্য ডেডিকেটেড Gemini 3.8 Live মডেল
-  const postModel = "models/gemini-3.8-live";
 
   // র‍্যান্ডম হুক সিলেক্টর
   const randomHook = angleObj.hook_starters[Math.floor(Math.random() * angleObj.hook_starters.length)];
@@ -2818,14 +2815,9 @@ async function generateAIPostCaption(product, angleObj, env) {
     } catch (imgErr) {}
   }
 
-  // নিশ্চিত প্রোডাক্ট অর্ডার লিঙ্ক (শুধু ranonex.shop নয়, সরাসরি প্রোডাক্টের URL)
-  const productOrderLink = (product.product_url && product.product_url.includes('product.html'))
-    ? product.product_url
-    : (product.id ? `https://ranonex.shop/product.html?id=${encodeURIComponent(product.id)}` : 'https://ranonex.shop');
-
   const prompt = `
-You are an elite Bangladeshi e-commerce copywriter with mastery in high-converting, viral social media posts.
-Write an authentic, irresistible Facebook post for this product in natural Bengali.
+You are an elite Bangladeshi e-commerce direct-response copywriter and social media marketer for "Ranonex".
+Write an authentic, irresistible, highly persuasive Facebook sales post for this product in natural, engaging Bengali script (বাংলা লিপি).
 
 === PRODUCT INFORMATION ===
 Name: ${product.name}
@@ -2834,7 +2826,7 @@ Details / Features: ${product.description || 'Premium quality durable product'}
 Category: ${product.category || 'General'}
 Order Method: Customers will find the direct website order link in the FIRST COMMENT of this post or can message the page directly.
 
-=== STORE POLICIES (LOADED DIRECTLY FROM D1 DATABASE) ===
+=== STORE POLICIES (LOADED DIRECTLY FROM DATABASE) ===
 Store Name: ${policies.store_name}
 Delivery Charge Inside Dhaka: ${policies.del_inside}
 Delivery Charge Outside Dhaka: ${policies.del_outside}
@@ -2847,126 +2839,138 @@ Angle Name: ${angleObj.name}
 Angle Directive: ${angleObj.instruction}
 Opening Inspiration: "${randomHook}"
 
-=== STRICT ANTI-REPETITION & STORE POLICY RULES ===
-1. ABSOLUTELY BANNED CLICHÉS (DO NOT USE ANY OF THESE):
+=== STRICT ANTI-REPETITION & ZERO-TEMPLATE RULES ===
+1. ABSOLUTELY BANNED CLICHÉS & FORMULAIC BULLETS (DO NOT USE ANY OF THESE):
    - "🔥 আকর্ষণীয় অফার"
    - "সুসংবাদ সুসংবাদ"
+   - "💎 কেন এটি আপনার জন্য সেরা পছন্দ?"
+   - "✅ প্রিমিয়াম বিল্ড কোয়ালিটি ও দীর্ঘস্থায়িত্ব"
+   - "✅ ১০০% অরিজিনাল প্রোডাক্টের নিশ্চয়তা"
    - "আপনি কি একটি ভালো... খুঁজছেন?"
    - "দেরি না করে এখনই অর্ডার করুন"
    - "আসসালামু আলাইকুম ভিউয়ার্স"
-2. Start with an eye-catching, relatable human opening line matching the chosen angle.
-3. Keep the language natural, conversational, and persuasive (authentic Bangladeshi tone).
-4. Highlight why this product is truly worth buying, its build and practical benefits.
+2. Start with an eye-catching, relatable human opening line matching the chosen angle: "${randomHook}".
+3. Keep the language natural, conversational, vivid, and persuasive (authentic Bangladeshi tone like an expert talking to a friend).
+4. Highlight why this product is truly worth buying, practical daily benefits and emotional appeal.
 5. Price & COD: Mention the price clearly (৳${product.price}) and nationwide Cash on Delivery (${policies.payment_methods}).
-6. Delivery Charges: State the exact delivery charges as retrieved from the database:
+6. Delivery Charges: State the exact delivery charges:
    - ঢাকা সিটির ভেতরে: ${policies.del_inside}
    - ঢাকার বাইরে: ${policies.del_outside}
-   Do NOT invent or alter delivery prices.
 7. Return Guarantee: State that customers can check the parcel upon delivery (${policies.return_policy}).
-8. STRICT NO-LINK IN CAPTION RULE: NEVER include any website link (no http/https, no ranonex.shop) in the post caption body! Facebook penalizes posts with external links and severely reduces organic reach.
+8. STRICT NO-LINK IN CAPTION RULE: NEVER include any website link (no http/https, no ranonex.shop) in the post caption body! Facebook penalizes posts with external links and destroys organic reach.
    Instead, your Call-to-Action MUST instruct: "👉 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা পেজে ইনবক্স করুন!"
-9. Include 3-4 natural hashtags at the very end.
+9. Include 3-4 natural hashtags at the very end (#Ranonex #GadgetBD etc.).
 10. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
 `;
 
-  // ১. Worker-এ সরাসরি Gemini 3.8 Live WebSocket ইঞ্জিন কল
+  // ১. সরাসরি পার্মানেন্ট Google Gemini AI REST ইঞ্জিন কল (স্থায়ী মডেল: Gemini 2.5 Flash / 2.0 Flash)
   if (apiKey) {
+    const candidateModels = [
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+      "gemini-2.5-flash-native-audio-preview-12-2025"
+    ];
+
+    const restParts = [];
+    if (imageParts.length > 0) {
+      for (const img of imageParts) {
+        restParts.push({
+          inlineData: {
+            mimeType: img.mimeType || "image/jpeg",
+            data: img.data
+          }
+        });
+      }
+    }
+    restParts.push({ text: prompt });
+
+    for (const model of candidateModels) {
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: restParts }],
+            generationConfig: {
+              temperature: 0.9,
+              topP: 0.95,
+              maxOutputTokens: 800
+            }
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text && text.trim().length > 40) {
+            let cleanText = text.trim()
+              .replace(/https?:\/\/[^\s]+/gi, '')
+              .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+            console.log(`⚡ [Gemini AI Engine] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (মডেল: ${model})`);
+            return cleanText;
+          }
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          console.warn(`Gemini model ${model} response status ${res.status}:`, errData?.error?.message);
+        }
+      } catch (err) {
+        console.warn(`Gemini call error for ${model}:`, err.message);
+      }
+    }
+  } else {
+    console.warn("⚠️ [Gemini AI Notice] D1 ডেটাবেসে কোনো gemini_api_key পাওয়া যায়নি। ড্যাশবোর্ডের Settings থেকে সেভ করুন।");
+  }
+
+  // ২. যদি ক্লাউডফ্লেয়ার Workers AI বাইন্ডিং থাকে
+  if (env.AI) {
     try {
-      const liveCaption = await callGeminiLiveInWorker(prompt, apiKey, postModel, imageParts);
-      if (liveCaption && liveCaption.trim().length > 40) {
-        let cleanText = liveCaption.trim()
+      const cfRes = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+        messages: [{ role: "user", content: prompt }]
+      });
+      const cfText = cfRes?.response;
+      if (cfText && cfText.trim().length > 40) {
+        let cleanText = cfText.trim()
           .replace(/https?:\/\/[^\s]+/gi, '')
-          .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
           .replace(/\n{3,}/g, '\n\n')
           .trim();
-        console.log(`⚡ [Worker Gemini 3.8 Live WebSocket] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (Vision: ${imageParts.length > 0 ? 'Active' : 'No'})`);
+        console.log(`⚡ [Cloudflare Workers AI] Llama-3.1 দিয়ে পোস্ট সফলভাবে তৈরি!`);
         return cleanText;
       }
-    } catch (wsErr) {
-      console.warn("Worker live WebSocket note:", wsErr.message);
-    }
-
-    // ২. সরাসরি Gemini REST API ট্রাই (Vision সহ)
-    try {
-      const restParts = [];
-      if (imageParts.length > 0) {
-        for (const img of imageParts) {
-          restParts.push({
-            inlineData: {
-              mimeType: img.mimeType || "image/jpeg",
-              data: img.data
-            }
-          });
-        }
-      }
-      restParts.push({ text: prompt });
-
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: restParts }],
-          generationConfig: {
-            temperature: 0.95,
-            topP: 0.95,
-            maxOutputTokens: 800
-          }
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text && text.trim().length > 40) {
-          let cleanText = text.trim()
-            .replace(/https?:\/\/[^\s]+/gi, '')
-            .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
-            .replace(/\n{3,}/g, '\n\n')
-            .trim();
-          console.log(`⚡ [Worker Gemini REST API] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
-          return cleanText;
-        }
-      }
-    } catch (e) {
-      console.warn("Gemini Post Generation Error in Worker:", e.message);
+    } catch (cfErr) {
+      console.warn("Cloudflare Workers AI note:", cfErr.message);
     }
   }
 
-  // ৩. স্মার্ট ডায়নামিক ফলব্যাক কপিরাইটিং
+  // ৩. স্মার্ট হিউম্যান কপিরাইটিং (বুলিটলেস ও প্রাকৃতিক স্টোরিটেলিং)
   return generateFallbackCaption(product, angleObj, randomHook, policies);
 }
 
 function generateFallbackCaption(p, angle, hook, policies) {
   const pol = policies || {
     store_name: "Ranonex",
-    del_inside: "৬০ টাকা (২৪-৪৮ ঘণ্টা)",
-    del_outside: "১২০ টাকা (২-৩ দিন)",
+    del_inside: "৬০ টাকা",
+    del_outside: "১২০ টাকা",
     payment_methods: "ক্যাশ অন ডেলিভারি",
     return_policy: "ডেলিভারির সময় চেক করে দেখে নেওয়ার সুযোগ",
     contact_phone: ""
   };
 
   const origPriceText = (p.original_price && p.original_price > p.price) ? ` (রেগুলার প্রাইস: ৳${p.original_price})` : '';
-  const orderLink = `\n🛒 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন!\n`;
-
-  const delText = (pol.del_inside || pol.del_outside)
-    ? `\n🚚 ডেলিভারি চার্জ: ঢাকা সিটির ভেতরে ${pol.del_inside}, ঢাকার বাইরে ${pol.del_outside}।`
-    : `\n🚚 সারা দেশে দ্রুত ক্যাশ অন হোম ডেলিভারি!`;
-
-  const returnText = pol.return_policy ? `\n🛡️ রিটার্ন গ্যারান্টি: ${pol.return_policy}` : '';
-  const hotlineText = pol.contact_phone ? `\n📞 হটলাইন: ${pol.contact_phone}` : '';
+  const descText = p.description ? `${p.description}\n\n` : '';
+  const hotlineText = pol.contact_phone ? `\n📞 প্রয়োজনে কল করুন: ${pol.contact_phone}` : '';
 
   return `${hook}
 
-✨ ${p.name}
-${p.description ? `\n${p.description}\n` : ''}
-💎 কেন এটি আপনার জন্য সেরা পছন্দ?
-✅ প্রিমিয়াম বিল্ড কোয়ালিটি ও দীর্ঘস্থায়িত্ব
-✅ ১০০% অরিজিনাল প্রোডাক্টের নিশ্চয়তা
-✅ সারা বাংলাদেশে ক্যাশ অন ডেলিভারি (হাতে পেয়ে চেক করে নেওয়ার সুবিধা)${returnText}
+${p.name} — যারা কোয়ালিটি, স্থায়িত্ব ও প্রিমিয়াম ফিনিশের সাথে কোনো আপস করতে চান না, এটি তাদের জন্যই পারফেক্ট চয়েস।
 
-💰 বিশেষ মূল্য: মাত্র ৳${p.price}${origPriceText}
-${orderLink}${delText}${hotlineText}
+${descText}🚚 সারা বাংলাদেশে দ্রুত ক্যাশ অন হোম ডেলিভারি (পার্সেল হাতে পেয়ে চেক করে দেখে নেওয়ার শতভাগ সুযোগ রয়েছে)। ডেলিভারি চার্জ: ঢাকা সিটির ভেতরে ${pol.del_inside}, ঢাকার বাইরে ${pol.del_outside}।${hotlineText}
+
+💰 অফার মূল্য: মাত্র ৳${p.price}${origPriceText}
+
+👉 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা পেজে ইনবক্স করুন!
 
 #${p.category ? p.category.replace(/\s+/g, '_') : 'OnlineShopping'} #TrendingProducts #SmartShopping #${pol.store_name.replace(/\s+/g, '')}`;
 }
@@ -3025,7 +3029,7 @@ async function publishToFacebookPage(product, caption, env) {
     throw new Error("Facebook Page Access Token D1 বা Worker-এ পাওয়া যায়নি। ড্যাশবোর্ডে টোকেন সেভ করুন।");
   }
 
-  // ১. প্রোডাক্টের সমস্ত সিরিয়াল ফটো সংগ্রহ
+  // ১. ডেটাবেসে থাকা প্রোডাক্টের সমস্ত সিরিয়াল ফটো সংগ্রহ (শুধুমাত্র ইউজারের সেভ করা ছবি ব্যবহার হবে)
   let images = [];
   try {
     if (typeof product.gallery_images === 'string') {
@@ -3039,46 +3043,6 @@ async function publishToFacebookPage(product, caption, env) {
     if (product.image_url) images = [product.image_url];
   }
   images = (images || []).filter(u => typeof u === 'string' && u.startsWith('http'));
-
-  // 🔍 যদি মাত্র ১টি ছবি থাকে বা গ্যালারি খালি থাকে -> লাইভ শপ API থেকে সমস্ত গ্যালারি ও ভ্যারিয়েন্ট ফটো স্বয়ংক্রিয়ভাবে সংগ্রহ
-  if (images.length <= 1 && (product.id || product.product_url)) {
-    try {
-      let prodId = product.id;
-      if (!prodId && product.product_url) {
-        try { prodId = new URL(product.product_url).searchParams.get('id'); } catch(e){}
-      }
-      if (prodId) {
-        const probeRes = await fetch(`https://ranonex.shop/api/public-data?product_id=${encodeURIComponent(prodId)}`);
-        if (probeRes.ok) {
-          const probeJson = await probeRes.json();
-          const rawP = probeJson.product || (probeJson.data?.products ? probeJson.data.products.find(x => String(x.id) === String(prodId)) : null);
-          if (rawP) {
-            let g = [];
-            try { g = typeof rawP.gallery_images === 'string' ? JSON.parse(rawP.gallery_images) : (rawP.gallery_images || []); } catch(e){}
-            let v = [];
-            try { v = typeof rawP.variants === 'string' ? JSON.parse(rawP.variants) : (rawP.variants || []); } catch(e){}
-            for (const img of g) {
-              if (typeof img === 'string' && img.startsWith('http') && !images.includes(img)) images.push(img);
-            }
-            for (const item of v) {
-              if (item?.imageUrl && typeof item.imageUrl === 'string' && item.imageUrl.startsWith('http') && !images.includes(item.imageUrl)) {
-                images.push(item.imageUrl);
-              }
-            }
-            if (rawP.image_url && typeof rawP.image_url === 'string' && rawP.image_url.startsWith('http') && !images.includes(rawP.image_url)) {
-              images.push(rawP.image_url);
-            }
-            // D1-এ আপডেট রাখা যাতে পরবর্তীতে অবিলম্বে সমস্ত ছবি পাওয়া যায়
-            if (env.DB && images.length > 1) {
-              env.DB.prepare("UPDATE products SET gallery_images = ? WHERE id = ?").bind(JSON.stringify(images), prodId).run().catch(() => {});
-            }
-          }
-        }
-      }
-    } catch (enrichErr) {
-      console.warn("Live photo enrichment probe note:", enrichErr.message);
-    }
-  }
 
   // ২. একাধিক ছবি থাকলে -> ফেসবুক মাল্টি-ফটো অ্যালবাম ফিড পোস্ট (Multi-Photo Attached Media)
   if (images.length > 1) {

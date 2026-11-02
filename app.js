@@ -216,102 +216,16 @@ async function syncWithBackend(isSilent = false) {
       }
     }
 
-    // ২. প্রোডাক্ট ফেচ (D1 + সরাসরি লাইভ শপ API থেকে সমস্ত গ্যালারি ও ভ্যারিয়েন্ট ছবি সিঙ্ক)
+    // ২. প্রোডাক্ট ফেচ (সরাসরি D1 ডেটাবেস থেকে - ইউজারের কাস্টমাইজড ও সংরক্ষিত ছবি অপরিবর্তিত থাকবে)
     try {
-      let prods = [];
       const prodRes = await fetch(`${API_BASE}/products`);
       if (prodRes.ok) {
         const d1Prods = await prodRes.json();
-        if (Array.isArray(d1Prods)) prods = d1Prods;
-      }
-
-      // ব্রাউজার থেকে সরাসরি ranonex.shop পাবলিক API প্রোব (সমস্ত গ্যালারি ও ভ্যারিয়েন্ট ছবি নিশ্চিত করা)
-      try {
-        const shopRes = await fetch("https://ranonex.shop/api/public-data");
-        if (shopRes.ok) {
-          const shopJson = await shopRes.json();
-          const storeItems = shopJson?.data?.products || (Array.isArray(shopJson?.data) ? shopJson.data : []);
-          
-          if (Array.isArray(storeItems) && storeItems.length > 0) {
-            const storeMap = new Map();
-            for (const sp of storeItems) {
-              let g = [];
-              try { g = typeof sp.gallery_images === 'string' ? JSON.parse(sp.gallery_images) : (sp.gallery_images || []); } catch(e){}
-              let v = [];
-              try { v = typeof sp.variants === 'string' ? JSON.parse(sp.variants) : (sp.variants || []); } catch(e){}
-              const allImgs = [];
-              for (const img of g) {
-                if (typeof img === 'string' && img.startsWith('http') && !allImgs.includes(img)) allImgs.push(img);
-              }
-              for (const item of v) {
-                if (item?.imageUrl && typeof item.imageUrl === 'string' && item.imageUrl.startsWith('http') && !allImgs.includes(item.imageUrl)) {
-                  allImgs.push(item.imageUrl);
-                }
-              }
-              if (sp.image_url && typeof sp.image_url === 'string' && sp.image_url.startsWith('http') && !allImgs.includes(sp.image_url)) {
-                allImgs.push(sp.image_url);
-              }
-              if (sp.id) storeMap.set(String(sp.id).toLowerCase(), { sp, allImgs });
-              if (sp.sku) storeMap.set(String(sp.sku).toLowerCase(), { sp, allImgs });
-            }
-
-            // D1 প্রোডাক্টগুলোর ছবি ও ডেটা সমৃদ্ধ করা
-            for (const p of prods) {
-              const matched = storeMap.get(String(p.id).toLowerCase()) || (p.sku ? storeMap.get(String(p.sku).toLowerCase()) : null);
-              if (matched && matched.allImgs.length > 0) {
-                let currentGallery = [];
-                try { currentGallery = typeof p.gallery_images === 'string' ? JSON.parse(p.gallery_images) : (p.gallery_images || []); } catch(e){}
-                if (!Array.isArray(currentGallery)) currentGallery = [];
-                
-                // যদি লাইভ শপে আরও ছবি থাকে, তবে তা যুক্ত করে ফেলা
-                if (matched.allImgs.length > currentGallery.length) {
-                  p.gallery_images = JSON.stringify(matched.allImgs);
-                  if (!p.image_url) p.image_url = matched.allImgs[0];
-                  // ব্যাকগ্রাউন্ডে D1-এ আপডেট পাঠিয়ে দেওয়া
-                  fetch(`${API_BASE}/products`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(p)
-                  }).catch(() => {});
-                }
-              }
-            }
-
-            // যদি D1 খালি থাকে, তবে সরাসরি শপের প্রোডাক্টগুলো সেট করা
-            if (prods.length === 0) {
-              for (const [idKey, item] of storeMap.entries()) {
-                const sp = item.sp;
-                const basePrice = parseFloat(sp.base_price || 0);
-                const flashPrice = parseFloat(sp.flash_sale_price || 0);
-                const finalPrice = (flashPrice > 0 && flashPrice < basePrice) ? (basePrice - flashPrice) : basePrice;
-                const cleanDesc = (sp.description || sp.details || "").replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
-                prods.push({
-                  id: sp.id || idKey,
-                  sku: sp.sku || idKey.toUpperCase(),
-                  name: sp.name || 'Store Product',
-                  price: finalPrice,
-                  original_price: basePrice,
-                  description: cleanDesc,
-                  image_url: item.allImgs[0] || '',
-                  gallery_images: JSON.stringify(item.allImgs),
-                  product_url: `https://ranonex.shop/product.html?id=${encodeURIComponent(sp.id || idKey)}`,
-                  stock_status: 'in_stock',
-                  daily_auto_post: 1,
-                  target_platform: 'facebook',
-                  posting_time: '20:00'
-                });
-              }
-            }
-          }
+        if (Array.isArray(d1Prods) && d1Prods.length > 0) {
+          appState.products = d1Prods;
+          setLocalCache(CACHE_KEYS.PRODUCTS, d1Prods);
+          renderProductsTable();
         }
-      } catch (shopErr) {
-        console.warn("Direct live shop sync note:", shopErr);
-      }
-
-      if (prods.length > 0) {
-        appState.products = prods;
-        setLocalCache(CACHE_KEYS.PRODUCTS, prods);
-        renderProductsTable();
       }
     } catch (prodErr) {
       console.warn("Product sync error:", prodErr);
@@ -2661,11 +2575,11 @@ function initSettingsForm() {
     });
   }
 
-  // ৫.২ Google Gemini AI Connect Form
+  // ৫.২ Google Gemini AI Connect Form (Permanent Model, Zero-Dropdown)
   const aiForm = document.getElementById('ai-connect-form');
   const aiKeyInput = document.getElementById('input-gemini-api-key');
-  const aiModelSelect = document.getElementById('select-gemini-model');
   const aiSubmitBtn = document.getElementById('btn-save-ai-key');
+  const aiTestBtn = document.getElementById('btn-test-ai-key');
   const aiResultBox = document.getElementById('ai-setup-result');
   const aiBadgeStatus = document.getElementById('badge-ai-status');
   const btnToggleShowAiKey = document.getElementById('btn-toggle-show-ai-key');
@@ -2676,60 +2590,126 @@ function initSettingsForm() {
     });
   }
 
+  const saveAiKeyHandler = async (apiKey) => {
+    if (!apiKey) {
+      showToast('⚠️ Gemini API Key দিন!');
+      return false;
+    }
+
+    if (aiSubmitBtn) {
+      aiSubmitBtn.disabled = true;
+      aiSubmitBtn.textContent = '⏳ Saving & Validating Key...';
+    }
+
+    try {
+      // ক্লাউডফ্লেয়ার D1 ডেটাবেসে পার্মানেন্ট সেভ
+      const res = await fetch(`${API_BASE}/setup-ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          gemini_api_key: apiKey, 
+          gemini_model: 'models/gemini-2.5-flash-native-audio-preview-12-2025' 
+        })
+      });
+      const data = await res.json();
+      
+      // অলওয়েজডেটাতেও সেভ
+      try {
+        await fetch(`https://ranonex.alwaysdata.net/api/setup-ai`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gemini_api_key: apiKey })
+        });
+      } catch(e) {}
+
+      if (res.ok && data.success) {
+        if (aiResultBox) {
+          aiResultBox.style.display = 'block';
+          aiResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+          aiResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+          aiResultBox.style.color = '#a7f3d0';
+          aiResultBox.innerHTML = `<strong>🎉 ${escapeHtml(data.message)}</strong><br>স্থায়ী মডেল: <code>Gemini 2.5 Flash Native Audio Dialog / 2.5 Flash</code> সক্রিয় রয়েছে। এখন প্রতিটি পোস্ট এবং কাস্টমার চ্যাট সরাসরি AI দিয়ে তৈরি হবে।`;
+        }
+        if (aiBadgeStatus) {
+          aiBadgeStatus.textContent = '🟢 Connected';
+          aiBadgeStatus.style.background = 'rgba(16, 185, 129, 0.2)';
+          aiBadgeStatus.style.color = '#34d399';
+        }
+        showToast('🎉 Gemini API Key সফলভাবে সেভ হয়েছে!');
+        return true;
+      } else {
+        if (aiResultBox) {
+          aiResultBox.style.display = 'block';
+          aiResultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+          aiResultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          aiResultBox.style.color = '#fca5a5';
+          aiResultBox.innerHTML = `<strong>❌ সংযোগ ব্যর্থ:</strong> ${escapeHtml(data.error || 'Gemini API Error')}`;
+        }
+        showToast('❌ Gemini AI কী সেভ করা যায়নি।');
+        return false;
+      }
+    } catch (err) {
+      showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
+      return false;
+    } finally {
+      if (aiSubmitBtn) {
+        aiSubmitBtn.disabled = false;
+        aiSubmitBtn.textContent = '💾 Save Gemini API Key';
+      }
+    }
+  };
+
   if (aiForm) {
     aiForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const apiKey = aiKeyInput ? aiKeyInput.value.trim() : '';
-      const model = aiModelSelect ? aiModelSelect.value : 'gemini-2.0-flash';
+      await saveAiKeyHandler(apiKey);
+    });
+  }
 
+  if (aiTestBtn) {
+    aiTestBtn.addEventListener('click', async () => {
+      const apiKey = aiKeyInput ? aiKeyInput.value.trim() : '';
       if (!apiKey) {
-        showToast('⚠️ Gemini API Key দিন!');
+        showToast('⚠️ আগে Gemini API Key টি ইনপুট বক্সে দিন!');
         return;
       }
-
-      if (aiSubmitBtn) {
-        aiSubmitBtn.disabled = true;
-        aiSubmitBtn.textContent = '⏳ Testing & Saving AI Key...';
-      }
-
+      aiTestBtn.disabled = true;
+      aiTestBtn.textContent = '⏳ Testing Generation...';
       try {
-        const res = await fetch(`${API_BASE}/setup-ai`, {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ gemini_api_key: apiKey, gemini_model: model })
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: "Write 1 short catchy Bengali sales line for Ranonex shop." }] }]
+          })
         });
         const data = await res.json();
-        if (res.ok && data.success) {
+        const testText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (testText) {
           if (aiResultBox) {
             aiResultBox.style.display = 'block';
             aiResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
             aiResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
             aiResultBox.style.color = '#a7f3d0';
-            aiResultBox.innerHTML = `<strong>🎉 ${escapeHtml(data.message)}</strong><br>মডেল: <code>${escapeHtml(data.model || model)}</code> - এখন কাস্টমার মেসেজ বা কমেন্ট করলে AI স্বয়ংক্রিয়ভাবে রিপ্লাই দেবে।`;
+            aiResultBox.innerHTML = `<strong>⚡ AI টেস্ট সফল! নমুনা আউটপুট:</strong><br><em>"${escapeHtml(testText.trim())}"</em>`;
           }
-          if (aiBadgeStatus) {
-            aiBadgeStatus.textContent = '🟢 Connected';
-            aiBadgeStatus.style.background = 'rgba(16, 185, 129, 0.2)';
-            aiBadgeStatus.style.color = '#34d399';
-          }
-          showToast('🎉 Gemini AI সফলভাবে সক্রিয় হয়েছে!');
+          showToast('✅ Gemini AI টেস্ট সফল হয়েছে!');
         } else {
-          if (aiResultBox) {
-            aiResultBox.style.display = 'block';
-            aiResultBox.style.background = 'rgba(239, 68, 68, 0.15)';
-            aiResultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
-            aiResultBox.style.color = '#fca5a5';
-            aiResultBox.innerHTML = `<strong>❌ সংযোগ ব্যর্থ:</strong> ${escapeHtml(data.error || 'Gemini API Error')}`;
-          }
-          showToast('❌ Gemini AI কী সেভ করা যায়নি।');
+          throw new Error(data?.error?.message || 'Empty response');
         }
       } catch (err) {
-        showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
-      } finally {
-        if (aiSubmitBtn) {
-          aiSubmitBtn.disabled = false;
-          aiSubmitBtn.textContent = '💾 Save & Test Gemini AI';
+        if (aiResultBox) {
+          aiResultBox.style.display = 'block';
+          aiResultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+          aiResultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          aiResultBox.style.color = '#fca5a5';
+          aiResultBox.innerHTML = `<strong>❌ টেস্ট ব্যর্থ:</strong> ${escapeHtml(err.message)}`;
         }
+        showToast('❌ টেস্ট ব্যর্থ: ' + err.message);
+      } finally {
+        aiTestBtn.disabled = false;
+        aiTestBtn.textContent = '⚡ Test AI Generation';
       }
     });
   }
