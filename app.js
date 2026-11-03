@@ -2803,10 +2803,8 @@ async function loadSettingsFromServer() {
 
     // ৬. Gemini AI প্রি-ফিল
     const aiKeyInput = document.getElementById('input-gemini-api-key');
-    const aiModelSelect = document.getElementById('select-gemini-model');
     const aiBadge = document.getElementById('badge-ai-status');
     if (s.ai) {
-      if (s.ai.model && aiModelSelect) aiModelSelect.value = s.ai.model;
       if (s.ai.connected) {
         if (aiKeyInput && s.ai.key_preview) aiKeyInput.placeholder = `সংরক্ষিত চাবি: ${s.ai.key_preview}`;
         if (aiBadge) {
