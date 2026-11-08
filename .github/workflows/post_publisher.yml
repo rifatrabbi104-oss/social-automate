@@ -1,25 +1,30 @@
-name: AI Social Post Publisher
+name: AI Social Post Publisher (Worker Handover Backend)
 
 on:
   workflow_dispatch:
     inputs:
+      product_id:
+        description: 'D1 প্রোডাক্ট আইডি (Cloudflare Worker থেকে স্বয়ংক্রিয়ভাবে হ্যান্ডওভার হয়)'
+        required: false
+        type: string
+        default: ''
       product_url:
-        description: 'আপনার ওয়েবসাইটের প্রোডাক্ট লিংক (ঐচ্ছিক - দিলে সরাসরি ওই প্রোডাক্টের ছবি ও ডিটেইলস নিয়ে পোস্ট হবে)'
+        description: 'প্রোডাক্ট লিংক (ঐচ্ছিক)'
         required: false
         type: string
         default: ''
       target_platform:
-        description: 'পোস্ট করার প্ল্যাটফর্ম (tiktok / all / facebook / telegram)'
+        description: 'পোস্ট করার প্ল্যাটফর্ম (facebook / tiktok / telegram / all)'
         required: false
         type: choice
         options:
-          - all
-          - tiktok
           - facebook
+          - tiktok
           - telegram
+          - all
         default: facebook
       post_type:
-        description: 'পোস্ট ফরম্যাট (standard = ছবি সহ পোস্ট, caption_only = শুধুমাত্র টেক্সট ক্যাপশন)'
+        description: 'পোস্ট ফরম্যাট (standard = সব ছবি সহ পোস্ট, caption_only = শুধুমাত্র টেক্সট ক্যাপশন)'
         required: false
         type: choice
         options:
@@ -39,18 +44,11 @@ jobs:
         with:
           node-version: 22
 
-      - name: Generate & Publish Social Post
+      - name: Execute Cloudflare Worker Handover Job
         run: node scripts/publish_posts.js
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'models/gemini-2.5-flash-native-audio-preview-12-2025' }}
-          TIKTOK_ACCESS_TOKEN: ${{ secrets.TIKTOK_ACCESS_TOKEN }}
-          TIKTOK_CREATOR_ID: ${{ secrets.TIKTOK_CREATOR_ID }}
-          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
-          META_PAGE_ID: ${{ secrets.META_PAGE_ID || '1287050647827199' }}
-          TARGET_PLATFORM: ${{ inputs.target_platform || 'facebook' }}
-          POST_TYPE: ${{ inputs.post_type || 'caption_only' }}
-          PRODUCT_URL: ${{ inputs.product_url }}
           WORKER_URL: 'https://social-automate.rifatrabbi104.workers.dev'
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          PRODUCT_ID: ${{ inputs.product_id || '' }}
+          PRODUCT_URL: ${{ inputs.product_url || '' }}
+          TARGET_PLATFORM: ${{ inputs.target_platform || 'facebook' }}
+          POST_TYPE: ${{ inputs.post_type || 'standard' }}

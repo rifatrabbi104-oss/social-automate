@@ -1,8 +1,8 @@
-name: 24/7 Cloud Auto-Post Scheduler
+name: 24/7 Cloud Auto-Post Scheduler (Worker Handover)
 
 on:
   schedule:
-    # প্রতি ৩০ মিনিট পর পর স্বয়ংক্রিয়ভাবে ক্লাউড থেকে ওয়ার্কারকে জাগিয়ে চেক করবে
+    # প্রতি ৩০ মিনিট পর পর ক্লাউডফ্লেয়ার ওয়ার্কার থেকে ডিউ প্রোডাক্ট ও হ্যান্ডওভার প্যাকেজ নিয়ে স্বয়ংক্রিয়ভাবে পোস্ট করবে
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
@@ -10,8 +10,16 @@ jobs:
   check-and-post:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Worker Auto-Posting Check
-        run: |
-          echo "⏰ [GitHub Cloud Scheduler] Checking scheduled auto-post queue on Cloudflare Worker..."
-          RESPONSE=$(curl -s "https://social-automate.rifatrabbi104.workers.dev/api/cron-status?run=true")
-          echo "Worker Response: $RESPONSE"
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch Due Schedule from Cloudflare Worker & Publish
+        run: node scripts/publish_posts.js
+        env:
+          WORKER_URL: 'https://social-automate.rifatrabbi104.workers.dev'
+          SCHEDULED_ONLY: 'true'

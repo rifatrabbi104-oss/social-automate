@@ -1380,11 +1380,11 @@ window.syncAllStoreProducts = async function() {
   }
 };
 
-// 🚀 ১-ক্লিক ডাইরেক্ট প্রোডাক্ট পোস্ট (Worker Engine)
+// 🚀 ১-ক্লিক প্রোডাক্ট পোস্ট (GitHub Actions Handover + Worker Engine)
 window.publishProductNow = async function(id, btn) {
   const origText = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '⏳ Posting...';
+  btn.innerHTML = '⏳ Handing over...';
 
   try {
     const res = await fetch(`${API_BASE}/publish-product-now`, {
@@ -1395,16 +1395,29 @@ window.publishProductNow = async function(id, btn) {
 
     const data = await res.json();
     if (res.ok && data.success) {
-      showToast('🎉 ফেসবুকে পোস্ট সফলভাবে পাবলিশ হয়েছে!');
-      btn.innerHTML = '✅ Posted!';
-      btn.style.background = '#059669';
-      
-      if (data.post_url) {
-        setTimeout(() => {
-          if (confirm(`🎉 ফেসবুক পেজে পোস্ট সফল হয়েছে!\n\nঅ্যাঙ্গেল: ${data.angle}\n\nআপনি কি পেজে গিয়ে পোস্টটি দেখতে চান?`)) {
-            window.open(data.post_url, '_blank');
-          }
-        }, 500);
+      if (data.handover) {
+        showToast('🚀 GitHub Actions ব্যাকএন্ডে পোস্টিং হ্যান্ডওভার হয়েছে!');
+        btn.innerHTML = '🚀 Dispatched!';
+        btn.style.background = '#2563eb';
+        if (data.run_url) {
+          setTimeout(() => {
+            if (confirm(`🚀 "${data.message || 'GitHub Actions-এ হ্যান্ডওভার সম্পন্ন হয়েছে!'}"\n\nআপনি কি GitHub Actions-এর লাইভ রান দেখতে চান?`)) {
+              window.open(data.run_url, '_blank');
+            }
+          }, 400);
+        }
+      } else {
+        showToast('🎉 ফেসবুকে পোস্ট সফলভাবে পাবলিশ হয়েছে!');
+        btn.innerHTML = '✅ Posted!';
+        btn.style.background = '#059669';
+
+        if (data.post_url) {
+          setTimeout(() => {
+            if (confirm(`🎉 ফেসবুক পেজে পোস্ট সফল হয়েছে!\n\nঅ্যাঙ্গেল: ${data.angle}\n\nআপনি কি পেজে গিয়ে পোস্টটি দেখতে চান?`)) {
+              window.open(data.post_url, '_blank');
+            }
+          }, 500);
+        }
       }
     } else {
       showToast('❌ পোস্ট ব্যর্থ: ' + (data.error || 'Unknown error'));
@@ -2357,12 +2370,12 @@ function initSettingsForm() {
     });
   }
 
-  // ৪. Facebook ১-ক্লিক টেস্ট পোস্ট (GitHub Actions Engine দিয়ে)
+  // ৪. Facebook ১-ক্লিক টেস্ট পোস্ট (GitHub Actions Handover Engine দিয়ে)
   const fbTestPostBtn = document.getElementById('btn-test-post-facebook');
   if (fbTestPostBtn) {
     fbTestPostBtn.addEventListener('click', async () => {
       fbTestPostBtn.disabled = true;
-      fbTestPostBtn.textContent = '⏳ Triggering GitHub Actions...';
+      fbTestPostBtn.textContent = '⏳ Handing over to GitHub Actions...';
 
       try {
         const res = await fetch(`${API_BASE}/trigger-post`, {
@@ -2370,7 +2383,7 @@ function initSettingsForm() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             target_platform: 'facebook',
-            post_type: 'caption_only'
+            post_type: 'standard'
           })
         });
 
@@ -2382,13 +2395,13 @@ function initSettingsForm() {
             resultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
             resultBox.style.color = '#a7f3d0';
             resultBox.innerHTML = `
-              <strong>🎉 Facebook পেজে টেস্ট পোস্ট সফলভাবে পাবলিশ হয়েছে!</strong><br>
+              <strong>🎉 ${escapeHtml(data.message || 'Facebook পোস্টিং সফলভাবে সম্পন্ন/ট্রিগার হয়েছে!')}</strong><br>
               ${data.engine ? `ইঞ্জিন: <code>${escapeHtml(data.engine)}</code><br>` : ''}
               ${data.post_url ? `<a href="${escapeHtml(data.post_url)}" target="_blank" style="color: #60a5fa; font-weight: 600; text-decoration: underline; margin-top: 8px; display: inline-block;">👉 ক্লিক করে ফেসবুকে লাইভ পোস্টটি দেখুন</a><br>` : ''}
-              ${data.run_url ? `<a href="${escapeHtml(data.run_url)}" target="_blank" style="color: #93c5fd; text-decoration: underline; margin-top: 4px; display: inline-block;">👉 GitHub Actions লাইভ লগ</a>` : ''}
+              ${data.run_url ? `<a href="${escapeHtml(data.run_url)}" target="_blank" style="color: #93c5fd; font-weight: 600; text-decoration: underline; margin-top: 6px; display: inline-block;">👉 GitHub Actions লাইভ রান ও লগ দেখুন ↗</a>` : ''}
             `;
           }
-          showToast('🎉 টেস্ট পোস্ট সফলভাবে সম্পন্ন হয়েছে!');
+          showToast('🚀 পোস্টিং টাস্ক সফলভাবে প্রসেস হয়েছে!');
           if (data.post_url) {
             setTimeout(() => {
               if (confirm('🎉 ফেসবুকে টেস্ট পোস্ট সফল হয়েছে!\nআপনি কি ফেসবুকে লাইভ পোস্টটি দেখতে চান?')) {
@@ -2403,12 +2416,12 @@ function initSettingsForm() {
             resultBox.style.border = '1px solid rgba(234, 179, 8, 0.4)';
             resultBox.style.color = '#fef08a';
             resultBox.innerHTML = `
-              <strong>ℹ️ GitHub Actions সরাসরি রান করুন:</strong><br>
+              <strong>ℹ️ GitHub Actions সেটআপ প্রয়োজন:</strong><br>
               ${escapeHtml(data.message)}<br>
-              <a href="${escapeHtml(data.workflow_url)}" target="_blank" class="btn-primary" style="display: inline-block; margin-top: 10px; padding: 10px 18px; text-decoration: none; font-size: 13px; color: #fff; border-radius: 6px;">⚡ GitHub Actions এ ১-ক্লিকে 'Run workflow' চাপুন</a>
+              <a href="${escapeHtml(data.workflow_url)}" target="_blank" class="btn-primary" style="display: inline-block; margin-top: 10px; padding: 10px 18px; text-decoration: none; font-size: 13px; color: #fff; border-radius: 6px;">⚡ GitHub Actions ওপেন করুন</a>
             `;
           }
-          showToast('⚠️ GitHub-এ সরাসরি রান করুন অথবা GitHub টোকেন সেভ করুন।');
+          showToast('⚠️ নিচে GitHub Token সেভ করুন।');
         } else {
           if (resultBox) {
             resultBox.style.display = 'block';
@@ -2423,34 +2436,53 @@ function initSettingsForm() {
         showToast('❌ এরর: ' + err.message);
       } finally {
         fbTestPostBtn.disabled = false;
-        fbTestPostBtn.textContent = '🚀 1-Click Test Post (Caption Only)';
+        fbTestPostBtn.textContent = '🚀 1-Click Test Post (Photos + Comment Link)';
       }
     });
   }
 
-  // ৫. GitHub Actions Connect Form
+  // ৫. GitHub Actions Backend Handover Connect Form (Saved in D1)
   const ghForm = document.getElementById('github-connect-form');
   const ghTokenInput = document.getElementById('input-gh-token');
   const ghRepoInput = document.getElementById('input-gh-repo');
+  const ghBranchInput = document.getElementById('input-gh-branch');
+  const ghWorkflowInput = document.getElementById('input-gh-workflow');
+  const ghToggleShowBtn = document.getElementById('btn-toggle-show-gh-key');
   const ghSubmitBtn = document.getElementById('btn-save-github');
+  const ghTestHandoverBtn = document.getElementById('btn-test-github-handover');
   const ghResultBox = document.getElementById('github-setup-result');
+
+  if (ghToggleShowBtn && ghTokenInput) {
+    ghToggleShowBtn.addEventListener('click', () => {
+      const isPass = ghTokenInput.type === 'password';
+      ghTokenInput.type = isPass ? 'text' : 'password';
+      ghToggleShowBtn.textContent = isPass ? '🙈' : '👁️';
+    });
+  }
 
   if (ghForm) {
     ghForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const token = ghTokenInput ? ghTokenInput.value.trim() : '';
       const repo = ghRepoInput ? ghRepoInput.value.trim() : 'rifatrabbi104-oss/social-automate';
+      const branch = ghBranchInput ? ghBranchInput.value.trim() : 'main';
+      const workflow = ghWorkflowInput ? ghWorkflowInput.value.trim() : 'post_publisher.yml';
 
       if (ghSubmitBtn) {
         ghSubmitBtn.disabled = true;
-        ghSubmitBtn.textContent = '⏳ Saving GitHub Token...';
+        ghSubmitBtn.textContent = '⏳ Saving to D1...';
       }
 
       try {
         const res = await fetch(`${API_BASE}/setup-github`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ github_token: token, github_repo: repo })
+          body: JSON.stringify({
+            github_token: token,
+            github_repo: repo,
+            github_branch: branch,
+            github_workflow: workflow
+          })
         });
         const data = await res.json();
         if (res.ok && data.success) {
@@ -2459,9 +2491,10 @@ function initSettingsForm() {
             ghResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
             ghResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
             ghResultBox.style.color = '#a7f3d0';
-            ghResultBox.innerHTML = `<strong>✅ GitHub Actions ক্রেডেনশিয়ালস D1-এ সেভ হয়েছে!</strong> এখন ড্যাশবোর্ডের টেস্ট বাটন চাপলেই স্বয়ংক্রিয়ভাবে GitHub Actions চলবে।`;
+            ghResultBox.innerHTML = `<strong>✅ GitHub Actions হ্যান্ডওভার সেটিংস D1 ডেটাবেসে স্থায়ীভাবে সেভ হয়েছে!</strong><br>এখন Cloudflare Worker স্বয়ংক্রিয়ভাবে Prompt, Gemini API Key, Facebook Token ও প্রোডাক্টের সব ফটো GitHub Actions-কে হ্যান্ডওভার করবে।`;
           }
-          showToast('✅ GitHub Token D1-এ সেভ হয়েছে!');
+          showToast('✅ GitHub Handover সেটিংস D1-এ সেভ হয়েছে!');
+          loadSettingsFromServer();
         } else {
           showToast('❌ সেভ করতে ব্যর্থ: ' + (data.error || 'Error'));
         }
@@ -2470,8 +2503,81 @@ function initSettingsForm() {
       } finally {
         if (ghSubmitBtn) {
           ghSubmitBtn.disabled = false;
-          ghSubmitBtn.textContent = '💾 Save GitHub Token to D1';
+          ghSubmitBtn.textContent = '💾 Save GitHub Handover to D1';
         }
+      }
+    });
+  }
+
+  if (ghTestHandoverBtn) {
+    ghTestHandoverBtn.addEventListener('click', async () => {
+      ghTestHandoverBtn.disabled = true;
+      ghTestHandoverBtn.textContent = '⏳ Dispatching Handover to GitHub...';
+
+      try {
+        const token = ghTokenInput ? ghTokenInput.value.trim() : '';
+        const repo = ghRepoInput ? ghRepoInput.value.trim() : 'rifatrabbi104-oss/social-automate';
+        const branch = ghBranchInput ? ghBranchInput.value.trim() : 'main';
+        const workflow = ghWorkflowInput ? ghWorkflowInput.value.trim() : 'post_publisher.yml';
+
+        // যদি ইনপুটে নতুন টোকেন দেওয়া থাকে তবে আগে D1-এ সেভ করে নেওয়া
+        if (token) {
+          await fetch(`${API_BASE}/setup-github`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              github_token: token,
+              github_repo: repo,
+              github_branch: branch,
+              github_workflow: workflow
+            })
+          });
+        }
+
+        const res = await fetch(`${API_BASE}/trigger-post`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            force_github_handover: true,
+            target_platform: 'facebook',
+            post_type: 'standard',
+            github_token: token || undefined,
+            github_repo: repo || undefined,
+            github_branch: branch || undefined,
+            github_workflow: workflow || undefined
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success) {
+          if (ghResultBox) {
+            ghResultBox.style.display = 'block';
+            ghResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
+            ghResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+            ghResultBox.style.color = '#a7f3d0';
+            ghResultBox.innerHTML = `
+              <strong>🚀 সফলভাবে GitHub Actions-এ হ্যান্ডওভার ট্রিগার হয়েছে!</strong><br>
+              ${data.product_name ? `প্রোডাক্ট: <strong>${escapeHtml(data.product_name)}</strong><br>` : ''}
+              Cloudflare Worker থেকে Prompt, Gemini API Key, Facebook Page Token, বাছাইকৃত সব ছবি এবং ১ম কমেন্টের লিংক GitHub Actions-এ পাঠানো হয়েছে।<br>
+              ${data.run_url ? `<a href="${escapeHtml(data.run_url)}" target="_blank" style="color: #60a5fa; font-weight: 700; text-decoration: underline; margin-top: 8px; display: inline-block;">👉 এখানে ক্লিক করে GitHub Actions-এ লাইভ পোস্টিং দেখুন ↗</a>` : ''}
+            `;
+          }
+          showToast('🚀 GitHub Actions হ্যান্ডওভার সফলভাবে শুরু হয়েছে!');
+        } else {
+          if (ghResultBox) {
+            ghResultBox.style.display = 'block';
+            ghResultBox.style.background = 'rgba(239, 68, 68, 0.15)';
+            ghResultBox.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+            ghResultBox.style.color = '#fca5a5';
+            ghResultBox.innerHTML = `❌ <strong>হ্যান্ডওভার ব্যর্থ:</strong> ${escapeHtml(data.error || data.message || 'GitHub Personal Access Token চেক করুন।')}`;
+          }
+          showToast('❌ হ্যান্ডওভার এরর: ' + (data.error || 'Token check required'));
+        }
+      } catch (err) {
+        showToast('❌ নেটওয়ার্ক এরর: ' + err.message);
+      } finally {
+        ghTestHandoverBtn.disabled = false;
+        ghTestHandoverBtn.textContent = '🚀 Test Handover Post via GitHub Action';
       }
     });
   }
@@ -2779,12 +2885,28 @@ async function loadSettingsFromServer() {
       if (waCloudTokenInput && s.whatsapp.access_token) waCloudTokenInput.value = s.whatsapp.access_token;
     }
 
-    // ৪. GitHub Actions প্রি-ফিল
+    // ৪. GitHub Actions Backend Handover প্রি-ফিল
     const ghTokenInput = document.getElementById('input-gh-token');
     const ghRepoInput = document.getElementById('input-gh-repo');
+    const ghBranchInput = document.getElementById('input-gh-branch');
+    const ghWorkflowInput = document.getElementById('input-gh-workflow');
+    const ghBadge = document.getElementById('badge-gh-status');
     if (s.github) {
       if (ghTokenInput && s.github.token) ghTokenInput.value = s.github.token;
       if (ghRepoInput && s.github.repo) ghRepoInput.value = s.github.repo;
+      if (ghBranchInput && s.github.branch) ghBranchInput.value = s.github.branch;
+      if (ghWorkflowInput && s.github.workflow) ghWorkflowInput.value = s.github.workflow;
+      if (ghBadge) {
+        if (s.github.connected || s.github.token) {
+          ghBadge.textContent = '🟢 Handover Connected';
+          ghBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+          ghBadge.style.color = '#34d399';
+        } else {
+          ghBadge.textContent = '⚪ Token Required';
+          ghBadge.style.background = 'rgba(245, 158, 11, 0.2)';
+          ghBadge.style.color = '#fbbf24';
+        }
+      }
     }
 
     // ৫. Telegram প্রি-ফিল
@@ -2806,6 +2928,7 @@ async function loadSettingsFromServer() {
     const aiBadge = document.getElementById('badge-ai-status');
     if (s.ai) {
       if (s.ai.connected) {
+        if (aiKeyInput && s.ai.api_key) aiKeyInput.value = s.ai.api_key;
         if (aiKeyInput && s.ai.key_preview) aiKeyInput.placeholder = `সংরক্ষিত চাবি: ${s.ai.key_preview}`;
         if (aiBadge) {
           aiBadge.textContent = '🟢 Connected';
@@ -2819,6 +2942,26 @@ async function loadSettingsFromServer() {
           aiBadge.style.color = '#fbbf24';
         }
       }
+    }
+
+    // ৭. D1 Handover Readiness Checklist আপডেট
+    const chkGh = document.getElementById('chk-d1-github');
+    const chkAi = document.getElementById('chk-d1-gemini');
+    const chkFb = document.getElementById('chk-d1-facebook');
+    if (chkGh) {
+      const ok = Boolean(s.github && (s.github.connected || s.github.token));
+      chkGh.innerHTML = ok ? '✅ GitHub PAT & Repo (D1 Saved)' : '⚠️ GitHub PAT Missing in D1';
+      chkGh.style.color = ok ? '#34d399' : '#fbbf24';
+    }
+    if (chkAi) {
+      const ok = Boolean(s.ai && s.ai.connected);
+      chkAi.innerHTML = ok ? '✅ Gemini API Key & 2.5 Audio Model (D1)' : '⚠️ Gemini API Key Missing in D1';
+      chkAi.style.color = ok ? '#34d399' : '#fbbf24';
+    }
+    if (chkFb) {
+      const ok = Boolean(s.facebook && (s.facebook.connected || s.facebook.access_token));
+      chkFb.innerHTML = ok ? `✅ Facebook Page Token (${escapeHtml(s.facebook.account_name || 'Connected')})` : '⚠️ Facebook Token Missing in D1';
+      chkFb.style.color = ok ? '#34d399' : '#fbbf24';
     }
   } catch (e) {
     console.warn('Could not load settings from server:', e);

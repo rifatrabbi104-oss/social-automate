@@ -607,66 +607,29 @@ export default {
       }
 
       // ==========================================
-      // ৭.৩ অটো-পোস্টিং টাস্ক ও হিস্ট্রি API (GitHub Actions এর জন্য)
+      // ৭.৩ অটো-পোস্টিং হ্যান্ডওভার পেলোড ও হিস্ট্রি API (GitHub Actions Backend এর জন্য)
       // ==========================================
-      if (request.method === "GET" && path === "/api/auto-post-task") {
-        if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
-        await ensureTables(env.DB);
-
-        // ১. অ্যাক্টিভ শিডিউল্ড প্রোডাক্টগুলো নেওয়া
-        const { results: prods } = await env.DB.prepare(
-          "SELECT * FROM products WHERE is_active = 1 AND daily_auto_post = 1 ORDER BY created_at DESC"
-        ).all();
-
-        const tasks = [];
-        for (const p of (prods || [])) {
-          // পূর্বের পোস্ট হিস্ট্রি (যাতে AI রিপিট না করে)
-          const { results: hist } = await env.DB.prepare(
-            "SELECT caption, angle, platform, published_at FROM post_history WHERE product_id = ? ORDER BY published_at DESC LIMIT 3"
-          ).bind(p.id).all();
-
-          tasks.push({
-            ...p,
-            target_platform: p.target_platform || "tiktok",
-            previous_posts: hist || []
-          });
-        }
-
-        // ২. D1 থেকে সোশ্যাল অ্যাকাউন্ট ক্রেডেনশিয়ালস নেওয়া (TikTok, Facebook, etc.)
-        const { results: accs } = await env.DB.prepare(
-          "SELECT platform, account_name, account_id, access_token FROM social_accounts WHERE status = 'active'"
-        ).all();
-
-        const credentials = {};
-        for (const a of (accs || [])) {
-          credentials[a.platform] = {
-            name: a.account_name,
-            id: a.account_id,
-            token: a.access_token
-          };
-        }
-
-        return jsonResponse({
-          success: true,
-          count: tasks.length,
-          tasks,
-          credentials
-        });
+      if ((request.method === "GET" || request.method === "POST") && (path === "/api/auto-post-task" || path === "/api/github-handover")) {
+        return await handleGetAutoPostHandover(request, url, env);
       }
 
       if (request.method === "POST" && path === "/api/record-post") {
         if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
         await ensureTables(env.DB);
         const body = await request.json();
-        const { product_id, platform, caption, angle, post_id } = body;
+        const { product_id, platform, caption, angle, post_id, image_url } = body;
 
         const histId = `post_${Date.now()}`;
         await env.DB.prepare(`
-          INSERT INTO post_history (id, product_id, platform, caption, angle, post_id)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).bind(histId, product_id, platform || 'facebook', caption || '', angle || 'General', post_id || '').run();
+          INSERT INTO post_history (id, product_id, platform, caption, angle, post_id, image_url, published_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `).bind(histId, product_id, platform || 'facebook', caption || '', angle || 'General', post_id || '', image_url || '').run();
 
-        return jsonResponse({ success: true, id: histId, message: "Post history recorded" });
+        if (product_id) {
+          await env.DB.prepare("UPDATE products SET last_posted_at = CURRENT_TIMESTAMP WHERE id = ?").bind(product_id).run();
+        }
+
+        return jsonResponse({ success: true, id: histId, message: "Post history and last_posted_at recorded in D1" });
       }
 
       // ==========================================
@@ -1056,103 +1019,105 @@ async function handleTikTokOAuthCallback(url, env) {
 async function handleTriggerPost(body, env) {
   let ghToken = env.GITHUB_TOKEN;
   let ghRepo = env.GITHUB_REPOSITORY || "rifatrabbi104-oss/social-automate";
+  let ghBranch = "main";
+  let ghWorkflow = "post_publisher.yml";
+
   if (env.DB) {
+    await ensureTables(env.DB);
     const dbToken = await getConfigValue(env.DB, "github_token", null);
     const dbRepo = await getConfigValue(env.DB, "github_repo", null);
+    const dbBranch = await getConfigValue(env.DB, "github_branch", null);
+    const dbWorkflow = await getConfigValue(env.DB, "github_workflow", null);
     if (dbToken) ghToken = dbToken;
     if (dbRepo) ghRepo = dbRepo;
+    if (dbBranch) ghBranch = dbBranch;
+    if (dbWorkflow) ghWorkflow = dbWorkflow;
   }
   if (body.github_token) ghToken = body.github_token.trim();
   if (body.github_repo) ghRepo = body.github_repo.trim();
+  if (body.github_branch) ghBranch = body.github_branch.trim();
+  if (body.github_workflow) ghWorkflow = body.github_workflow.trim();
 
   const targetPlatform = body.target_platform || "facebook";
-  const postType = body.post_type || "caption_only";
+  const postType = body.post_type || "standard";
   const productUrl = body.product_url || "";
 
-  // 🚀 ১-ক্লিক টেস্ট পোস্ট সরাসরি Worker দিয়ে এক্সেকিউট (No GitHub dependency required!)
-  if (!ghToken || body.direct_worker || body.trigger_source === "dashboard_test") {
-    if (env.DB) {
-      await ensureTables(env.DB);
-      let prod = null;
-      if (body.product_id) {
-        prod = await env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(body.product_id).first();
-      }
-      if (!prod && productUrl) {
-        prod = await env.DB.prepare("SELECT * FROM products WHERE product_url = ?").bind(productUrl).first();
-      }
-      if (!prod) {
-        prod = await env.DB.prepare("SELECT * FROM products WHERE is_active = 1 ORDER BY last_posted_at ASC, id ASC LIMIT 1").first();
-      }
-      if (!prod) {
-        prod = await env.DB.prepare("SELECT * FROM products ORDER BY id ASC LIMIT 1").first();
-      }
-
-      if (prod) {
-        const pubRes = await handlePublishProductNow({ product_id: prod.id, platform: targetPlatform }, env);
-        const pubData = await pubRes.json();
-        if (pubData.success) {
-          return jsonResponse({
-            success: true,
-            message: `🎉 Worker দিয়ে সরাসরি ${targetPlatform.toUpperCase()} পেজে টেস্ট পোস্ট সফলভাবে পাবলিশ হয়েছে!`,
-            post_id: pubData.post_id,
-            post_url: pubData.post_url,
-            caption: pubData.caption,
-            angle: pubData.angle,
-            engine: "Cloudflare Worker (Gemini 3.8 Live Engine)"
-          });
-        } else {
-          return jsonResponse({
-            success: false,
-            error: pubData.error || "Worker দিয়ে টেস্ট পোস্ট পাবলিশ ব্যর্থ হয়েছে।"
-          }, 400);
-        }
-      }
+  // প্রোডাক্ট নির্বাচন (D1 থেকে)
+  let prod = null;
+  if (env.DB) {
+    if (body.product_id) {
+      prod = await env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(body.product_id).first();
+    }
+    if (!prod && productUrl) {
+      prod = await env.DB.prepare("SELECT * FROM products WHERE product_url = ?").bind(productUrl).first();
+    }
+    if (!prod) {
+      prod = await env.DB.prepare("SELECT * FROM products WHERE is_active = 1 ORDER BY last_posted_at ASC, id ASC LIMIT 1").first();
+    }
+    if (!prod) {
+      prod = await env.DB.prepare("SELECT * FROM products ORDER BY id ASC LIMIT 1").first();
     }
   }
 
-  if (ghToken) {
-    try {
-      const dispatchRes = await fetch(`https://api.github.com/repos/${ghRepo}/actions/workflows/post_publisher.yml/dispatches`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${ghToken}`,
-          "Accept": "application/vnd.github.v3+json",
-          "User-Agent": "SocialAutomate-Worker"
-        },
-        body: JSON.stringify({
-          ref: "main",
-          inputs: {
-            target_platform: targetPlatform,
-            post_type: postType,
-            product_url: productUrl
-          }
-        })
-      });
+  // ১. GitHub Token থাকলে সরাসরি GitHub Actions Backend-এ সম্পূর্ণ কাজ হ্যান্ডওভার করা (Primary Handover Engine)
+  if (ghToken && !body.direct_worker) {
+    const dispatchResult = await dispatchGitHubActionHandover(env, {
+      product_id: prod ? prod.id : (body.product_id || ""),
+      target_platform: targetPlatform,
+      post_type: postType,
+      product_url: productUrl || (prod ? prod.product_url : ""),
+      github_token: ghToken,
+      github_repo: ghRepo,
+      github_branch: ghBranch,
+      github_workflow: ghWorkflow
+    });
 
-      if (dispatchRes.ok) {
-        return jsonResponse({
-          success: true,
-          message: `🚀 GitHub Actions-এ ${targetPlatform.toUpperCase()} পোস্ট (${postType === 'caption_only' ? 'ক্যাপশন-অনলি' : 'ছবি সহ'}) সফলভাবে ট্রিগার হয়েছে!`,
-          run_url: `https://github.com/${ghRepo}/actions`
-        });
-      } else {
-        const errText = await dispatchRes.text();
-        return jsonResponse({
-          success: false,
-          error: `GitHub Dispatch ব্যর্থ হয়েছে (${dispatchRes.status}): ${errText}`,
-          run_url: `https://github.com/${ghRepo}/actions/workflows/post_publisher.yml`
-        }, 400);
-      }
-    } catch (e) {
-      return jsonResponse({ error: e.message }, 500);
+    if (dispatchResult.success) {
+      return jsonResponse({
+        success: true,
+        handover: true,
+        engine: "GitHub Actions Backend (Handover from Cloudflare Worker)",
+        product_id: prod ? prod.id : null,
+        product_name: prod ? prod.name : null,
+        message: `🚀 GitHub Actions ব্যাকএন্ডে কাজের সম্পূর্ণ দায়িত্ব (Prompt, API Key, Token ও ছবি সহ) সফলভাবে হ্যান্ডওভার করা হয়েছে! কয়েক সেকেন্ডের মধ্যে পোস্ট পাবলিশ হয়ে যাবে।`,
+        run_url: dispatchResult.run_url
+      });
+    } else if (body.force_github_handover) {
+      return jsonResponse({
+        success: false,
+        error: dispatchResult.error,
+        run_url: dispatchResult.run_url
+      }, 400);
+    }
+  }
+
+  // ২. ফলব্যাক: যদি GitHub Token না থাকে বা ডিরেক্ট ওয়ার্কার রিকোয়েস্ট হয়
+  if (prod && env.DB) {
+    const pubRes = await handlePublishProductNow({ product_id: prod.id, platform: targetPlatform, direct_worker: true }, env);
+    const pubData = await pubRes.json();
+    if (pubData.success) {
+      return jsonResponse({
+        success: true,
+        message: `🎉 ${targetPlatform.toUpperCase()} পেজে পোস্ট সফলভাবে পাবলিশ হয়েছে!`,
+        post_id: pubData.post_id,
+        post_url: pubData.post_url,
+        caption: pubData.caption,
+        angle: pubData.angle,
+        engine: pubData.engine || "Cloudflare Worker (Gemini 2.5 Flash Native Audio Dialog)"
+      });
+    } else {
+      return jsonResponse({
+        success: false,
+        error: pubData.error || "পোস্ট পাবলিশ ব্যর্থ হয়েছে।"
+      }, 400);
     }
   }
 
   return jsonResponse({
     success: false,
     missing_token: true,
-    message: "D1 ডেটাবেসে কোনো সক্রিয় প্রোডাক্ট পাওয়া যায়নি অথবা GitHub Personal Access Token সেভ করা নেই। প্রথমে D1-এ প্রোডাক্ট অ্যাড করুন অথবা GitHub টোকেন সেভ করুন।",
-    workflow_url: `https://github.com/${ghRepo}/actions/workflows/post_publisher.yml`
+    message: "D1 ডেটাবেসে কোনো সক্রিয় প্রোডাক্ট পাওয়া যায়নি অথবা GitHub Personal Access Token সেভ করা নেই। প্রথমে D1-এ প্রোডাক্ট ও GitHub টোকেন সেভ করুন।",
+    workflow_url: `https://github.com/${ghRepo}/actions/workflows/${ghWorkflow}`
   });
 }
 
@@ -1163,12 +1128,13 @@ async function handleGetSettings(env, url = null) {
     tiktok: { connected: false, account_name: '', account_id: '', access_token: '', client_key: 'awq5kzk0rv01o6z0', client_secret: '' },
     whatsapp: { connected: false, phone: '', mode: 'gateway', gateway_url: '', gateway_token: '', phone_number_id: '', access_token: '' },
     telegram: { connected: false, bot_token: '', admin_chat_id: '' },
-    github: { connected: false, repo: 'rifatrabbi104-oss/social-automate', token: '' },
-    ai: { connected: false, key_preview: '', model: env.GEMINI_MODEL || 'models/gemini-2.5-flash-native-audio-preview-12-2025' }
+    github: { connected: false, repo: 'rifatrabbi104-oss/social-automate', branch: 'main', workflow: 'post_publisher.yml', token: '', token_preview: '' },
+    ai: { connected: false, api_key: '', key_preview: '', model: 'models/gemini-2.5-flash-native-audio-preview-12-2025' }
   };
 
   if (env.GEMINI_API_KEY && env.GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY") {
     settings.ai.connected = true;
+    settings.ai.api_key = env.GEMINI_API_KEY;
     settings.ai.key_preview = `${env.GEMINI_API_KEY.slice(0, 6)}...${env.GEMINI_API_KEY.slice(-4)}`;
   }
 
@@ -1205,6 +1171,13 @@ async function handleGetSettings(env, url = null) {
 
       const { results: configs } = await env.DB.prepare("SELECT key, value FROM system_config").all();
       for (const c of (configs || [])) {
+        if (c.key === 'meta_page_token' && c.value && !settings.facebook.access_token) {
+          settings.facebook.access_token = c.value;
+          settings.facebook.connected = true;
+        }
+        if (c.key === 'meta_page_id' && c.value && !settings.facebook.account_id) {
+          settings.facebook.account_id = c.value;
+        }
         if (c.key === 'tiktok_client_key') settings.tiktok.client_key = c.value;
         if (c.key === 'tiktok_client_secret') settings.tiktok.client_secret = c.value;
         if (c.key === 'tiktok_access_token' && !settings.tiktok.access_token) settings.tiktok.access_token = c.value;
@@ -1219,14 +1192,18 @@ async function handleGetSettings(env, url = null) {
           settings.telegram.bot_token = c.value;
         }
         if (c.key === 'telegram_admin_chat_id') settings.telegram.admin_chat_id = c.value;
-        if (c.key === 'github_token') {
-          settings.github.connected = Boolean(c.value);
+        if (c.key === 'github_token' && c.value) {
+          settings.github.connected = true;
           settings.github.token = c.value;
+          settings.github.token_preview = `${c.value.slice(0, 6)}...${c.value.slice(-4)}`;
         }
-        if (c.key === 'github_repo') settings.github.repo = c.value;
+        if (c.key === 'github_repo' && c.value) settings.github.repo = c.value;
+        if (c.key === 'github_branch' && c.value) settings.github.branch = c.value;
+        if (c.key === 'github_workflow' && c.value) settings.github.workflow = c.value;
         if (c.key === 'meta_verify_token') verifyToken = c.value;
         if (c.key === 'gemini_api_key' && c.value) {
           settings.ai.connected = true;
+          settings.ai.api_key = c.value;
           settings.ai.key_preview = `${c.value.slice(0, 6)}...${c.value.slice(-4)}`;
         }
         if (c.key === 'gemini_model' && c.value) {
@@ -1251,20 +1228,28 @@ async function handleGetSettings(env, url = null) {
   });
 }
 
-// 🐙 GitHub Actions সেটিংস সেভ API
+// 🐙 GitHub Actions হ্যান্ডওভার সেটিংস সেভ API (D1 Database)
 async function handleSetupGitHub(body, env) {
   if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
   await ensureTables(env.DB);
-  const { github_token, github_repo } = body;
-  if (github_token) {
+  const { github_token, github_repo, github_branch, github_workflow } = body;
+
+  if (github_token !== undefined && github_token.trim() !== "") {
     await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('github_token', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(github_token.trim()).run();
   }
-  if (github_repo) {
+  if (github_repo !== undefined && github_repo.trim() !== "") {
     await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('github_repo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(github_repo.trim()).run();
   }
+  if (github_branch !== undefined && github_branch.trim() !== "") {
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('github_branch', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(github_branch.trim()).run();
+  }
+  if (github_workflow !== undefined && github_workflow.trim() !== "") {
+    await env.DB.prepare("INSERT INTO system_config (key, value) VALUES ('github_workflow', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(github_workflow.trim()).run();
+  }
+
   return jsonResponse({
     success: true,
-    message: "GitHub Actions ক্রেডেনশিয়ালস D1 ডেটাবেসে সফলভাবে সেভ হয়েছে!"
+    message: "GitHub Actions হ্যান্ডওভার কনফিগারেশন D1 ডেটাবেসে সফলভাবে সেভ হয়েছে!"
   });
 }
 
@@ -2270,9 +2255,11 @@ async function ensureTables(db) {
     try { await db.prepare("ALTER TABLE live_conversations ADD COLUMN channel_type TEXT DEFAULT 'messenger'").run(); } catch (e) {}
     try { await db.prepare("DELETE FROM live_conversations WHERE chat_id = '0' OR chat_id LIKE 'fb_user_%' OR chat_id LIKE 'wa_01882%' OR chat_id LIKE 'test_%'").run(); } catch (e) {}
     try { await db.prepare("UPDATE live_conversations SET admin_takeover = 0").run(); } catch (e) {}
-    // পূর্ববর্তী টেস্ট ডামি প্রোডাক্ট রিমুভ ও সকল আসল প্রোডাক্টকে ৪ ঘণ্টা ফেসবুক ইন্টারভ্যালে আপডেট
+    // পূর্ববর্তী টেস্ট ডামি প্রোডাক্ট রিমুভ ও ফাঁকা ডিফল্ট ফিল্ডগুলো পূরণ করা (ইউজারের সেভ করা শিডিউল কখনোই ওভাররাইট করবে না)
     try { await db.prepare("DELETE FROM products WHERE id LIKE 'p_1793%' AND sku IS NULL").run(); } catch (e) {}
-    try { await db.prepare("UPDATE products SET target_platform = 'facebook', schedule_type = 'interval', interval_hours = 4, posting_time = 'interval_4', stock_status = 'in_stock' WHERE target_platform != 'facebook' OR schedule_type != 'interval' OR posting_time != 'interval_4' OR stock_status != 'in_stock'").run(); } catch (e) {}
+    try { await db.prepare("UPDATE products SET target_platform = 'facebook' WHERE target_platform IS NULL OR target_platform = ''").run(); } catch (e) {}
+    try { await db.prepare("UPDATE products SET posting_time = '20:00' WHERE posting_time IS NULL OR posting_time = ''").run(); } catch (e) {}
+    try { await db.prepare("UPDATE products SET stock_status = 'in_stock' WHERE stock_status IS NULL OR stock_status = ''").run(); } catch (e) {}
   } catch (e) {}
 }
 
@@ -3168,20 +3155,444 @@ async function publishToFacebookPage(product, caption, env) {
 }
 
 // ========================================================
-// 🚀 ড্যাশবোর্ড থেকে ১-ক্লিক ডাইরেক্ট পোস্ট হ্যান্ডলার
+// 🧠 ওয়ার্কারের মাস্টার প্রম্পট ও ফার্স্ট কমেন্ট বিল্ডার (GitHub Handover এর জন্য ফাইনাল)
+// ========================================================
+function buildFirstCommentMessage(product) {
+  const rawUrl = product?.product_url || product?.url || '';
+  let productUrl = rawUrl;
+  if (!productUrl && product?.id) {
+    productUrl = `https://ranonex.shop/product.html?id=${encodeURIComponent(product.id)}`;
+  }
+  if (!productUrl || !productUrl.startsWith('http')) {
+    productUrl = 'https://ranonex.shop';
+  }
+  return `🛍️ প্রোডাক্টের বিস্তারিত ছবি দেখতে ও সরাসরি ওয়েবসাইট থেকে অর্ডার করতে নিচের লিংকে ক্লিক করুন:\n👉 ${productUrl}\n\n🚚 সারা বাংলাদেশে ক্যাশ অন হোম ডেলিভারি (হাতে পেয়ে চেক করে নেওয়ার সুবিধা)! অথবা সরাসরি অর্ডার করতে পেজে মেসেজ পাঠান।`;
+}
+
+function buildWorkerPostPrompt(product, angleObj, randomHook, policies, previousPosts = []) {
+  const pol = policies || {
+    store_name: "Ranonex",
+    del_inside: "৬০ টাকা",
+    del_outside: "১২০ টাকা",
+    payment_methods: "ক্যাশ অন ডেলিভারি",
+    return_policy: "ডেলিভারির সময় চেক করে দেখে নেওয়ার সুযোগ",
+    contact_phone: ""
+  };
+
+  const prevSnapshot = (previousPosts || [])
+    .slice(0, 3)
+    .map((hp, i) => `[পূর্বের পোস্ট #${i + 1} (${hp.angle || 'Angle'})]: ${(hp.caption || '').substring(0, 160)}...`)
+    .join("\n");
+
+  return `You are an elite Bangladeshi e-commerce direct-response copywriter and social media marketer for "${pol.store_name}".
+Write an authentic, irresistible, highly persuasive Facebook sales post for this product in natural, engaging Bengali script (বাংলা লিপি).
+
+=== PRODUCT INFORMATION ===
+Name: ${product.name}
+Price: ৳${product.price} ${product.original_price && product.original_price > product.price ? `(Regular Price: ৳${product.original_price})` : ''}
+Details / Features: ${product.description || 'Premium quality durable product'}
+Specifications: ${product.specifications || ''}
+Category: ${product.category || 'General'}
+Order Method: Customers will find the direct website order link in the FIRST COMMENT of this post or can message the page directly.
+
+=== STORE POLICIES (LOADED DIRECTLY FROM D1 DATABASE) ===
+Store Name: ${pol.store_name}
+Delivery Charge Inside Dhaka: ${pol.del_inside}
+Delivery Charge Outside Dhaka: ${pol.del_outside}
+Payment Methods: ${pol.payment_methods}
+Return Policy: ${pol.return_policy}
+Contact Phone / Hotline: ${pol.contact_phone || 'ইনবক্স করুন'}
+
+=== TODAY'S MARKETING ANGLE ===
+Angle Name: ${angleObj.name}
+Angle Directive: ${angleObj.instruction}
+Opening Inspiration: "${randomHook}"
+
+${prevSnapshot ? `=== PREVIOUS POSTS (DO NOT REPEAT THESE PHRASES OR OPENINGS) ===\n${prevSnapshot}\n` : ''}
+=== STRICT ANTI-REPETITION & ZERO-TEMPLATE RULES ===
+1. STRICT ZERO BANGLISH POLICY: Write 100% in natural Bengali script (বাংলা লিপি). Write brand name as "${pol.store_name}".
+2. ABSOLUTELY BANNED CLICHÉS & FORMULAIC BULLETS (DO NOT USE ANY OF THESE):
+   - "🔥 আকর্ষণীয় অফার"
+   - "সুসংবাদ সুসংবাদ"
+   - "💎 কেন এটি আপনার জন্য সেরা পছন্দ?"
+   - "✅ প্রিমিয়াম বিল্ড কোয়ালিটি ও দীর্ঘস্থায়িত্ব"
+   - "✅ ১০০% অরিজিনাল প্রোডাক্টের নিশ্চয়তা"
+   - "আপনি কি একটি ভালো... খুঁজছেন?"
+   - "দেরি না করে এখনই অর্ডার করুন"
+   - "আসসালামু আলাইকুম ভিউয়ার্স"
+3. Start with an eye-catching, relatable human opening line matching the chosen angle: "${randomHook}".
+4. Keep the language natural, conversational, vivid, and persuasive (authentic Bangladeshi tone).
+5. Highlight why this product is truly worth buying, practical daily benefits and emotional appeal.
+6. Price & COD: Mention the exact price clearly (৳${product.price}) and nationwide Cash on Delivery (${pol.payment_methods}).
+7. Delivery Charges: State the exact delivery charges:
+   - ঢাকা সিটির ভেতরে: ${pol.del_inside}
+   - ঢাকার বাইরে: ${pol.del_outside}
+8. Return Guarantee: State that customers can check the parcel upon delivery (${pol.return_policy}).
+9. STRICT NO-LINK IN CAPTION RULE: NEVER include any website link (no http/https, no ranonex.shop) in the post caption body! Facebook penalizes posts with external links and destroys organic reach.
+   Instead, your Call-to-Action MUST instruct: "👉 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা পেজে ইনবক্স করুন!"
+10. Include 3-5 relevant hashtags at the very end (#${pol.store_name.replace(/\s+/g, '')} #OnlineShoppingBD etc.).
+11. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.`;
+}
+
+// ⏰ প্রোডাক্টের শিডিউল ডিউ চেকার (Interval এবং Daily Time উভয় মোড সমর্থিত - BDT UTC+6)
+function evaluateProductSchedule(p, now = Date.now()) {
+  const bdtDate = new Date(now + 6 * 3600 * 1000);
+  const currentHour = bdtDate.getUTCHours();
+  const currentMinute = bdtDate.getUTCMinutes();
+  const currentMinutesOfDay = currentHour * 60 + currentMinute;
+  const currentBdtDateStr = bdtDate.toISOString().slice(0, 10);
+
+  let lastPostedMs = 0;
+  let lastPostedBdtDateStr = "";
+  if (p.last_posted_at) {
+    try {
+      const cleanStr = String(p.last_posted_at).replace(" ", "T");
+      const dt = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z");
+      if (!isNaN(dt.getTime())) {
+        lastPostedMs = dt.getTime();
+        const lastBdt = new Date(lastPostedMs + 6 * 3600 * 1000);
+        lastPostedBdtDateStr = lastBdt.toISOString().slice(0, 10);
+      }
+    } catch (e) {}
+  }
+
+  const elapsedHours = lastPostedMs > 0 ? (now - lastPostedMs) / (3600 * 1000) : null;
+  const isIntervalMode = p.schedule_type === 'interval' || (p.posting_time && String(p.posting_time).startsWith('interval_'));
+
+  if (isIntervalMode) {
+    let intervalHours = Number(p.interval_hours) || 4;
+    if (p.posting_time && String(p.posting_time).startsWith('interval_')) {
+      intervalHours = parseInt(String(p.posting_time).replace('interval_', ''), 10) || intervalHours;
+    }
+    const isDue = lastPostedMs === 0 || (elapsedHours !== null && elapsedHours >= (intervalHours - 0.15));
+    return {
+      isDue,
+      mode: "interval",
+      intervalHours,
+      elapsedHours: elapsedHours !== null ? Number(elapsedHours.toFixed(2)) : null,
+      reason: isDue
+        ? (lastPostedMs === 0 ? "প্রথম অটো-পোস্টের জন্য প্রস্তুত (Never Posted)" : `${intervalHours} ঘণ্টার ইন্টারভ্যাল পূর্ণ হয়েছে (${elapsedHours.toFixed(1)}h elapsed)`)
+        : `পরবর্তী পোস্ট ${(intervalHours - elapsedHours).toFixed(1)} ঘণ্টা পর`
+    };
+  }
+
+  // Daily Fixed Time Mode (যেমন "10:00", "20:00" বা একাধিক সময় "10:00, 20:00")
+  const rawTimes = String(p.posting_time || '20:00')
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.includes(':'));
+  const times = rawTimes.length > 0 ? rawTimes : ['20:00'];
+
+  if (times.length === 1) {
+    const [tH, tM] = times[0].split(':').map(Number);
+    const targetMinutes = (isNaN(tH) ? 20 : tH) * 60 + (isNaN(tM) ? 0 : tM);
+
+    if (lastPostedBdtDateStr === currentBdtDateStr) {
+      return {
+        isDue: false,
+        mode: "daily",
+        intervalHours: 24,
+        elapsedHours: elapsedHours !== null ? Number(elapsedHours.toFixed(2)) : null,
+        reason: `আজকের (${currentBdtDateStr}) পোস্ট ইতোমধ্যে সম্পন্ন হয়েছে`
+      };
+    }
+
+    // নির্ধারিত সময় বা তার পরে যেকোনো সময় ক্রন রান হলেই পোস্ট হবে (যাতে GitHub ক্রন দেরি করলেও মিস না হয়)
+    const isDue = currentMinutesOfDay >= targetMinutes;
+    return {
+      isDue,
+      mode: "daily",
+      intervalHours: 24,
+      elapsedHours: elapsedHours !== null ? Number(elapsedHours.toFixed(2)) : null,
+      reason: isDue
+        ? `দৈনিক শিডিউল সময় (${times[0]} BDT) পূর্ণ হয়েছে`
+        : `আজকের নির্ধারিত সময় ${times[0]} BDT (বর্তমান সময় ${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')} BDT)`
+    };
+  }
+
+  // একাধিক দৈনিক সময় থাকলে
+  let matchedTime = null;
+  for (const t of times) {
+    const [tH, tM] = t.split(':').map(Number);
+    const targetMinutes = (isNaN(tH) ? 10 : tH) * 60 + (isNaN(tM) ? 0 : tM);
+    if (currentMinutesOfDay >= targetMinutes && currentMinutesOfDay <= targetMinutes + 120) {
+      matchedTime = t;
+      break;
+    }
+  }
+  const isDue = Boolean(matchedTime) && (lastPostedMs === 0 || (elapsedHours !== null && elapsedHours >= 3));
+  return {
+    isDue,
+    mode: "daily_multi",
+    intervalHours: Math.round(24 / times.length),
+    elapsedHours: elapsedHours !== null ? Number(elapsedHours.toFixed(2)) : null,
+    reason: isDue ? `শিডিউল টাইম ম্যাচ (${matchedTime} BDT)` : `পরবর্তী নির্ধারিত সময়ের অপেক্ষায় (${times.join(', ')} BDT)`
+  };
+}
+
+// 🐙 Cloudflare Worker থেকে GitHub Actions-এ ডিসপ্যাচ হ্যান্ডওভার কলার
+async function dispatchGitHubActionHandover(env, params = {}) {
+  let ghToken = params.github_token || env.GITHUB_TOKEN || "";
+  let ghRepo = params.github_repo || env.GITHUB_REPOSITORY || "rifatrabbi104-oss/social-automate";
+  let ghBranch = params.github_branch || "main";
+  let ghWorkflow = params.github_workflow || "post_publisher.yml";
+
+  if (env.DB) {
+    if (!ghToken) ghToken = await getConfigValue(env.DB, "github_token", "");
+    const dbRepo = await getConfigValue(env.DB, "github_repo", "");
+    const dbBranch = await getConfigValue(env.DB, "github_branch", "");
+    const dbWorkflow = await getConfigValue(env.DB, "github_workflow", "");
+    if (dbRepo) ghRepo = dbRepo;
+    if (dbBranch) ghBranch = dbBranch;
+    if (dbWorkflow) ghWorkflow = dbWorkflow;
+  }
+
+  if (!ghToken) {
+    return {
+      success: false,
+      missing_token: true,
+      error: "D1 ডেটাবেসে GitHub Personal Access Token (github_token) সেভ করা নেই।"
+    };
+  }
+
+  try {
+    const dispatchRes = await fetch(`https://api.github.com/repos/${ghRepo}/actions/workflows/${ghWorkflow}/dispatches`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${ghToken}`,
+        "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+        "User-Agent": "SocialAutomate-Cloudflare-Worker"
+      },
+      body: JSON.stringify({
+        ref: ghBranch,
+        inputs: {
+          product_id: String(params.product_id || ""),
+          product_url: String(params.product_url || ""),
+          target_platform: String(params.target_platform || "facebook"),
+          post_type: String(params.post_type || "standard")
+        }
+      })
+    });
+
+    if (dispatchRes.ok || dispatchRes.status === 204) {
+      return {
+        success: true,
+        repo: ghRepo,
+        workflow: ghWorkflow,
+        run_url: `https://github.com/${ghRepo}/actions`
+      };
+    } else {
+      const errText = await dispatchRes.text();
+      return {
+        success: false,
+        error: `GitHub API Error (${dispatchRes.status}): ${errText}`,
+        run_url: `https://github.com/${ghRepo}/actions/workflows/${ghWorkflow}`
+      };
+    }
+  } catch (err) {
+    return {
+      success: false,
+      error: err.message
+    };
+  }
+}
+
+// 📦 GitHub Actions-এর জন্য সম্পূর্ণ হ্যান্ডওভার প্যাকেজ প্রদানকারী API (/api/auto-post-task)
+async function handleGetAutoPostHandover(request, url, env) {
+  if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
+  await ensureTables(env.DB);
+
+  let reqProductId = url.searchParams.get("product_id") || "";
+  let onlyDue = url.searchParams.get("only_due") === "true" || url.searchParams.get("scheduled") === "true";
+
+  if (request.method === "POST") {
+    try {
+      const b = await request.json();
+      if (b.product_id) reqProductId = String(b.product_id);
+      if (b.only_due !== undefined) onlyDue = Boolean(b.only_due);
+    } catch (e) {}
+  }
+
+  // ১. D1 থেকে Gemini API Key, Permanent Model এবং Store Policies রিড করা
+  let geminiApiKey = env.GEMINI_API_KEY || "";
+  if (!geminiApiKey || geminiApiKey === "YOUR_GEMINI_API_KEY") {
+    geminiApiKey = await getConfigValue(env.DB, "gemini_api_key", "");
+  }
+  const geminiModel = "models/gemini-2.5-flash-native-audio-preview-12-2025";
+  const policies = await getStorePolicies(env.DB);
+
+  // ২. D1 থেকে সকল সোশ্যাল মিডিয়া টোকেন ও ক্রেডেনশিয়ালস রিড করা (Worker যা পাঠাবে সেটাই ফাইনাল)
+  const { results: accs } = await env.DB.prepare(
+    "SELECT platform, account_name, account_id, access_token FROM social_accounts WHERE status = 'active'"
+  ).all();
+
+  const credentials = {};
+  for (const a of (accs || [])) {
+    credentials[a.platform] = {
+      name: a.account_name,
+      id: a.account_id,
+      token: a.access_token
+    };
+  }
+
+  // system_config থেকেও ফলব্যাক টোকেন নিশ্চিত করা
+  const cfgFbToken = await getMetaPageToken(env);
+  const cfgFbPageId = await getConfigValue(env.DB, "meta_page_id", env.META_PAGE_ID || "1287050647827199");
+  if (cfgFbToken) {
+    credentials.facebook = {
+      name: credentials.facebook?.name || policies.store_name || "Ranonex",
+      id: credentials.facebook?.id || cfgFbPageId,
+      token: cfgFbToken
+    };
+  }
+
+  const cfgTkToken = await getConfigValue(env.DB, "tiktok_access_token", "");
+  if (cfgTkToken && !credentials.tiktok?.token) {
+    credentials.tiktok = {
+      name: credentials.tiktok?.name || "TikTok",
+      id: credentials.tiktok?.id || "",
+      token: cfgTkToken
+    };
+  }
+
+  const tgBotToken = await getConfigValue(env.DB, "telegram_bot_token", "");
+  const tgChatId = await getConfigValue(env.DB, "telegram_admin_chat_id", "");
+  if (tgBotToken && tgChatId) {
+    credentials.telegram = {
+      bot_token: tgBotToken,
+      chat_id: tgChatId
+    };
+  }
+
+  // ৩. প্রোডাক্ট বাছাই ও প্রতিটির জন্য প্রম্পট, ছবি ও ফার্স্ট কমেন্ট রেডি করা
+  let prods = [];
+  if (reqProductId) {
+    const single = await env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(reqProductId).first();
+    if (single) prods = [single];
+  } else {
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM products WHERE is_active = 1 AND daily_auto_post = 1 ORDER BY last_posted_at ASC, created_at DESC"
+    ).all();
+    prods = results || [];
+  }
+
+  const now = Date.now();
+  const tasks = [];
+
+  for (const p of prods) {
+    const sched = evaluateProductSchedule(p, now);
+    if (onlyDue && !reqProductId && !sched.isDue) {
+      continue;
+    }
+
+    // পূর্বের পোস্ট হিস্ট্রি নেওয়া (যাতে AI রিপিট না করে)
+    const { results: hist } = await env.DB.prepare(
+      "SELECT caption, angle, platform, published_at FROM post_history WHERE product_id = ? ORDER BY published_at DESC LIMIT 4"
+    ).bind(p.id).all();
+    const previousPosts = hist || [];
+    const recentAngles = previousPosts.map(r => r.angle);
+
+    // নতুন ইউনিক মার্কেটিং অ্যাঙ্গেল নির্বাচন
+    const availableAngles = MARKETING_ANGLES.filter(a => !recentAngles.includes(a.name) && !recentAngles.includes(a.key));
+    const chosenAngle = availableAngles.length > 0
+      ? availableAngles[Math.floor(Math.random() * availableAngles.length)]
+      : MARKETING_ANGLES[Math.floor(Math.random() * MARKETING_ANGLES.length)];
+
+    const randomHook = chosenAngle.hook_starters[Math.floor(Math.random() * chosenAngle.hook_starters.length)];
+
+    // ডেটাবেসে থাকা ইউজারের বাছাই করা সব ছবি সিরিয়াল অনুযায়ী প্রস্তুত করা
+    let galleryImages = [];
+    try {
+      if (typeof p.gallery_images === "string") {
+        galleryImages = JSON.parse(p.gallery_images);
+      } else if (Array.isArray(p.gallery_images)) {
+        galleryImages = p.gallery_images;
+      }
+    } catch (e) {}
+    galleryImages = (galleryImages || []).filter(u => typeof u === "string" && u.startsWith("http"));
+    if (galleryImages.length === 0 && p.image_url && p.image_url.startsWith("http")) {
+      galleryImages = [p.image_url];
+    }
+
+    // ওয়ার্কারের তৈরি ফাইনাল প্রম্পট ও প্রথম কমেন্টের মেসেজ
+    const finalPrompt = buildWorkerPostPrompt(p, chosenAngle, randomHook, policies, previousPosts);
+    const firstCommentMessage = buildFirstCommentMessage(p);
+    const fallbackCaption = generateFallbackCaption(p, chosenAngle, randomHook, policies);
+
+    tasks.push({
+      ...p,
+      target_platform: p.target_platform || "facebook",
+      gallery_images: galleryImages,
+      image_url: galleryImages[0] || p.image_url || "",
+      schedule_evaluation: sched,
+      chosen_angle: {
+        key: chosenAngle.key,
+        name: chosenAngle.name,
+        instruction: chosenAngle.instruction,
+        hook: randomHook
+      },
+      prompt: finalPrompt,
+      first_comment_message: firstCommentMessage,
+      fallback_caption: fallbackCaption,
+      previous_posts: previousPosts
+    });
+  }
+
+  return jsonResponse({
+    success: true,
+    handover_engine: "Cloudflare Worker -> GitHub Actions Backend",
+    timestamp: new Date().toISOString(),
+    count: tasks.length,
+    ai: {
+      api_key: geminiApiKey,
+      model: geminiModel
+    },
+    policies,
+    credentials,
+    tasks
+  });
+}
+
+// ========================================================
+// 🚀 ড্যাশবোর্ড থেকে ১-ক্লিক প্রোডাক্ট পোস্ট হ্যান্ডলার (GitHub Handover + Direct Fallback)
 // ========================================================
 async function handlePublishProductNow(body, env) {
   if (!env.DB) return jsonResponse({ error: "D1 Database missing" }, 500);
   await ensureTables(env.DB);
 
-  const { product_id, platform } = body;
+  const { product_id, platform, direct_worker } = body;
   if (!product_id) return jsonResponse({ error: "Missing product_id" }, 400);
 
   // D1 থেকে প্রোডাক্ট রিড
   const product = await env.DB.prepare("SELECT * FROM products WHERE id = ?").bind(product_id).first();
   if (!product) return jsonResponse({ error: "Product not found in D1" }, 404);
 
-  // ১. বিগত পোস্টের অ্যাঙ্গেলগুলো চেক করা
+  // ১. যদি D1-এ GitHub Token সেভ করা থাকে এবং direct_worker না বলা হয় -> সরাসরি GitHub Actions-এ হ্যান্ডওভার!
+  const ghToken = await getConfigValue(env.DB, "github_token", env.GITHUB_TOKEN || "");
+  if (ghToken && !direct_worker) {
+    const dispatchRes = await dispatchGitHubActionHandover(env, {
+      product_id: product.id,
+      product_url: product.product_url || "",
+      target_platform: platform || product.target_platform || "facebook",
+      post_type: "standard",
+      github_token: ghToken
+    });
+
+    if (dispatchRes.success) {
+      return jsonResponse({
+        success: true,
+        handover: true,
+        engine: "GitHub Actions Backend",
+        product_id: product.id,
+        angle: "Worker Handover Package",
+        run_url: dispatchRes.run_url,
+        message: `🚀 "${product.name}" প্রোডাক্টের সম্পূর্ণ পোস্টিং দায়িত্ব (Prompt, API Key, Token ও সব ছবি সহ) GitHub Actions-এ হ্যান্ডওভার করা হয়েছে!`
+      });
+    }
+  }
+
+  // ২. ফলব্যাক: সরাসরি Worker থেকে পাবলিশ
   let recentAngles = [];
   try {
     const { results } = await env.DB.prepare(
@@ -3190,19 +3601,14 @@ async function handlePublishProductNow(body, env) {
     recentAngles = (results || []).map(r => r.angle);
   } catch (e) {}
 
-  // ২. সম্প্রতি ব্যবহার না হওয়া অ্যাঙ্গেল বাছাই
   const available = MARKETING_ANGLES.filter(a => !recentAngles.includes(a.name) && !recentAngles.includes(a.key));
   const chosenAngle = (available.length > 0)
     ? available[Math.floor(Math.random() * available.length)]
     : MARKETING_ANGLES[Math.floor(Math.random() * MARKETING_ANGLES.length)];
 
-  // ৩. AI দিয়ে ক্যাপশন তৈরি
   const caption = await generateAIPostCaption(product, chosenAngle, env);
-
-  // ৪. ফেসবুক পেজে পোস্ট পাবলিশ (পাবলিক R2 ছবি সহ)
   const pubResult = await publishToFacebookPage(product, caption, env);
 
-  // ৫. D1 post_history তে সেভ ও products.last_posted_at আপডেট
   const histId = `post_${Date.now()}`;
   await env.DB.prepare(`
     INSERT INTO post_history (id, product_id, platform, caption, angle, post_id, image_url, published_at)
@@ -3223,13 +3629,12 @@ async function handlePublishProductNow(body, env) {
 }
 
 // ========================================================
-// ⏰ শিডিউল্ড অটো-পোস্টিং এক্সিকিউটর (Ultra-Low CPU)
+// ⏰ শিডিউল্ড অটো-পোস্টিং এক্সিকিউটর (GitHub Handover First)
 // ========================================================
 async function handleScheduledAutoPosting(env) {
   if (!env.DB) return { total_active: 0, published_count: 0, log: ["D1 Database missing"] };
   await ensureTables(env.DB);
 
-  // ১. সক্রিয় অটো-পোস্ট প্রোডাক্টগুলো নেওয়া
   const { results: prods } = await env.DB.prepare(
     "SELECT * FROM products WHERE is_active = 1 AND daily_auto_post = 1"
   ).all();
@@ -3239,79 +3644,76 @@ async function handleScheduledAutoPosting(env) {
   }
 
   const now = Date.now();
-  // বাংলাদেশ সময় (UTC+6)
-  const bdtDate = new Date(now + 6 * 3600 * 1000);
-  const currentHour = bdtDate.getUTCHours();
-  const currentMinute = bdtDate.getUTCMinutes();
-  const currentBdtDateStr = bdtDate.toISOString().slice(0, 10); // YYYY-MM-DD
   const executionLog = [];
+  const ghToken = await getConfigValue(env.DB, "github_token", env.GITHUB_TOKEN || "");
 
-  // ⏰ দৈনিক ১ বার প্রকাশের শিডিউল প্রসেসিং (প্রতি প্রোডাক্ট দিনে সর্বোচ্চ ১ বার নির্দিষ্ট সময়ে পোস্ট হবে)
   for (const p of prods) {
-    let lastPostedBdtDateStr = "";
-    if (p.last_posted_at) {
-      try {
-        const cleanStr = String(p.last_posted_at).replace(" ", "T");
-        const lastDt = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z");
-        if (!isNaN(lastDt.getTime())) {
-          const lastBdt = new Date(lastDt.getTime() + 6 * 3600 * 1000);
-          lastPostedBdtDateStr = lastBdt.toISOString().slice(0, 10);
-        }
-      } catch (e) {}
-    }
+    const sched = evaluateProductSchedule(p, now);
 
-    // ১. চেক করা এই প্রোডাক্ট আজ অলরেডি পোস্ট হয়েছে কিনা (দিনে ১ বার গ্যারান্টি)
-    if (lastPostedBdtDateStr && lastPostedBdtDateStr === currentBdtDateStr) {
-      executionLog.push({
-        product_id: p.id,
-        name: p.name,
-        sku: p.sku,
-        status: "skipped",
-        reason: `আজকের (${currentBdtDateStr}) পোস্ট ইতোমধ্যে সফলভাবে সম্পন্ন হয়েছে। দিনে সর্বোচ্চ ১ বার পোস্ট হবে।`
-      });
-      continue;
-    }
-
-    // ২. সময় মিলানো (যেমন "20:00" -> রাত ৮টা)
-    const targetTime = (p.posting_time && !p.posting_time.startsWith('interval_')) ? p.posting_time : '20:00';
-    const [tHour] = targetTime.split(':').map(Number);
-
-    if (tHour === currentHour) {
-      console.log(`🚀 [Daily Auto-Post Due (${targetTime} BDT)] Publishing: ${p.name} (SKU: ${p.sku || p.id})`);
-      try {
-        const pubRes = await handlePublishProductNow({ product_id: p.id, platform: p.target_platform || 'facebook' }, env);
-        executionLog.push({
-          product_id: p.id,
-          name: p.name,
-          sku: p.sku,
-          status: "published",
-          post_id: pubRes.post_id || null,
-          reason: `দৈনিক শিডিউল টাইম ম্যাচ (${targetTime} BDT)`
-        });
-      } catch (err) {
-        executionLog.push({
-          product_id: p.id,
-          name: p.name,
-          sku: p.sku,
-          status: "error",
-          error: err.message,
-          reason: `দৈনিক শিডিউল টাইম (${targetTime} BDT) - পাবলিশিং ব্যর্থ`
-        });
-      }
-    } else {
+    if (!sched.isDue) {
       executionLog.push({
         product_id: p.id,
         name: p.name,
         sku: p.sku,
         status: "waiting",
-        reason: `আজকের পোস্ট নির্ধারিত সময়: ${targetTime} BDT (বর্তমান সময়: ${String(currentHour).padStart(2, '0')}:${String(currentMinute).padStart(2, '0')} BDT)`
+        mode: sched.mode,
+        reason: sched.reason
+      });
+      continue;
+    }
+
+    console.log(`🚀 [Auto-Post Due] Handing over / publishing: ${p.name} (SKU: ${p.sku || p.id}) | Reason: ${sched.reason}`);
+
+    // ১. GitHub Token থাকলে সরাসরি GitHub Actions-এ ওই প্রোডাক্টের জন্য ওয়ার্কফ্লো ডিসপ্যাচ করা
+    if (ghToken) {
+      const dispatchRes = await dispatchGitHubActionHandover(env, {
+        product_id: p.id,
+        product_url: p.product_url || "",
+        target_platform: p.target_platform || "facebook",
+        post_type: "standard",
+        github_token: ghToken
+      });
+
+      if (dispatchRes.success) {
+        executionLog.push({
+          product_id: p.id,
+          name: p.name,
+          sku: p.sku,
+          status: "dispatched_to_github",
+          run_url: dispatchRes.run_url,
+          reason: `${sched.reason} -> GitHub Actions-এ হ্যান্ডওভার সম্পন্ন`
+        });
+        continue;
+      }
+    }
+
+    // ২. ফলব্যাক: যদি GitHub Token না থাকে বা ডিসপ্যাচ ব্যর্থ হয়, তবে ওয়ার্কার নিজে পাবলিশ করবে
+    try {
+      const pubRes = await handlePublishProductNow({ product_id: p.id, platform: p.target_platform || 'facebook', direct_worker: true }, env);
+      const pubData = await pubRes.json();
+      executionLog.push({
+        product_id: p.id,
+        name: p.name,
+        sku: p.sku,
+        status: pubData.success ? "published" : "error",
+        post_id: pubData.post_id || null,
+        reason: sched.reason
+      });
+    } catch (err) {
+      executionLog.push({
+        product_id: p.id,
+        name: p.name,
+        sku: p.sku,
+        status: "error",
+        error: err.message,
+        reason: sched.reason
       });
     }
   }
 
   return {
     total_active: prods.length,
-    published_count: executionLog.filter(e => e.status === "published").length,
+    published_count: executionLog.filter(e => e.status === "published" || e.status === "dispatched_to_github").length,
     log: executionLog
   };
 }
@@ -3328,7 +3730,7 @@ async function handleCronStatusCheck(url, env) {
     const result = await handleScheduledAutoPosting(env);
     return jsonResponse({
       success: true,
-      action: "Executed auto-post check",
+      action: "Executed auto-post schedule check & handover",
       timestamp: new Date().toISOString(),
       ...result
     });
@@ -3340,52 +3742,33 @@ async function handleCronStatusCheck(url, env) {
 
   const now = Date.now();
   const bdtDate = new Date(now + 6 * 3600 * 1000);
-  const currentHour = bdtDate.getUTCHours();
-  const currentMinute = bdtDate.getUTCMinutes();
+  const ghToken = await getConfigValue(env.DB, "github_token", env.GITHUB_TOKEN || "");
+  const geminiKey = await getConfigValue(env.DB, "gemini_api_key", env.GEMINI_API_KEY || "");
+  const fbToken = await getMetaPageToken(env);
 
   const report = (prods || []).map(p => {
-    let lastPosted = 0;
-    if (p.last_posted_at) {
-      const cleanStr = String(p.last_posted_at).replace(" ", "T");
-      lastPosted = new Date(cleanStr.endsWith("Z") ? cleanStr : cleanStr + "Z").getTime();
-      if (isNaN(lastPosted)) lastPosted = 0;
-    }
-    const elapsedHours = lastPosted ? (now - lastPosted) / (3600 * 1000) : null;
-    let isDue = false;
-    let intervalHours = p.interval_hours || 4;
-    if (p.posting_time && p.posting_time.startsWith('interval_')) {
-      intervalHours = parseInt(p.posting_time.replace('interval_', '')) || 4;
-    }
-
-    if (p.schedule_type === 'interval' || (p.posting_time && p.posting_time.startsWith('interval_'))) {
-      isDue = lastPosted === 0 || (elapsedHours !== null && elapsedHours >= intervalHours);
-    } else {
-      const times = (p.posting_time || '10:00').split(',').map(t => t.trim());
-      if (lastPosted === 0 || (elapsedHours !== null && elapsedHours >= 3.5)) {
-        for (const t of times) {
-          const [tHour] = t.split(':').map(Number);
-          if (tHour === currentHour) { isDue = true; break; }
-        }
-      }
-    }
-
+    const sched = evaluateProductSchedule(p, now);
     return {
       id: p.id,
       name: p.name,
-      schedule_type: p.schedule_type,
+      schedule_type: sched.mode,
       posting_time: p.posting_time,
-      interval_hours: intervalHours,
+      interval_hours: sched.intervalHours,
       last_posted_at: p.last_posted_at || "Never",
-      hours_since_last_post: elapsedHours !== null ? Number(elapsedHours.toFixed(2)) : null,
-      is_due_now: isDue,
-      status: isDue ? "DUE FOR POSTING" : (elapsedHours !== null ? `Next in ${(intervalHours - elapsedHours).toFixed(1)}h` : "Ready")
+      hours_since_last_post: sched.elapsedHours,
+      is_due_now: sched.isDue,
+      status: sched.isDue ? "DUE FOR POSTING" : sched.reason
     };
   });
 
   return jsonResponse({
     current_time_utc: new Date().toISOString(),
     current_time_bdt: `${bdtDate.toISOString().replace('T', ' ').substring(0, 19)} (UTC+6)`,
-    cron_setup_instruction: "Cloudflare Dashboard > Workers & Pages > social-automate > Settings > Triggers > Cron Triggers-এ '*/15 * * * *' শিডিউল যোগ করুন।",
+    handover_readiness: {
+      github_token_in_d1: Boolean(ghToken),
+      gemini_api_key_in_d1: Boolean(geminiKey && geminiKey !== "YOUR_GEMINI_API_KEY"),
+      facebook_token_in_d1: Boolean(fbToken)
+    },
     active_scheduled_products: report.length,
     products: report
   });
