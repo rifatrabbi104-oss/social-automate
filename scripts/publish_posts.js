@@ -246,7 +246,7 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
 
   // Worker-এর তৈরি ফাইনাল প্রম্পট ব্যবহার (না থাকলে ফলব্যাক প্রম্পট)
   let prompt = task.prompt || `Write a persuasive Bengali sales post for "${task.name}" (Price: ৳${task.price}). Do not include any website URL in the caption; instruct customers to check the first comment for the order link.`;
-  prompt += "\n\nCRITICAL INSTRUCTION: Output ONLY the final Bengali social media post (বাংলা লিপি). Absolutely DO NOT output any internal thoughts, planning, notes, headers, or English reflections.";
+  prompt += "\n\nCRITICAL INSTRUCTION: Output ONLY the final high-converting social media sales post in engaging Bengali. Maintain an authentic modern Bangladeshi brand tone: keep product brand name, fabric specifications (e.g. China Giza Cotton), sizes (M, L, XL), colors, and English hashtags in English where appropriate, with the persuasive narrative written in natural, fluent Bengali script. Absolutely DO NOT output any internal thoughts, planning, reasoning monologues, or robotic template labels.";
 
   if (!apiKey) {
     console.warn("⚠️ Cloudflare Worker (D1) থেকে কোনো Gemini API Key পাওয়া যায়নি। ড্যাশবোর্ডে API Key সেভ করুন।");
@@ -271,8 +271,13 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
     } catch (e) {}
   }
 
-  // ১. প্রাইমারি: দ্রুতগতির নির্ভুল REST ইঞ্জিন (gemini-2.5-flash / gemini-2.0-flash)
-  const restModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+  // ১. প্রাইমারি: দ্রুতগতির নির্ভুল REST ইঞ্জিন (Active Production Gemini Models)
+  const restModels = [
+    "models/gemini-3.1-flash-lite",
+    "models/gemini-3-flash-preview",
+    "models/gemini-3.5-flash",
+    "models/gemini-3.8-flash"
+  ];
   const restParts = [];
   for (const img of imageParts) {
     restParts.push({
@@ -287,15 +292,18 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
   for (const rm of restModels) {
     try {
       console.log(`⚡ Generating Pure Bengali Copy with ${rm} (Angle: ${angleName}, Vision: ${imageParts.length > 0 ? "Yes" : "No"})...`);
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${rm}:generateContent?key=${apiKey}`, {
+      const url = rm.startsWith("models/")
+        ? `https://generativelanguage.googleapis.com/v1beta/${rm}:generateContent?key=${apiKey}`
+        : `https://generativelanguage.googleapis.com/v1beta/models/${rm}:generateContent?key=${apiKey}`;
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: restParts }],
           generationConfig: {
-            temperature: 0.8,
+            temperature: 0.85,
             topP: 0.95,
-            maxOutputTokens: 1200
+            maxOutputTokens: 1500
           }
         })
       });
@@ -307,11 +315,16 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
           if (!p.thought && p.text) text += p.text;
         }
         if (text && text.trim().length > 40) {
-          console.log(`✅ [Gemini REST Engine: ${rm}] সফলভাবে খাঁটি বাংলা ক্যাপশন তৈরি হয়েছে!`);
+          console.log(`✅ [Gemini REST Engine: ${rm}] সফলভাবে খাঁটি ও আকর্ষণীয় বাংলা কপি তৈরি হয়েছে!`);
           return sanitizeCaptionNoLinks(text);
         }
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn(`⚠️ Model ${rm} returned ${res.status}: ${errJson.error?.message || "Unknown"}`);
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn(`⚠️ Model ${rm} fetch error: ${e.message}`);
+    }
   }
 
   // ২. সেকেন্ডারি ফলব্যাক: লাইভ ওয়েববকেট (যদি REST কোনো কারণে ফেইল করে)

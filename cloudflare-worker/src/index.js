@@ -2859,52 +2859,38 @@ Angle Directive: ${angleObj.instruction}
 Opening Inspiration: "${randomHook}"
 
 === STRICT ANTI-REPETITION & ZERO-TEMPLATE RULES ===
-1. ABSOLUTELY BANNED CLICHÉS & FORMULAIC BULLETS (DO NOT USE ANY OF THESE):
+1. Natural Bengali & Authentic Brand Tone: Write the persuasive storytelling and sales narrative in natural Bengali script (বাংলা লিপি). PRESERVE essential English product terms, brand name ("${policies.store_name}"), fabric/material names (e.g. "China Giza Cotton"), sizes ("M-40 | L-42 | XL-44"), color names, and English hashtags naturally as top Bangladeshi fashion brands do.
+2. ABSOLUTELY BANNED CLICHÉS & ROBOTIC FORMULAIC BULLETS (DO NOT USE ANY OF THESE):
    - "🔥 আকর্ষণীয় অফার"
    - "সুসংবাদ সুসংবাদ"
    - "💎 কেন এটি আপনার জন্য সেরা পছন্দ?"
    - "✅ প্রিমিয়াম বিল্ড কোয়ালিটি ও দীর্ঘস্থায়িত্ব"
    - "✅ ১০০% অরিজিনাল প্রোডাক্টের নিশ্চয়তা"
+   - "হিসাব করলে এটি বাজারের সেরা পছন্দের তালিকায় সবার উপরে"
    - "আপনি কি একটি ভালো... খুঁজছেন?"
    - "দেরি না করে এখনই অর্ডার করুন"
    - "আসসালামু আলাইকুম ভিউয়ার্স"
-2. Start with an eye-catching, relatable human opening line matching the chosen angle: "${randomHook}".
-3. Keep the language natural, conversational, vivid, and persuasive (authentic Bangladeshi tone like an expert talking to a friend).
-4. Highlight why this product is truly worth buying, practical daily benefits and emotional appeal.
-5. Price & COD: Mention the price clearly (৳${product.price}) and nationwide Cash on Delivery (${policies.payment_methods}).
-6. Delivery Charges: State the exact delivery charges:
+3. Start with an eye-catching, relatable human opening line matching the chosen angle: "${randomHook}".
+4. Keep the language natural, conversational, vivid, and persuasive (authentic Bangladeshi tone like an expert talking to a friend).
+5. Highlight why this product is truly worth buying, practical daily benefits and emotional appeal.
+6. Price & COD: Mention the price clearly (৳${product.price}) and nationwide Cash on Delivery (${policies.payment_methods}).
+7. Delivery Charges: State the exact delivery charges:
    - ঢাকা সিটির ভেতরে: ${policies.del_inside}
    - ঢাকার বাইরে: ${policies.del_outside}
-7. Return Guarantee: State that customers can check the parcel upon delivery (${policies.return_policy}).
-8. STRICT NO-LINK IN CAPTION RULE: NEVER include any website link (no http/https, no ranonex.shop) in the post caption body! Facebook penalizes posts with external links and destroys organic reach.
+8. Return Guarantee: State that customers can check the parcel upon delivery (${policies.return_policy}).
+9. STRICT NO-LINK IN CAPTION RULE: NEVER include any website link (no http/https, no ranonex.shop) in the post caption body! Facebook penalizes posts with external links and destroys organic reach.
    Instead, your Call-to-Action MUST instruct: "👉 বিস্তারিত দেখতে ও সরাসরি অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা পেজে ইনবক্স করুন!"
-9. Include 3-4 natural hashtags at the very end (#Ranonex #GadgetBD etc.).
-10. Output ONLY the raw caption text in Bengali. No intros, markdown meta, or quotes.
+10. Include 3-4 natural hashtags at the very end (#${policies.store_name.replace(/\s+/g, '')} #MensFashionBD etc.).
+11. Output ONLY the raw caption text in Bengali. No intros, internal reasoning/thoughts, markdown meta, or quotes.
 `;
 
-  // ১. সরাসরি Worker-Native Gemini 2.5 Flash Native Audio Dialog WebSocket ইঞ্জিন ট্রাই
+  // ১. Google Gemini AI REST ইঞ্জিন (দ্রুত ও নির্ভরযোগ্য)
   if (apiKey) {
-    try {
-      const liveCaption = await callGeminiLiveInWorker(prompt, apiKey, "models/gemini-2.5-flash-native-audio-preview-12-2025", imageParts);
-      if (liveCaption && liveCaption.trim().length > 40) {
-        let cleanText = liveCaption.trim()
-          .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, '👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন')
-          .replace(/https?:\/\/[^\s]+/gi, '')
-          .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
-          .replace(/\n{3,}/g, '\n\n')
-          .trim();
-        console.log(`⚡ [Worker Gemini 2.5 Live WS] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
-        return cleanText;
-      }
-    } catch (wsErr) {
-      console.warn("callGeminiLiveInWorker failed, falling back to REST:", wsErr.message);
-    }
-
-    // ২. ফলব্যাক: Google Gemini AI REST ইঞ্জিন কল
     const candidateModels = [
-      "gemini-2.5-flash",
-      "gemini-2.0-flash",
-      "gemini-1.5-flash"
+      "models/gemini-3.1-flash-lite",
+      "models/gemini-3-flash-preview",
+      "models/gemini-3.5-flash",
+      "models/gemini-3.8-flash"
     ];
 
     const restParts = [];
@@ -2922,24 +2908,34 @@ Opening Inspiration: "${randomHook}"
 
     for (const model of candidateModels) {
       try {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+        const url = model.startsWith("models/")
+          ? `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`
+          : `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ role: "user", parts: restParts }],
             generationConfig: {
-              temperature: 0.9,
+              temperature: 0.85,
               topP: 0.95,
-              maxOutputTokens: 800
+              maxOutputTokens: 1500
             }
           })
         });
 
         if (res.ok) {
           const data = await res.json();
-          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          const parts = data?.candidates?.[0]?.content?.parts || [];
+          let text = "";
+          for (const p of parts) {
+            if (!p.thought && p.text) text += p.text;
+          }
           if (text && text.trim().length > 40) {
             let cleanText = text.trim()
+              .replace(/\*\*(?:Considering|Defining|Refining|Crafting|Finalizing|Constructing|Formulating|Composing|Thinking|Structuring)[^*]*\*\*[\s\S]*?(?=\n\n|$)/gi, "")
+              .replace(/^(?:I'm|I have|I've|I am) (?:now |currently )?(?:focusing|crafting|iterating|putting|integrating|fleshing|building|polishing|drafting|finished|written|incorporating|structuring)[^\n]*\n?/gim, "")
+              .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, '👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন')
               .replace(/https?:\/\/[^\s]+/gi, '')
               .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
               .replace(/\n{3,}/g, '\n\n')
@@ -3281,13 +3277,14 @@ Opening Inspiration: "${randomHook}"
 
 ${prevSnapshot ? `=== PREVIOUS POSTS (DO NOT REPEAT THESE PHRASES OR OPENINGS) ===\n${prevSnapshot}\n` : ''}
 === STRICT ANTI-REPETITION & ZERO-TEMPLATE RULES ===
-1. STRICT ZERO BANGLISH POLICY: Write 100% in natural Bengali script (বাংলা লিপি). Write brand name as "${pol.store_name}".
-2. ABSOLUTELY BANNED CLICHÉS & FORMULAIC BULLETS (DO NOT USE ANY OF THESE):
+1. Natural Bengali & Authentic Brand Tone: Write the persuasive storytelling and sales narrative in natural Bengali script (বাংলা লিপি). PRESERVE essential English product terms, brand name ("${pol.store_name}"), fabric/material names (e.g. "China Giza Cotton"), sizes ("M-40 | L-42 | XL-44"), color names, and English hashtags naturally as top Bangladeshi fashion brands do.
+2. ABSOLUTELY BANNED CLICHÉS & ROBOTIC FORMULAIC BULLETS (DO NOT USE ANY OF THESE):
    - "🔥 আকর্ষণীয় অফার"
    - "সুসংবাদ সুসংবাদ"
    - "💎 কেন এটি আপনার জন্য সেরা পছন্দ?"
    - "✅ প্রিমিয়াম বিল্ড কোয়ালিটি ও দীর্ঘস্থায়িত্ব"
    - "✅ ১০০% অরিজিনাল প্রোডাক্টের নিশ্চয়তা"
+   - "হিসাব করলে এটি বাজারের সেরা পছন্দের তালিকায় সবার উপরে"
    - "আপনি কি একটি ভালো... খুঁজছেন?"
    - "দেরি না করে এখনই অর্ডার করুন"
    - "আসসালামু আলাইকুম ভিউয়ার্স"
