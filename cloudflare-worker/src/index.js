@@ -1704,23 +1704,52 @@ async function handleSetupMeta(body, env) {
   let accountId = page_id ? page_id.trim() : null;
   let accountName = "Facebook Page";
 
-  // ১. মেটা গ্রাফ API দিয়ে পেজ আইডি ভেরিফাই
+  let actualPageToken = cleanToken;
+  let targetPageId = page_id && page_id.trim() ? page_id.trim() : "1287050647827199";
+
+  // ১. মেটা গ্রাফ API দিয়ে পেজ আইডি ও আসল Page Access Token নিশ্চিত করা
   try {
-    const testRes = await fetch(`https://graph.facebook.com/v19.0/me?access_token=${cleanToken}`);
-    const testData = await testRes.json();
-    if (testData.id) {
-      accountId = testData.id;
-      if (testData.name) accountName = testData.name;
+    // A. প্রথমে চেক করা এটি কি ইতিমধ্যে কোনো ফেসবুক পেজের টোকেন কি না?
+    const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name,category&access_token=${cleanToken}`);
+    const meData = await meRes.json();
+    if (meData && meData.id && meData.category) {
+      // এটি সরাসরি পেজ টোকেন!
+      accountId = meData.id;
+      if (meData.name) accountName = meData.name;
+      actualPageToken = cleanToken;
+      console.log(`Direct Page Token detected for: ${accountName} (${accountId})`);
+    } else {
+      // B. এটি সিস্টেম ইউজার বা ইউজার টোকেন! /me/accounts থেকে পেজের নিজস্ব অ্যাক্সেস টোকেন বের করা
+      const accRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${cleanToken}`);
+      const accData = await accRes.json();
+      if (accData && Array.isArray(accData.data) && accData.data.length > 0) {
+        const matched = accData.data.find(p => p.id === targetPageId) || accData.data[0];
+        if (matched && matched.access_token) {
+          actualPageToken = matched.access_token;
+          accountId = matched.id;
+          accountName = matched.name || accountName;
+          console.log(`Resolved Page Access Token for ${accountName} (${accountId}) from /me/accounts`);
+        }
+      } else {
+        // C. টার্গেট পেজ আইডি দিয়ে সরাসরি পেজের access_token চাওয়া
+        try {
+          const directPageRes = await fetch(`https://graph.facebook.com/v19.0/${targetPageId}?fields=access_token,name,id&access_token=${cleanToken}`);
+          const directPageData = await directPageRes.json();
+          if (directPageData && directPageData.access_token) {
+            actualPageToken = directPageData.access_token;
+            accountId = directPageData.id || targetPageId;
+            if (directPageData.name) accountName = directPageData.name;
+            console.log(`Resolved Page Access Token directly from page ${accountId}: ${accountName}`);
+          }
+        } catch (dpErr) {}
+      }
     }
   } catch (e) {
-    console.warn("Could not query /me:", e);
+    console.warn("Could not query Meta API for page token:", e);
   }
 
-  if (!accountId && page_id) {
-    accountId = page_id.trim();
-  }
   if (!accountId) {
-    accountId = "1287050647827199";
+    accountId = targetPageId || "1287050647827199";
   }
   accountName = accountName || `Facebook Page (${accountId})`;
 
@@ -1728,7 +1757,7 @@ async function handleSetupMeta(body, env) {
   let subStatus = "active";
   try {
     // ২.১ প্রথমে মেসেঞ্জার ইভেন্টগুলো সাবস্ক্রাইব (pages_messaging পারমিশন দিয়ে শতভাগ কাজ করে)
-    const subRes = await fetch(`https://graph.facebook.com/v19.0/${accountId}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_reactions,messaging_optins&access_token=${cleanToken}`, {
+    const subRes = await fetch(`https://graph.facebook.com/v19.0/${accountId}/subscribed_apps?subscribed_fields=messages,messaging_postbacks,message_reactions,messaging_optins&access_token=${actualPageToken}`, {
       method: "POST"
     });
     const subJson = await subRes.json();
@@ -1736,7 +1765,7 @@ async function handleSetupMeta(body, env) {
 
     // ২.২ আলাদাভাবে কমেন্ট/ফিড ট্রাই করা (যদি pages_manage_metadata পারমিশন থাকে)
     try {
-      await fetch(`https://graph.facebook.com/v19.0/${accountId}/subscribed_apps?subscribed_fields=feed&access_token=${cleanToken}`, {
+      await fetch(`https://graph.facebook.com/v19.0/${accountId}/subscribed_apps?subscribed_fields=feed&access_token=${actualPageToken}`, {
         method: "POST"
       });
     } catch (e) {}
@@ -1745,13 +1774,13 @@ async function handleSetupMeta(body, env) {
   }
 
   // ৩. ইন-মেমোরি ও এজ ক্যাশে সেভ (১০০% ক্যাশ ব্যাকআপ)
-  activeMetaToken = cleanToken;
+  activeMetaToken = actualPageToken;
   activeMetaPageId = accountId;
 
   try {
     const cache = caches.default;
     const tokenUrl = new URL("https://internal-cache.local/config/meta_token");
-    await cache.put(tokenUrl, new Response(JSON.stringify({ token: cleanToken, page_id: accountId, name: accountName }), {
+    await cache.put(tokenUrl, new Response(JSON.stringify({ token: actualPageToken, page_id: accountId, name: accountName }), {
       headers: { "Content-Type": "application/json", "Cache-Control": "max-age=2592000" }
     }));
   } catch (e) {}
@@ -1767,7 +1796,17 @@ async function handleSetupMeta(body, env) {
           account_name = excluded.account_name,
           access_token = excluded.access_token,
           status = 'active'
-      `).bind(`meta_${accountId}`, cleanPlatform, accountName, accountId, cleanToken).run();
+      `).bind(`meta_${accountId}`, cleanPlatform, accountName, accountId, actualPageToken).run();
+
+      await env.DB.prepare(`
+        INSERT INTO system_config (key, value) VALUES ('meta_page_id', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).bind(accountId).run();
+
+      await env.DB.prepare(`
+        INSERT INTO system_config (key, value) VALUES ('meta_system_user_token', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).bind(cleanToken).run();
 
       if (verify_token) {
         await env.DB.prepare(`
@@ -3011,15 +3050,47 @@ async function postFirstComment(postId, product, token) {
 }
 
 // ========================================================
+// 🔵 ফেসবুক পেজ টোকেন অটো-রিসলভার (System User Token -> Page Access Token)
+// ========================================================
+async function resolvePageAccessToken(rawToken, targetPageId = "1287050647827199") {
+  if (!rawToken) return null;
+  try {
+    // ১. সরাসরি পেজ টোকেন কি না চেক করা
+    const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,category&access_token=${rawToken}`);
+    const meData = await meRes.json();
+    if (meData && meData.id && meData.category) return rawToken;
+
+    // ২. /me/accounts থেকে পেজ টোকেন খোঁজা
+    const accRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${rawToken}`);
+    const accData = await accRes.json();
+    if (accData && Array.isArray(accData.data) && accData.data.length > 0) {
+      const match = (targetPageId ? accData.data.find(p => p.id === targetPageId) : null) || accData.data[0];
+      if (match && match.access_token) return match.access_token;
+    }
+
+    // ৩. পেজ আইডি থেকে সরাসরি টোকেন চাওয়া
+    if (targetPageId) {
+      const pRes = await fetch(`https://graph.facebook.com/v19.0/${targetPageId}?fields=access_token&access_token=${rawToken}`);
+      const pData = await pRes.json();
+      if (pData && pData.access_token) return pData.access_token;
+    }
+  } catch (e) {
+    console.warn("resolvePageAccessToken error:", e);
+  }
+  return rawToken;
+}
+
+// ========================================================
 // 🔵 ফেসবুক পেজে পোস্ট সেন্ডার (মাল্টি-ফটো অ্যালবাম + পাবলিক R2 ছবি সহ)
 // ========================================================
 async function publishToFacebookPage(product, caption, env) {
-  const token = await getMetaPageToken(env);
+  let token = await getMetaPageToken(env);
   let pageId = env.META_PAGE_ID || "1287050647827199";
   if (env.DB) {
     const dbPageId = await getConfigValue(env.DB, "meta_page_id", null);
     if (dbPageId) pageId = dbPageId;
   }
+  token = await resolvePageAccessToken(token, pageId);
 
   if (!token) {
     throw new Error("Facebook Page Access Token D1 বা Worker-এ পাওয়া যায়নি। ড্যাশবোর্ডে টোকেন সেভ করুন।");

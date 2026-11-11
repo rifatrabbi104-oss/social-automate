@@ -358,14 +358,42 @@ async function postFirstComment(postId, task, token) {
   }
 }
 
+// 🔵 ফেসবুক পেজ টোকেন অটো-রিসলভার (System User Token -> Page Access Token)
+async function resolvePageAccessToken(rawToken, targetPageId = "1287050647827199") {
+  if (!rawToken) return null;
+  try {
+    const meRes = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,category&access_token=${rawToken}`);
+    const meData = await meRes.json();
+    if (meData && meData.id && meData.category) return rawToken;
+
+    const accRes = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${rawToken}`);
+    const accData = await accRes.json();
+    if (accData && Array.isArray(accData.data) && accData.data.length > 0) {
+      const match = (targetPageId ? accData.data.find(p => p.id === targetPageId) : null) || accData.data[0];
+      if (match && match.access_token) return match.access_token;
+    }
+
+    if (targetPageId) {
+      const pRes = await fetch(`https://graph.facebook.com/v19.0/${targetPageId}?fields=access_token&access_token=${rawToken}`);
+      const pData = await pRes.json();
+      if (pData && pData.access_token) return pData.access_token;
+    }
+  } catch (e) {
+    console.warn("resolvePageAccessToken error in GitHub Actions:", e.message);
+  }
+  return rawToken;
+}
+
 // 📤 ৪. Facebook Page-এ ডেটাবেসের সব ছবি সহ মাল্টি-ফটো অ্যালবাম পোস্ট পাবলিশ
 async function publishToFacebook(caption, task, fbCreds) {
-  const activeToken = fbCreds?.token || process.env.META_PAGE_ACCESS_TOKEN;
+  let activeToken = fbCreds?.token || process.env.META_PAGE_ACCESS_TOKEN;
   const activePageId = fbCreds?.id || process.env.META_PAGE_ID || "1287050647827199";
 
   if (!activeToken || !activePageId) {
     return { success: false, reason: "Missing Facebook Page Token in Worker D1" };
   }
+
+  activeToken = await resolvePageAccessToken(activeToken, activePageId);
 
   console.log(`📤 Facebook Page (${activePageId})-এ পোস্ট পাবলিশ করা হচ্ছে...`);
 
