@@ -3510,12 +3510,16 @@ async function handleGetAutoPostHandover(request, url, env) {
   // system_config থেকেও ফলব্যাক টোকেন নিশ্চিত করা
   const cfgFbToken = await getMetaPageToken(env);
   const cfgFbPageId = await getConfigValue(env.DB, "meta_page_id", env.META_PAGE_ID || "1287050647827199");
+  const finalFbPageId = (cfgFbPageId && cfgFbPageId !== "122104564287541163") ? cfgFbPageId : "1287050647827199";
+
   if (cfgFbToken) {
     credentials.facebook = {
       name: credentials.facebook?.name || policies.store_name || "Ranonex",
-      id: credentials.facebook?.id || cfgFbPageId,
+      id: finalFbPageId,
       token: cfgFbToken
     };
+  } else if (credentials.facebook) {
+    credentials.facebook.id = finalFbPageId;
   }
 
   const cfgTkToken = await getConfigValue(env.DB, "tiktok_access_token", "");

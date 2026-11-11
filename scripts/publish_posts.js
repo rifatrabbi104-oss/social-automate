@@ -387,11 +387,26 @@ async function resolvePageAccessToken(rawToken, targetPageId = "1287050647827199
 // 📤 ৪. Facebook Page-এ ডেটাবেসের সব ছবি সহ মাল্টি-ফটো অ্যালবাম পোস্ট পাবলিশ
 async function publishToFacebook(caption, task, fbCreds) {
   let activeToken = fbCreds?.token || process.env.META_PAGE_ACCESS_TOKEN;
-  const activePageId = fbCreds?.id || process.env.META_PAGE_ID || "1287050647827199";
+  let activePageId = fbCreds?.id || process.env.META_PAGE_ID || "1287050647827199";
 
-  if (!activeToken || !activePageId) {
+  // পুরনো সাসপেন্ডেড আইডির পেজ আইডি ওভাররাইড করে বর্তমান Ranonex পেজ আইডি সেট করা
+  if (activePageId === "122104564287541163" || !activePageId) {
+    activePageId = "1287050647827199";
+  }
+
+  if (!activeToken) {
     return { success: false, reason: "Missing Facebook Page Token in Worker D1" };
   }
+
+  // মেটা এপিআই দিয়ে টোকেনের আসল পেজ আইডি ও নাম অটো-ভেরিফাই করা
+  try {
+    const meRes = await fetch(`https://graph.facebook.com/v19.0/me?access_token=${activeToken}`);
+    const meData = await meRes.json();
+    if (meData && meData.id && meData.id !== "122104564287541163") {
+      activePageId = meData.id;
+      console.log(`🎯 Verified Facebook Target Page: ${meData.name || 'Ranonex'} (${activePageId})`);
+    }
+  } catch (e) {}
 
   activeToken = await resolvePageAccessToken(activeToken, activePageId);
 
