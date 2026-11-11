@@ -222,25 +222,36 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemin
   });
 }
 
-// 🧹 ক্যাপশন থেকে যেকোনো ওয়েবসাইট লিংক মুছে ফেলার ক্লিনার (Max Organic Reach)
+// 🧹 ক্যাপশন থেকে যেকোনো ওয়েবসাইট লিংক ও AI থিংকিং প্রসেস মুছে ফেলার ক্লিনার
 function sanitizeCaptionNoLinks(rawCaption) {
   if (!rawCaption) return "";
-  return rawCaption
+  let clean = rawCaption
+    // Gemini Thought Traces এবং খসড়া হেডার বাদ দেওয়া
+    .replace(/\*\*(?:Considering|Defining|Refining|Crafting|Finalizing|Constructing|Formulating|Composing|Thinking|Structuring)[^*]*\*\*[\s\S]*?(?=\n\n[\u0980-\u09FF]|\n[\u0980-\u09FF]|$)/gi, "")
+    .replace(/^(?:I'm|I have|I've|I am) (?:now |currently )?(?:focusing|crafting|iterating|putting|integrating|fleshing|building|polishing|drafting|finished|written|incorporating|structuring)[\s\S]*?(?=\n\n[\u0980-\u09FF]|\n[\u0980-\u09FF]|$)/gim, "")
     .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, "👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন")
     .replace(/https?:\/\/[^\s]+/gi, "")
     .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+
+  // যদি লেখার শুরুতে কোনো ইংরেজি চিন্তাভাবনা থাকে, তবে ১ম বাংলা বর্ণ থেকে পোস্টটি নেওয়া
+  const firstBengaliIdx = clean.search(/[\u0980-\u09FF]/);
+  if (firstBengaliIdx > 20) {
+    clean = clean.substring(firstBengaliIdx).trim();
+  }
+
+  return clean;
 }
 
 // 🤖 ২.২ Worker-এর দেওয়া Prompt, API Key ও Model দিয়ে AI পোস্ট তৈরি
 async function generateCaptionFromWorkerHandover(task, aiConfig) {
   const apiKey = (aiConfig?.api_key || process.env.GEMINI_API_KEY || "").trim();
-  const modelName = aiConfig?.model || "models/gemini-2.5-flash-native-audio-preview-12-2025";
   const angleName = task.chosen_angle?.name || "Unique-Angle";
 
   // Worker-এর তৈরি ফাইনাল প্রম্পট ব্যবহার (না থাকলে ফলব্যাক প্রম্পট)
-  const prompt = task.prompt || `Write a persuasive Bengali sales post for "${task.name}" (Price: ৳${task.price}). Do not include any website URL in the caption; instruct customers to check the first comment for the order link.`;
+  let prompt = task.prompt || `Write a persuasive Bengali sales post for "${task.name}" (Price: ৳${task.price}). Do not include any website URL in the caption; instruct customers to check the first comment for the order link.`;
+  prompt += "\n\nCRITICAL INSTRUCTION: Output ONLY the final Bengali social media post (বাংলা লিপি). Absolutely DO NOT output any internal thoughts, planning, notes, headers, or English reflections.";
 
   if (!apiKey) {
     console.warn("⚠️ Cloudflare Worker (D1) থেকে কোনো Gemini API Key পাওয়া যায়নি। ড্যাশবোর্ডে API Key সেভ করুন।");
@@ -265,20 +276,7 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
     } catch (e) {}
   }
 
-  // ১. প্রাইমারি: Gemini 2.5 Flash Native Audio Dialog (Live WebSocket API)
-  try {
-    console.log(`⚡ Calling Permanent Model: ${modelName} (Angle: ${angleName}, Vision: ${imageParts.length > 0 ? "Yes" : "No"})...`);
-    const liveText = await callGeminiLiveWebSocket(prompt, apiKey, modelName, imageParts);
-    if (liveText && liveText.length > 40) {
-      const clean = sanitizeCaptionNoLinks(liveText);
-      console.log(`✅ [Gemini 2.5 Flash Native Audio Dialog] সফলভাবে ক্যাপশন তৈরি হয়েছে!`);
-      return clean;
-    }
-  } catch (wsErr) {
-    console.warn("⚠️ Live WebSocket call warning:", wsErr.message);
-  }
-
-  // ২. সেকেন্ডারি ফলব্যাক: একই API Key দিয়ে Gemini REST ইঞ্জিন কল
+  // ১. প্রাইমারি: দ্রুতগতির নির্ভুল REST ইঞ্জিন (gemini-2.5-flash / gemini-2.0-flash)
   const restModels = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
   const restParts = [];
   for (const img of imageParts) {
@@ -293,28 +291,42 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
 
   for (const rm of restModels) {
     try {
+      console.log(`⚡ Generating Pure Bengali Copy with ${rm} (Angle: ${angleName}, Vision: ${imageParts.length > 0 ? "Yes" : "No"})...`);
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${rm}:generateContent?key=${apiKey}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: restParts }],
           generationConfig: {
-            temperature: 0.9,
+            temperature: 0.8,
             topP: 0.95,
-            maxOutputTokens: 800
+            maxOutputTokens: 1200
           }
         })
       });
       if (res.ok) {
         const d = await res.json();
-        const text = d?.candidates?.[0]?.content?.parts?.[0]?.text;
+        const parts = d?.candidates?.[0]?.content?.parts || [];
+        let text = "";
+        for (const p of parts) {
+          if (!p.thought && p.text) text += p.text;
+        }
         if (text && text.trim().length > 40) {
-          console.log(`✅ [Gemini REST Fallback: ${rm}] সফলভাবে ক্যাপশন তৈরি হয়েছে!`);
+          console.log(`✅ [Gemini REST Engine: ${rm}] সফলভাবে খাঁটি বাংলা ক্যাপশন তৈরি হয়েছে!`);
           return sanitizeCaptionNoLinks(text);
         }
       }
     } catch (e) {}
   }
+
+  // ২. সেকেন্ডারি ফলব্যাক: লাইভ ওয়েববকেট (যদি REST কোনো কারণে ফেইল করে)
+  try {
+    const liveText = await callGeminiLiveWebSocket(prompt, apiKey, "models/gemini-2.5-flash", imageParts);
+    if (liveText && liveText.length > 40) {
+      const clean = sanitizeCaptionNoLinks(liveText);
+      if (clean && clean.length > 40) return clean;
+    }
+  } catch (wsErr) {}
 
   return task.fallback_caption || `✨ ${task.name} ✨\n\n${task.description || ""}\n\n💰 অফার মূল্য: মাত্র ৳${task.price}\n\n👉 বিস্তারিত দেখতে ও অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন!`;
 }
