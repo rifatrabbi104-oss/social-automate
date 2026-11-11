@@ -226,20 +226,15 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemin
 function sanitizeCaptionNoLinks(rawCaption) {
   if (!rawCaption) return "";
   let clean = rawCaption
-    // Gemini Thought Traces এবং খসড়া হেডার বাদ দেওয়া
-    .replace(/\*\*(?:Considering|Defining|Refining|Crafting|Finalizing|Constructing|Formulating|Composing|Thinking|Structuring)[^*]*\*\*[\s\S]*?(?=\n\n[\u0980-\u09FF]|\n[\u0980-\u09FF]|$)/gi, "")
-    .replace(/^(?:I'm|I have|I've|I am) (?:now |currently )?(?:focusing|crafting|iterating|putting|integrating|fleshing|building|polishing|drafting|finished|written|incorporating|structuring)[\s\S]*?(?=\n\n[\u0980-\u09FF]|\n[\u0980-\u09FF]|$)/gim, "")
+    // শুধুমাত্র AI-এর ভেতরের মেটা-থিংকিং (যেমন: **Considering the Problem**, I'm now drafting...) বাদ দেওয়া
+    .replace(/\*\*(?:Considering|Defining|Refining|Crafting|Finalizing|Constructing|Formulating|Composing|Thinking|Structuring)[^*]*\*\*[\s\S]*?(?=\n\n|$)/gi, "")
+    .replace(/^(?:I'm|I have|I've|I am) (?:now |currently )?(?:focusing|crafting|iterating|putting|integrating|fleshing|building|polishing|drafting|finished|written|incorporating|structuring)[^\n]*\n?/gim, "")
+    // লিংক সরানো (লিংক শুধু ১ম কমেন্টে যাবে)
     .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, "👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন")
     .replace(/https?:\/\/[^\s]+/gi, "")
     .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-
-  // যদি লেখার শুরুতে কোনো ইংরেজি চিন্তাভাবনা থাকে, তবে ১ম বাংলা বর্ণ থেকে পোস্টটি নেওয়া
-  const firstBengaliIdx = clean.search(/[\u0980-\u09FF]/);
-  if (firstBengaliIdx > 20) {
-    clean = clean.substring(firstBengaliIdx).trim();
-  }
 
   return clean;
 }
