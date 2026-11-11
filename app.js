@@ -2714,7 +2714,8 @@ function initSettingsForm() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           gemini_api_key: apiKey, 
-          gemini_model: 'models/gemini-2.5-flash-native-audio-preview-12-2025' 
+          // ⚡ DEFAULT & PERMANENT MODEL: Gemini 3.8 Live WebSocket Engine
+          gemini_model: 'models/gemini-3.8-live' 
         })
       });
       const data = await res.json();
@@ -2734,7 +2735,7 @@ function initSettingsForm() {
           aiResultBox.style.background = 'rgba(16, 185, 129, 0.15)';
           aiResultBox.style.border = '1px solid rgba(16, 185, 129, 0.4)';
           aiResultBox.style.color = '#a7f3d0';
-          aiResultBox.innerHTML = `<strong>🎉 ${escapeHtml(data.message)}</strong><br>স্থায়ী মডেল: Alwaysdata মেসেজিং-এ <code>Gemini 3.8 Live</code> এবং Worker পোস্টিং-এ <code>Gemini 2.5 Flash Native Audio Dialog</code> সফলভাবে সক্রিয় রয়েছে।`;
+          aiResultBox.innerHTML = `<strong>🎉 ${escapeHtml(data.message)}</strong><br>স্থায়ী মডেল: Alwaysdata মেসেজিং ও Worker/GitHub Actions পোস্টিং-এ <code>Gemini 3.8 Live WebSocket Engine</code> (আনলিমিটেড রিকোয়েস্ট লিমিট) সফলভাবে সক্রিয় রয়েছে।`;
         }
         if (aiBadgeStatus) {
           aiBadgeStatus.textContent = '🟢 Connected';
@@ -2783,7 +2784,7 @@ function initSettingsForm() {
       aiTestBtn.disabled = true;
       aiTestBtn.textContent = '⏳ Testing Generation...';
       try {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

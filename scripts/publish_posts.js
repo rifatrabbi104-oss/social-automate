@@ -91,7 +91,8 @@ async function fetchWorkerHandoverPackage() {
       return {
         ai: data.ai || {
           api_key: "",
-          model: "models/gemini-2.5-flash-native-audio-preview-12-2025"
+          // ⚡ DEFAULT & PERMANENT MODEL: Gemini 3.8 Live WebSocket Engine
+          model: "models/gemini-3.8-live"
         },
         policies: data.policies || {},
         credentials: data.credentials || {},
@@ -105,22 +106,29 @@ async function fetchWorkerHandoverPackage() {
   }
 
   return {
-    ai: { api_key: "", model: "models/gemini-2.5-flash-native-audio-preview-12-2025" },
+    ai: { api_key: "", model: "models/gemini-3.8-live" },
     policies: {},
     credentials: {},
     tasks: []
   };
 }
 
-// ⚡ ২.১ Gemini 2.5 Flash Native Audio Dialog Live WebSocket Engine
-async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemini-2.5-flash-native-audio-preview-12-2025", imageParts = []) {
+// ========================================================
+// ⚡ DEFAULT & PERMANENT MODEL: Gemini 3.8 Live WebSocket Engine
+// Model: "models/gemini-3.8-live" (Unlimited Request Limit)
+// ========================================================
+const PERMANENT_LIVE_MODEL = "models/gemini-3.8-live";
+const FALLBACK_LIVE_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025";
+
+async function callGeminiLiveWebSocket(prompt, apiKey, modelName = PERMANENT_LIVE_MODEL, imageParts = []) {
   if (typeof WebSocket === "undefined" || !apiKey) return null;
 
   return new Promise((resolve) => {
-    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+    const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
     let ws;
     let timeoutId;
-    let accumulatedText = "";
+    let accumulatedTranscription = "";
+    let accumulatedParts = "";
     let isFinished = false;
 
     const cleanup = () => {
@@ -140,14 +148,15 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemin
       if (!isFinished) {
         isFinished = true;
         cleanup();
-        resolve(accumulatedText.trim() || null);
+        const finalTxt = (accumulatedTranscription.trim() || accumulatedParts.trim());
+        resolve(finalTxt || null);
       }
-    }, 20000);
+    }, 25000);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({
         setup: {
-          model: modelName || "models/gemini-2.5-flash-native-audio-preview-12-2025",
+          model: modelName || PERMANENT_LIVE_MODEL,
           generationConfig: { responseModalities: ["AUDIO"] },
           outputAudioTranscription: {}
         }
@@ -186,20 +195,24 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemin
           return;
         }
 
+        // 🌟 Live Audio Output Transcription (পবিত্র টেক্সট - নো থিংকিং মনোলগ)
         if (data.serverContent?.outputTranscription?.text) {
-          accumulatedText += data.serverContent.outputTranscription.text;
+          accumulatedTranscription += data.serverContent.outputTranscription.text;
         }
         const parts = data.serverContent?.modelTurn?.parts;
         if (parts && Array.isArray(parts)) {
           for (const part of parts) {
-            if (part.text) accumulatedText += part.text;
+            if (part.text && !part.thought) accumulatedParts += part.text;
           }
         }
 
-        if (data.serverContent?.turnComplete) {
-          isFinished = true;
-          cleanup();
-          resolve(accumulatedText.trim());
+        if (data.serverContent?.turnComplete || data.serverContent?.generationComplete) {
+          if (!isFinished) {
+            isFinished = true;
+            cleanup();
+            const finalTxt = (accumulatedTranscription.trim() || accumulatedParts.trim());
+            resolve(finalTxt || null);
+          }
         }
       } catch (err) {}
     };
@@ -208,7 +221,8 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemin
       if (!isFinished) {
         isFinished = true;
         cleanup();
-        resolve(accumulatedText.trim() || null);
+        const finalTxt = (accumulatedTranscription.trim() || accumulatedParts.trim());
+        resolve(finalTxt || null);
       }
     };
 
@@ -216,7 +230,8 @@ async function callGeminiLiveWebSocket(prompt, apiKey, modelName = "models/gemin
       if (!isFinished) {
         isFinished = true;
         cleanup();
-        resolve(accumulatedText.trim() || null);
+        const finalTxt = (accumulatedTranscription.trim() || accumulatedParts.trim());
+        resolve(finalTxt || null);
       }
     };
   });
@@ -271,7 +286,37 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
     } catch (e) {}
   }
 
-  // ১. প্রাইমারি: দ্রুতগতির নির্ভুল REST ইঞ্জিন (Active Production Gemini Models)
+  // ⚡ ১. পার্মানেন্ট ও ডিফল্ট ইঞ্জিন: Gemini 3.8 Live WebSocket Engine (Unlimited Request Limit)
+  try {
+    console.log(`⚡ Calling Permanent Live Model: ${PERMANENT_LIVE_MODEL} (Angle: ${angleName}, Vision: ${imageParts.length > 0 ? "Yes" : "No"})...`);
+    const liveText = await callGeminiLiveWebSocket(prompt, apiKey, PERMANENT_LIVE_MODEL, imageParts);
+    if (liveText && liveText.length > 40) {
+      const clean = sanitizeCaptionNoLinks(liveText);
+      if (clean && clean.length > 40) {
+        console.log(`✅ [Gemini 3.8 Live WebSocket Engine] সফলভাবে লাইভ বাংলা পোস্ট তৈরি হয়েছে!`);
+        return clean;
+      }
+    }
+  } catch (wsErr) {
+    console.warn("⚠️ Gemini 3.8 Live WebSocket error:", wsErr.message);
+  }
+
+  // ⚡ ২. সেকেন্ডারি লাইভ ইঞ্জিন: Gemini 2.5 Flash Native Audio Preview (WebSocket Fallback)
+  try {
+    console.log(`⚡ Calling Secondary Live Model: ${FALLBACK_LIVE_MODEL}...`);
+    const liveFallbackText = await callGeminiLiveWebSocket(prompt, apiKey, FALLBACK_LIVE_MODEL, imageParts);
+    if (liveFallbackText && liveFallbackText.length > 40) {
+      const clean = sanitizeCaptionNoLinks(liveFallbackText);
+      if (clean && clean.length > 40) {
+        console.log(`✅ [Gemini 2.5 Flash Live WebSocket] সফলভাবে ব্যাকআপ লাইভ পোস্ট তৈরি হয়েছে!`);
+        return clean;
+      }
+    }
+  } catch (wsErr2) {
+    console.warn("⚠️ Gemini 2.5 Live WebSocket error:", wsErr2.message);
+  }
+
+  // ৩. ইমার্জেন্সি ফলব্যাক: দ্রুতগতির REST ইঞ্জিন (যদি নেটওয়ার্কের কারণে WebSocket কানেক্ট হতে না পারে)
   const restModels = [
     "models/gemini-3.1-flash-lite",
     "models/gemini-3-flash-preview",
@@ -291,7 +336,7 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
 
   for (const rm of restModels) {
     try {
-      console.log(`⚡ Generating Pure Bengali Copy with ${rm} (Angle: ${angleName}, Vision: ${imageParts.length > 0 ? "Yes" : "No"})...`);
+      console.log(`⚡ REST Backup Engine: ${rm}...`);
       const url = rm.startsWith("models/")
         ? `https://generativelanguage.googleapis.com/v1beta/${rm}:generateContent?key=${apiKey}`
         : `https://generativelanguage.googleapis.com/v1beta/models/${rm}:generateContent?key=${apiKey}`;
@@ -315,26 +360,12 @@ async function generateCaptionFromWorkerHandover(task, aiConfig) {
           if (!p.thought && p.text) text += p.text;
         }
         if (text && text.trim().length > 40) {
-          console.log(`✅ [Gemini REST Engine: ${rm}] সফলভাবে খাঁটি ও আকর্ষণীয় বাংলা কপি তৈরি হয়েছে!`);
+          console.log(`✅ [Gemini REST Engine: ${rm}] ব্যাকআপ সফল হয়েছে!`);
           return sanitizeCaptionNoLinks(text);
         }
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        console.warn(`⚠️ Model ${rm} returned ${res.status}: ${errJson.error?.message || "Unknown"}`);
       }
-    } catch (e) {
-      console.warn(`⚠️ Model ${rm} fetch error: ${e.message}`);
-    }
+    } catch (e) {}
   }
-
-  // ২. সেকেন্ডারি ফলব্যাক: লাইভ ওয়েববকেট (যদি REST কোনো কারণে ফেইল করে)
-  try {
-    const liveText = await callGeminiLiveWebSocket(prompt, apiKey, "models/gemini-2.5-flash", imageParts);
-    if (liveText && liveText.length > 40) {
-      const clean = sanitizeCaptionNoLinks(liveText);
-      if (clean && clean.length > 40) return clean;
-    }
-  } catch (wsErr) {}
 
   return task.fallback_caption || `✨ ${task.name} ✨\n\n${task.description || ""}\n\n💰 অফার মূল্য: মাত্র ৳${task.price}\n\n👉 বিস্তারিত দেখতে ও অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন!`;
 }

@@ -1129,7 +1129,8 @@ async function handleGetSettings(env, url = null) {
     whatsapp: { connected: false, phone: '', mode: 'gateway', gateway_url: '', gateway_token: '', phone_number_id: '', access_token: '' },
     telegram: { connected: false, bot_token: '', admin_chat_id: '' },
     github: { connected: false, repo: 'rifatrabbi104-oss/social-automate', branch: 'main', workflow: 'post_publisher.yml', token: '', token_preview: '' },
-    ai: { connected: false, api_key: '', key_preview: '', model: 'models/gemini-2.5-flash-native-audio-preview-12-2025' }
+    // ⚡ DEFAULT & PERMANENT MODEL: Gemini 3.8 Live WebSocket Engine
+    ai: { connected: false, api_key: '', key_preview: '', model: 'models/gemini-3.8-live' }
   };
 
   if (env.GEMINI_API_KEY && env.GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY") {
@@ -1450,7 +1451,7 @@ async function handleFacebookComment(val, token, env) {
   if ((!apiKey || apiKey === "YOUR_GEMINI_API_KEY") && env.DB) {
     apiKey = await getConfigValue(env.DB, "gemini_api_key", null);
   }
-  const model = env.GEMINI_MODEL || "models/gemini-2.5-flash-native-audio-preview-12-2025";
+  const model = env.GEMINI_MODEL || "models/gemini-3.8-live";
 
   let aiDecision = {
     action: "both",
@@ -1654,7 +1655,7 @@ async function handleSetupAI(body, env) {
     return jsonResponse({ success: false, error: "Gemini API Key খালি রাখা যাবে না!" }, 400);
   }
   const cleanKey = gemini_api_key.trim();
-  const cleanModel = gemini_model ? gemini_model.trim() : "models/gemini-2.5-flash-native-audio-preview-12-2025";
+  const cleanModel = gemini_model ? gemini_model.trim() : "models/gemini-3.8-live";
 
   // টেস্ট রিকোয়েস্ট পাঠিয়ে ভ্যালিডেশন (Google AI Studio Models Endpoint)
   try {
@@ -1883,7 +1884,7 @@ async function callGeminiStructured(userMessage, recentHistory, businessContext,
   if (!model && env.DB) {
     model = await getConfigValue(env.DB, "gemini_model", null);
   }
-  if (!model) model = "models/gemini-2.5-flash-native-audio-preview-12-2025";
+  if (!model) model = "models/gemini-3.8-live";
 
   if (!apiKey || apiKey === "YOUR_GEMINI_API_KEY") {
     return {
@@ -2693,9 +2694,13 @@ async function getStorePolicies(db) {
 }
 
 // ========================================================
-// ⚡ Gemini 2.5 Flash Native Audio Dialog Live WebSocket Engine (Worker-Native Post Generator)
+// ⚡ DEFAULT & PERMANENT MODEL: Gemini 3.8 Live WebSocket Engine
+// Model: "models/gemini-3.8-live" (Unlimited Request Limit for high-throughput social automation)
 // ========================================================
-async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini-2.5-flash-native-audio-preview-12-2025", imageParts = []) {
+const PERMANENT_LIVE_MODEL = "models/gemini-3.8-live";
+const FALLBACK_LIVE_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025";
+
+async function callGeminiLiveInWorker(prompt, apiKey, modelName = PERMANENT_LIVE_MODEL, imageParts = []) {
   if (!apiKey || typeof WebSocket === "undefined") return null;
 
   try {
@@ -2703,21 +2708,23 @@ async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini
     const ws = new WebSocket(wsUrl);
 
     return new Promise((resolve) => {
-      let accumulatedText = "";
+      let accumulatedTranscription = "";
+      let accumulatedParts = "";
       let isDone = false;
 
       const timer = setTimeout(() => {
         if (!isDone) {
           isDone = true;
           try { ws.close(); } catch (e) {}
-          resolve(accumulatedText.trim() || null);
+          const finalTxt = accumulatedTranscription.trim() || accumulatedParts.trim();
+          resolve(finalTxt || null);
         }
-      }, 15000);
+      }, 20000);
 
       ws.addEventListener("open", () => {
         const setupPayload = {
           setup: {
-            model: modelName || "models/gemini-2.5-flash-native-audio-preview-12-2025",
+            model: modelName || PERMANENT_LIVE_MODEL,
             generationConfig: {
               responseModalities: ["AUDIO"]
             },
@@ -2758,16 +2765,21 @@ async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini
           }
 
           if (data.serverContent) {
+            // 🌟 Live Audio Output Transcription (পবিত্র টেক্সট - নো থিংকিং মনোলগ)
+            if (data.serverContent.outputTranscription?.text) {
+              accumulatedTranscription += data.serverContent.outputTranscription.text;
+            }
             const parts = data.serverContent.modelTurn?.parts || [];
             for (const p of parts) {
-              if (p.text) accumulatedText += p.text;
+              if (p.text && !p.thought) accumulatedParts += p.text;
             }
-            if (data.serverContent.turnComplete) {
+            if (data.serverContent.turnComplete || data.serverContent.generationComplete) {
               if (!isDone) {
                 isDone = true;
                 clearTimeout(timer);
                 try { ws.close(); } catch (e) {}
-                resolve(accumulatedText.trim() || null);
+                const finalTxt = accumulatedTranscription.trim() || accumulatedParts.trim();
+                resolve(finalTxt || null);
               }
             }
           }
@@ -2778,7 +2790,8 @@ async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini
         if (!isDone) {
           isDone = true;
           clearTimeout(timer);
-          resolve(accumulatedText.trim() || null);
+          const finalTxt = accumulatedTranscription.trim() || accumulatedParts.trim();
+          resolve(finalTxt || null);
         }
       });
 
@@ -2786,7 +2799,8 @@ async function callGeminiLiveInWorker(prompt, apiKey, modelName = "models/gemini
         if (!isDone) {
           isDone = true;
           clearTimeout(timer);
-          resolve(accumulatedText.trim() || null);
+          const finalTxt = accumulatedTranscription.trim() || accumulatedParts.trim();
+          resolve(finalTxt || null);
         }
       });
     });
@@ -2884,8 +2898,44 @@ Opening Inspiration: "${randomHook}"
 11. Output ONLY the raw caption text in Bengali. No intros, internal reasoning/thoughts, markdown meta, or quotes.
 `;
 
-  // ১. Google Gemini AI REST ইঞ্জিন (দ্রুত ও নির্ভরযোগ্য)
+  // ⚡ ১. পার্মানেন্ট ও ডিফল্ট ইঞ্জিন: Gemini 3.8 Live WebSocket Engine (Unlimited Request Limit)
   if (apiKey) {
+    try {
+      console.log(`⚡ [Worker] Calling Permanent Live Model: ${PERMANENT_LIVE_MODEL}...`);
+      const liveCaption = await callGeminiLiveInWorker(prompt, apiKey, PERMANENT_LIVE_MODEL, imageParts);
+      if (liveCaption && liveCaption.trim().length > 40) {
+        let cleanText = liveCaption.trim()
+          .replace(/\*\*(?:Considering|Defining|Refining|Crafting|Finalizing|Constructing|Formulating|Composing|Thinking|Structuring)[^*]*\*\*[\s\S]*?(?=\n\n|$)/gi, "")
+          .replace(/^(?:I'm|I have|I've|I am) (?:now |currently )?(?:focusing|crafting|iterating|putting|integrating|fleshing|building|polishing|drafting|finished|written|incorporating|structuring)[^\n]*\n?/gim, "")
+          .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, '👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন')
+          .replace(/https?:\/\/[^\s]+/gi, '')
+          .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+        console.log(`⚡ [Worker Gemini 3.8 Live WS Engine] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি!`);
+        return cleanText;
+      }
+    } catch (wsErr) {
+      console.warn("callGeminiLiveInWorker 3.8 failed:", wsErr.message);
+    }
+
+    // ⚡ ২. সেকেন্ডারি লাইভ মডেল ফলব্যাক (models/gemini-2.5-flash-native-audio-preview-12-2025)
+    try {
+      const fbLive = await callGeminiLiveInWorker(prompt, apiKey, FALLBACK_LIVE_MODEL, imageParts);
+      if (fbLive && fbLive.trim().length > 40) {
+        let cleanText = fbLive.trim()
+          .replace(/\*\*(?:Considering|Defining|Refining|Crafting|Finalizing|Constructing|Formulating|Composing|Thinking|Structuring)[^*]*\*\*[\s\S]*?(?=\n\n|$)/gi, "")
+          .replace(/^(?:I'm|I have|I've|I am) (?:now |currently )?(?:focusing|crafting|iterating|putting|integrating|fleshing|building|polishing|drafting|finished|written|incorporating|structuring)[^\n]*\n?/gim, "")
+          .replace(/(?:ভিজিট করুন\s*:?|ওয়েবসাইটে দেখুন\s*:?|অর্ডার লিংক\s*:?)\s*https?:\/\/[^\s]+/gi, '👉 অর্ডার করতে প্রথম কমেন্টের লিংকে ক্লিক করুন অথবা ইনবক্স করুন')
+          .replace(/https?:\/\/[^\s]+/gi, '')
+          .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim();
+        return cleanText;
+      }
+    } catch (fbErr) {}
+
+    // ৩. ইমার্জেন্সি ফলব্যাক: Google Gemini AI REST ইঞ্জিন (যদি নেটওয়ার্কের কারণে WebSocket ড্রপ করে)
     const candidateModels = [
       "models/gemini-3.1-flash-lite",
       "models/gemini-3-flash-preview",
@@ -2940,16 +2990,11 @@ Opening Inspiration: "${randomHook}"
               .replace(/(?:www\.)?[a-zA-Z0-9-]+\.(?:shop|com|org|net)[^\s]*/gi, '')
               .replace(/\n{3,}/g, '\n\n')
               .trim();
-            console.log(`⚡ [Gemini AI Engine] ${angleObj.name} অ্যাঙ্গেলে পোস্ট সফলভাবে তৈরি! (মডেল: ${model})`);
+            console.log(`⚡ [Gemini AI Engine] ${angleObj.name} অ্যাঙ্গেলে ব্যাকআপ পোস্ট তৈরি! (মডেল: ${model})`);
             return cleanText;
           }
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          console.warn(`Gemini model ${model} response status ${res.status}:`, errData?.error?.message);
         }
-      } catch (err) {
-        console.warn(`Gemini call error for ${model}:`, err.message);
-      }
+      } catch (err) {}
     }
   } else {
     console.warn("⚠️ [Gemini AI Notice] D1 ডেটাবেসে কোনো gemini_api_key পাওয়া যায়নি। ড্যাশবোর্ডের Settings থেকে সেভ করুন।");
@@ -3487,7 +3532,8 @@ async function handleGetAutoPostHandover(request, url, env) {
   if (!geminiApiKey || geminiApiKey === "YOUR_GEMINI_API_KEY") {
     geminiApiKey = await getConfigValue(env.DB, "gemini_api_key", "");
   }
-  const geminiModel = "models/gemini-2.5-flash-native-audio-preview-12-2025";
+  // ⚡ DEFAULT & PERMANENT MODEL: Gemini 3.8 Live WebSocket Engine (models/gemini-3.8-live) - Unlimited Request Limit
+  const geminiModel = "models/gemini-3.8-live";
   const policies = await getStorePolicies(env.DB);
 
   // ২. D1 থেকে সকল সোশ্যাল মিডিয়া টোকেন ও ক্রেডেনশিয়ালস রিড করা (Worker যা পাঠাবে সেটাই ফাইনাল)
